@@ -24,12 +24,26 @@ curl -fsS "$BASE_URL/api/ready" | grep -q '"ready"'
 curl -fsS "$BASE_URL/" | grep -q '<div id="root">'
 echo "health, readiness and frontend OK"
 
-status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
-  -d '{"access_code":"definitely-wrong"}' "$BASE_URL/api/session")
-[ "$status" = "401" ] || { echo "wrong Access Code returned $status" >&2; exit 1; }
+# A wrong code counts against the brute-force limit (5 failures per client per 15 min).
+# Skip this check against production with SMOKE_SKIP_WRONG_CODE_CHECK=1.
+if [ "${SMOKE_SKIP_WRONG_CODE_CHECK:-0}" != "1" ]; then
+  status=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d '{"access_code":"definitely-wrong"}' "$BASE_URL/api/session")
+  [ "$status" = "401" ] || { echo "wrong Access Code returned $status" >&2; exit 1; }
+fi
 
-csrf=$(curl -fsS -c "$JAR" -X POST -H 'Content-Type: application/json' \
-  -d "{\"access_code\":\"$ACCESS_CODE\"}" "$BASE_URL/api/session" | json '["csrf_token"]')
+# Error responses carry only a code and message, never the submitted Access Code.
+login_body="$(mktemp)"
+status=$(curl -s -o "$login_body" -w '%{http_code}' -c "$JAR" -X POST \
+  -H 'Content-Type: application/json' \
+  -d "{\"access_code\":\"$ACCESS_CODE\"}" "$BASE_URL/api/session")
+if [ "$status" != "200" ]; then
+  echo "login failed: HTTP $status $(cat "$login_body")" >&2
+  rm -f "$login_body"
+  exit 1
+fi
+csrf=$(json '["csrf_token"]' < "$login_body")
+rm -f "$login_body"
 
 job_id=$(curl -fsS -b "$JAR" -X POST -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf" \
   -d '{"transcript":"Smoke test transcript.","first_sentence_start":"00:00:10","last_sentence_start":"00:06:10","voice":"HoaiMy"}' \
