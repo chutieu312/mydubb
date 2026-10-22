@@ -205,7 +205,10 @@ and checks that `neural network`, `gradient descent`, `loss function`, `Spring B
 fake HTTP do not replace this check. To see the request in the app too, start it with
 `TRANSLATION_PROVIDER=azure` (README, "Azure translation + mock audio") and run a job; the
 backend log line `Azure Translator request ok: ... metered_chars=N` shows how many characters
-Microsoft charged, which tells you whether the no-translate markup counts toward usage.
+Microsoft charged. Measured on 2026-10-22 (F0, Global endpoint, region `westus2`):
+`metered_chars` equals `sent_chars`, i.e. the no-translate markup **is billed**. Each protected
+term occurrence adds 31 characters to the usage counted against the 2 million characters per
+month of F0, so term-dense transcripts use noticeably more quota than their plain length.
 
 ### 3. Enable on Render (later, after the pull request is merged and the smoke test passed)
 

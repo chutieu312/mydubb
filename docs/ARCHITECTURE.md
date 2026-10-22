@@ -260,7 +260,8 @@ Pipeline inside `translate(text)`:
    `AZURE_TRANSLATOR_MAX_REQUEST_CHARS` (default 10,000; the service limit is 50,000 characters
    and 1,000 elements per request, markup included) is cut at sentence boundaries, then at
    whitespace, never inside a protected term and never inside a word. Sizes count the final
-   markup in UTF-16 units (each protected term adds 31 characters of wrapper). Whitespace
+   markup in UTF-16 units (each protected term adds 31 characters of wrapper, and Microsoft bills
+   them: measured live, `X-metered-usage` equals the size sent). Whitespace
    between pieces is preserved, so joining reproduces the original. A run of more than the
    limit without any whitespace fails with `translation_input_unsupported`.
 4. **Requests** are sequential, one chunk after another, with a total timeout per request

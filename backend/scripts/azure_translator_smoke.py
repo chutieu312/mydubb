@@ -30,6 +30,8 @@ The API returns JSON when a pull request triggers CI/CD, and 5 < 7 & 3 > 2."""
 
 def main() -> int:
     load_dotenv()
+    # Windows consoles default to a legacy code page that cannot print Vietnamese.
+    sys.stdout.reconfigure(encoding="utf-8")
     key = os.environ.get("AZURE_TRANSLATOR_KEY", "").strip()
     if not key:
         print("AZURE_TRANSLATOR_KEY is not set; see docs/DEPLOYMENT.md (Azure Translator).")
