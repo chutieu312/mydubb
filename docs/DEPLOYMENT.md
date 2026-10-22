@@ -228,6 +228,9 @@ missing or invalid the service refuses to start (the log names the variable, not
 - Jobs fail with a clear message on bad credentials, quota/rate limits, timeouts, network
   problems, service errors or an unexpected answer. Nothing is retried automatically and the
   mock is never used as a fallback; the user submits again.
+- Code-like symbols in the transcript are not protected: Azure's translation itself may alter
+  them (observed live: `a && b` came back as `a & b`; `<`, `>` and single `&` were kept).
+  Only the glossary terms are guaranteed.
 - Only terms in the glossary are protected; see
   [ARCHITECTURE.md](ARCHITECTURE.md#azure-translator-and-technical-terms-milestone-3a).
 - The key is rotated in the Azure portal (Keys and Endpoint → Regenerate) and updated in
