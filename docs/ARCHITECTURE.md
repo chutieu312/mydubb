@@ -28,7 +28,7 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `db.py` | Engine (with connect timeout), session factory, declarative base | — |
 | `access/` | Access Code check, server-side sessions, brute-force limiter, session router | db |
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
-| `translation/` | `TranslationProvider` protocol + mock | `processing_errors` |
+| `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
 | `speech/` | `SpeechProvider` protocol, approved `Voice`s + mock | `processing_errors` |
 | `audio/` | `AudioProcessor` protocol (fit to target duration) + mock; MP3 fixture | `processing_errors` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
@@ -174,23 +174,28 @@ of an old and a new instance during a zero-downtime deploy is supported:
 Running several instances permanently would need a durable job queue and shared result
 storage; that is intentionally out of scope.
 
-## What is mocked in Milestone 1
+## Mock components
 
 | Component | Mock behavior |
 |---|---|
-| Translation | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice. `is_illustrative=true`. |
+| Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice. `is_illustrative=true`. |
 | Speech | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime) regardless of text/voice. `is_fixture=true`. |
 | Audio processing | Pass-through. `duration_adjusted=false`. **No tempo change, no duration guarantee.** |
 
-The UI shows a "Development mock mode" banner and per-result notices. The fixture is **not**
+With `TRANSLATION_PROVIDER=azure` the translation row above is replaced by the real Azure
+Translator (see below) while speech and audio stay mock; the UI then labels each component
+separately. The UI shows a "Development mock mode" banner (all mock) or a per-component
+banner (Azure translation + mock audio) and per-result notices. The fixture is **not**
 generated from the transcript and does **not** demonstrate target-duration compliance.
 
 Failure scenarios are deterministic via `MOCK_FAIL_STAGE` (`translation`, `speech`, `audio`,
 `unexpected`), which is rejected in production. `PROVIDER_MODE` must be set explicitly. With
 `APP_ENV=production`, mock mode is refused unless `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`
 (the online mock beta); that opt-in relaxes nothing else (Secure cookies, HSTS, a 16+
-character Access Code and the `MOCK_FAIL_STAGE` ban still apply). `PROVIDER_MODE=azure` fails
-at startup until it is implemented — there is no silent fallback to mocks.
+character Access Code and the `MOCK_FAIL_STAGE` ban still apply). `PROVIDER_MODE=azure` (real
+everything) fails at startup until speech and audio exist — there is no silent fallback to
+mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
+`TRANSLATION_PROVIDER=azure`.
 
 ## Roadmap and remaining work
 
@@ -199,7 +204,8 @@ at startup until it is implemented — there is no silent fallback to mocks.
 | 1 | Local foundation, mock end-to-end workflow, CI definition, review fixes | Done |
 | 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | Done |
 | 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
-| 3 | Azure Translator, Azure Speech and FFmpeg duration processing | Later |
+| 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Implemented, awaiting live test and Product Owner enablement |
+| 3B / 3C | Azure Speech; FFmpeg duration processing | Later |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
@@ -220,16 +226,69 @@ smoke test, and `CLIENT_IP_HEADER` present on Render requests (details in
 [DEPLOYMENT.md](DEPLOYMENT.md#current-deployment)). Render Free does not support
 `maxShutdownDelaySeconds`, so the shutdown drain is 20 s within Render's fixed 30 s delay.
 
+### Azure Translator and technical terms (Milestone 3A)
+
+`AzureTranslationProvider` (`translation/azure.py`) calls the Text Translation API v3.0
+(`POST /translate?api-version=3.0&from=en&to=vi&textType=html`, key in
+`Ocp-Apim-Subscription-Key`, optional `Ocp-Apim-Subscription-Region`). Verified against
+Microsoft Learn on 2026-10-22. v3.0 was chosen because its contract is fully documented and no
+retirement date is announced; the newer GA version `2026-06-06` has a different request and
+response shape (`inputs`/`targets`/`value`) and is a separate, live-tested migration.
+
+Pipeline inside `translate(text)`:
+
+1. **Glossary** (`glossary.py`, data in `translation/data/glossary.txt`): finds known
+   terms in each line. Case-insensitive but the input spelling is kept; `=TERM` lines are
+   case-sensitive; whole words only, optional plural `s` ("APIs"); the longest match wins when
+   terms overlap. Provider-independent text matching. It protects **known** terms only: new
+   terms in any field are not detected automatically, and the glossary UI and LLM-based
+   detection are out of scope. Ambiguous everyday words (class, model, cell, key, ...) are
+   deliberately not listed: the glossary policy is to add specific phrases ("loss function"),
+   because keeping a common word in English in every context would damage ordinary sentences.
+2. **Markup** (`notranslate_markup.py`): the transcript is untrusted plain text. It is
+   escaped (`&`, `<`, `>`), and only then are glossary terms wrapped in Microsoft's documented
+   `<span class="notranslate">`, which works with `textType=html`. User text can therefore
+   never create tags or no-translate directives. The answer is parsed with a strict HTML
+   parser back to plain text; any tag other than a flat no-translate span, comment or
+   declaration is rejected, so no markup or placeholder reaches the result and the frontend
+   renders the text as text. After parsing, the protected spans of each segment must equal the
+   source terms (same spelling, same count; order may differ). If a term is missing or
+   changed, the job fails with `translation_terms_not_preserved` instead of showing a wrong
+   result.
+3. **Segmenting** (`segmenter.py`): each transcript line is one element of the request array,
+   so line structure never depends on the service. A line that does not fit
+   `AZURE_TRANSLATOR_MAX_REQUEST_CHARS` (default 10,000; the service limit is 50,000 characters
+   and 1,000 elements per request, markup included) is cut at sentence boundaries, then at
+   whitespace, never inside a protected term and never inside a word. Sizes count the final
+   markup in UTF-16 units (each protected term adds 31 characters of wrapper, and Microsoft bills
+   them: measured live, `X-metered-usage` equals the size sent). Whitespace
+   between pieces is preserved, so joining reproduces the original. A run of more than the
+   limit without any whitespace fails with `translation_input_unsupported`.
+4. **Requests** are sequential, one chunk after another, with a total timeout per request
+   (`AZURE_TRANSLATOR_TIMEOUT_SECONDS`, default 30; Microsoft documents a 15 s maximum
+   latency) and a response size cap. Redirects are not followed. There is **no automatic
+   retry** and **no fallback to the mock**: any failed chunk fails the job (no partial
+   translation) and the user resubmits.
+
+Errors are mapped to safe user messages: 401/403 → `translation_auth_failed` (server
+credentials), 403001/429 → `translation_quota_exceeded`, timeouts/408 →
+`translation_timeout`, connection problems → `translation_network_error`, 5xx and anything
+unexpected → `translation_service_error`, 400 → `translation_rejected`, malformed answers →
+`translation_invalid_response`. Logs contain status codes, Microsoft error codes, request IDs
+and sizes only, never transcript text, translations, response bodies or the key.
+
+**Privacy**: with Azure translation the transcript text leaves the server for Microsoft Azure
+Translator. The UI says so next to the submit button. Nothing else about retention changes
+(see "Data retention").
+
 ### Milestone 3 (real providers)
 
-**Azure Translator (F0)**
-- `AzureTranslationProvider`: chunk text to the service's per-request limits, preserve order,
-  protect technical terms (e.g. `notranslate` markup or a glossary/dictionary approach — the
-  glossary scope is an open product decision), timeouts, map 401/403/429/quota errors to
-  `ProcessingError` codes with user-safe messages, no automatic retry of calls with unknown
-  outcome.
-- Credentials via env vars (`AZURE_TRANSLATOR_KEY`, region, endpoint); startup must fail if
-  `PROVIDER_MODE=azure` and any are missing.
+Milestone 3A (translation) is described above; the remaining items below still apply to
+Azure Speech and FFmpeg.
+
+**Azure Translator (F0)** - implemented in Milestone 3A (see above). Remaining: a live
+quality evaluation with real course transcripts, and a decision whether to migrate to API
+`2026-06-06` or add an LLM-based provider if the quality of F0 NMT is not good enough.
 
 **Azure Speech (F0)**
 - `AzureSpeechProvider` for `vi-VN-HoaiMyNeural` / `vi-VN-NamMinhNeural`, SSML, chunking to
@@ -246,6 +305,7 @@ smoke test, and `CLIENT_IP_HEADER` present on Render requests (details in
 - Add FFmpeg to the runtime image.
 
 **Production with real providers**
-- Disclose in the UI that submitted text is processed by Azure services.
+- Disclosure that submitted text is processed by Azure: done for translation in 3A; extend
+  the wording when speech is added.
 - Production configuration with Azure credentials (`PROVIDER_MODE=azure`); missing
   credentials must fail startup, never fall back to mocks.

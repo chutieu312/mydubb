@@ -1,0 +1,88 @@
+# MyDubb glossary: English terms that stay in English in the Vietnamese translation.
+#
+# Only terms listed here are protected. MyDubb does NOT detect unknown technical terms
+# automatically; a term that is missing here may be translated (or left alone) by the
+# translation service, depending on the service.
+#
+# Format (one term per line, reviewed through Git):
+#   * Lines starting with "#" and blank lines are ignored.
+#   * Matching ignores capitalization, and the text keeps its own spelling: "Neural Network"
+#     in the transcript stays "Neural Network"; "neural network" stays lowercase.
+#   * A line starting with "=" matches that exact capitalization only. Use it for terms that
+#     are also ordinary words in another case (REST vs "rest").
+#   * Terms match whole words only ("API" is not matched inside "capital"). A plural "s" is
+#     part of the match ("APIs", "neural networks"), so list the singular form.
+#   * Words in a multi-word term may be separated by any whitespace.
+#   * When terms overlap, the longest match wins ("convolutional neural network" beats
+#     "neural network").
+#
+# What belongs here (policy for ambiguous words):
+#   * Add specific terms: acronyms, product and language names, and multi-word phrases.
+#   * Do NOT add everyday words that have a normal meaning outside the field, such as
+#     class, model, cell, function, table, key, value, string, object, field, layer, node,
+#     tree, thread, memory, spring, go, rust, swift, ruby, java (island), transformer or
+#     "it". Keeping them in English in every context would damage ordinary sentences. When
+#     such a word is needed, add the specific phrase instead ("Spring Boot", "loss
+#     function").
+#   * Prefer the phrase over its parts: "gradient descent", not "gradient".
+
+# --- Software ---------------------------------------------------------------------------
+API
+=REST
+JSON
+YAML
+HTTP
+HTTPS
+SQL
+NoSQL
+CI/CD
+Docker
+Kubernetes
+Git
+GitHub
+PostgreSQL
+Redis
+GraphQL
+JavaScript
+TypeScript
+Python
+Spring Boot
+Dependency Injection
+microservice
+pull request
+unit test
+load balancer
+race condition
+garbage collection
+
+# --- Artificial intelligence and machine learning ---------------------------------------
+neural network
+convolutional neural network
+recurrent neural network
+gradient descent
+loss function
+activation function
+backpropagation
+overfitting
+learning rate
+hyperparameter
+machine learning
+deep learning
+reinforcement learning
+large language model
+LLM
+GPU
+
+# --- Science -----------------------------------------------------------------------------
+DNA
+RNA
+mRNA
+ATP
+CRISPR
+mitochondria
+photosynthesis
+natural selection
+covalent bond
+Krebs cycle
+quantum entanglement
+Schrödinger equation

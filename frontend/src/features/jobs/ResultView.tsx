@@ -72,7 +72,13 @@ export function ResultView({ jobId, onSessionExpired }: Props) {
 
       <h3>
         Vietnamese translation
-        {result.translation.is_illustrative && <span className="badge">Illustrative mock</span>}
+        {result.translation.is_illustrative ? (
+          <span className="badge">Illustrative mock</span>
+        ) : (
+          result.translation.provider === "azure-translator" && (
+            <span className="badge">Azure Translator</span>
+          )
+        )}
       </h3>
       {/* Rendered as text: React escapes it, never interpreted as HTML. */}
       <div className="translation">{result.translation.text}</div>

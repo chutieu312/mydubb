@@ -11,12 +11,13 @@ dependencies = [
     "psycopg[binary]>=3.3.6,<3.4",
     "pydantic-settings>=2.16,<2.17",
     "python-dotenv>=1.2,<2",
+    # Azure Translator client (production code); also used by the test client.
+    "httpx>=0.28,<0.29",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1,<10",
-    "httpx>=0.28,<0.29",
     "ruff==0.17.1",
 ]
 

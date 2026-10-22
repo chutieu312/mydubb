@@ -195,6 +195,17 @@ button.secondary {
   margin: 0;
 }
 
+.provider-list {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.privacy-notice {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 .warning {
   background: var(--warning-bg);
   border-left: 4px solid var(--warning-border);

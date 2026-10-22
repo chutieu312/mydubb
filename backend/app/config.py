@@ -4,9 +4,11 @@ All settings come from the environment (optionally a local `.env` file in develo
 Invalid or unsafe combinations fail at startup instead of silently degrading.
 """
 
+import re
 import tempfile
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +25,16 @@ class ProviderMode(StrEnum):
     AZURE = "azure"
 
 
+class TranslationProviderChoice(StrEnum):
+    MOCK = "mock"
+    AZURE = "azure"
+
+
+DEFAULT_AZURE_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
+# Azure Translator limit per request is 50,000 characters (service-limits documentation).
+AZURE_TRANSLATOR_MAX_REQUEST_CHARS = 50_000
+
+
 class MockFailStage(StrEnum):
     NONE = "none"
     TRANSLATION = "translation"
@@ -32,6 +44,8 @@ class MockFailStage(StrEnum):
     UNEXPECTED = "unexpected"
 
 
+_HEADER_VALUE = re.compile(r"[!-~]+")
+_REGION = re.compile(r"[A-Za-z0-9-]{1,64}")
 _SUPPORTED_DB_SCHEMES = ("postgresql+psycopg://", "postgresql://", "postgres://")
 
 
@@ -58,9 +72,28 @@ class Settings(BaseSettings):
     # Explicit opt-in to run mock providers with APP_ENV=production (online mock beta).
     # Every other production security rule still applies.
     allow_mock_providers_in_production: bool = False
+    # Translation can use Azure while speech and audio processing are still mock
+    # (Milestone 3 in progress). PROVIDER_MODE=mock keeps meaning "mock everything" unless this
+    # overrides the translation stage.
+    translation_provider: TranslationProviderChoice = TranslationProviderChoice.MOCK
     mock_fail_stage: MockFailStage = MockFailStage.NONE
     # Artificial delay per mock stage so processing stages are observable in the UI.
     mock_stage_delay_seconds: float = Field(default=0.0, ge=0, le=30)
+
+    # Azure Translator (only validated and used when TRANSLATION_PROVIDER=azure). The key is
+    # a secret: it lives in the environment only and is never logged or sent to the browser.
+    azure_translator_key: SecretStr | None = None
+    # Region of the resource, sent as Ocp-Apim-Subscription-Region. Required for regional
+    # resources; optional for a "global" resource.
+    azure_translator_region: str | None = None
+    azure_translator_endpoint: str = DEFAULT_AZURE_TRANSLATOR_ENDPOINT
+    # Total time allowed for one HTTP request to the service (Microsoft: max latency 15 s).
+    azure_translator_timeout_seconds: float = Field(default=30, ge=5, le=120)
+    # Largest request, markup included. Lower than the service limit: Microsoft recommends
+    # shorter requests, and a failed chunk fails the whole job.
+    azure_translator_max_request_chars: int = Field(
+        default=10_000, ge=500, le=AZURE_TRANSLATOR_MAX_REQUEST_CHARS
+    )
 
     session_ttl_seconds: int = Field(default=12 * 3600, ge=60)
     cookie_secure: bool = True
@@ -116,8 +149,16 @@ class Settings(BaseSettings):
     def _check_environment_rules(self) -> "Settings":
         if self.provider_mode is ProviderMode.AZURE:
             raise ValueError(
-                "PROVIDER_MODE=azure is not implemented yet (Milestone 3); use PROVIDER_MODE=mock"
+                "PROVIDER_MODE=azure is not implemented yet (Azure Speech and FFmpeg are "
+                "pending); use PROVIDER_MODE=mock, optionally with TRANSLATION_PROVIDER=azure"
             )
+        if self.translation_provider is TranslationProviderChoice.AZURE:
+            self._check_azure_translator()
+            if self.mock_fail_stage in (MockFailStage.TRANSLATION, MockFailStage.UNEXPECTED):
+                raise ValueError(
+                    "MOCK_FAIL_STAGE=translation/unexpected only applies to the mock "
+                    "translation provider; unset it or use TRANSLATION_PROVIDER=mock"
+                )
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
             raise ValueError(
                 "JOB_STALE_AFTER_SECONDS must be at least 3x JOB_HEARTBEAT_INTERVAL_SECONDS"
@@ -138,13 +179,49 @@ class Settings(BaseSettings):
                 raise ValueError("ACCESS_CODE must be at least 16 characters in production")
         return self
 
+    def _check_azure_translator(self) -> None:
+        key = self.azure_translator_key.get_secret_value() if self.azure_translator_key else ""
+        if not key:
+            raise ValueError("AZURE_TRANSLATOR_KEY is required when TRANSLATION_PROVIDER=azure")
+        if not _HEADER_VALUE.fullmatch(key):
+            raise ValueError("AZURE_TRANSLATOR_KEY must be printable ASCII without spaces")
+        if self.azure_translator_region is not None and not _REGION.fullmatch(
+            self.azure_translator_region
+        ):
+            raise ValueError("AZURE_TRANSLATOR_REGION must be a region name such as westus2")
+        parts = urlsplit(self.azure_translator_endpoint)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+            or parts.path not in ("", "/")
+        ):
+            raise ValueError(
+                "AZURE_TRANSLATOR_ENDPOINT must be an https URL with only a host, "
+                "e.g. https://api.cognitive.microsofttranslator.com"
+            )
+
     @property
     def sqlalchemy_url(self) -> str:
         return to_sqlalchemy_url(self.database_url.get_secret_value())
 
     @property
     def is_mock_mode(self) -> bool:
+        """True while any component (speech, audio processing) is still a mock."""
         return self.provider_mode is ProviderMode.MOCK
+
+    @property
+    def component_providers(self) -> dict[str, str]:
+        """Which implementation serves each pipeline stage (reported by /api/meta)."""
+        return {
+            "translation": self.translation_provider.value,
+            # Azure Speech and FFmpeg arrive in later Milestone 3 pull requests.
+            "speech": "mock",
+            "audio": "mock",
+        }
 
 
 class ConfigurationError(RuntimeError):

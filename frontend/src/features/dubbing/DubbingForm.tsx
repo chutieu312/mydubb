@@ -6,13 +6,15 @@ import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
 
 interface Props {
   voices: VoiceOption[];
+  // Submitting sends the transcript text to Azure for translation.
+  sendsToAzure: boolean;
   onJobCreated: (job: Job) => void;
   onSessionExpired: () => void;
 }
 
 type FieldErrors = Partial<Record<string, string>>;
 
-export function DubbingForm({ voices, onJobCreated, onSessionExpired }: Props) {
+export function DubbingForm({ voices, sendsToAzure, onJobCreated, onSessionExpired }: Props) {
   const [transcript, setTranscript] = useState("");
   const [firstStart, setFirstStart] = useState("");
   const [lastStart, setLastStart] = useState("");
@@ -113,7 +115,17 @@ export function DubbingForm({ voices, onJobCreated, onSessionExpired }: Props) {
           {formError}
         </p>
       )}
-      <button type="submit" disabled={submitting}>
+      {sendsToAzure && (
+        <p className="privacy-notice" id="azure-disclosure">
+          When you generate dubbing, the transcript text is sent to Microsoft Azure Translator
+          to be translated.
+        </p>
+      )}
+      <button
+        type="submit"
+        disabled={submitting}
+        aria-describedby={sendsToAzure ? "azure-disclosure" : undefined}
+      >
         {submitting ? "Submitting…" : "Generate Dubbing"}
       </button>
     </form>

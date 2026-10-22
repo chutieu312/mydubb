@@ -31,7 +31,7 @@ must send `X-CSRF-Token` with the token returned by `POST`/`GET /api/session`. I
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode`, `voices[] {id, provider_voice, description}`, `timestamp_format`, `result_ttl_seconds` |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`, each `mock` or `azure`), `voices[] {id, provider_voice, description}`, `timestamp_format`, `result_ttl_seconds` |
 
 ## Session (Private Beta access)
 
@@ -110,8 +110,13 @@ belongs to another session** (indistinguishable by design).
 }
 ```
 
-`error` is `{"code","message"}` when failed. Codes: `translation_failed`, `speech_failed`,
-`audio_processing_failed`, `internal_error`, `interrupted`.
+`error` is `{"code","message"}` when failed. Codes: `translation_failed` (mock),
+`speech_failed`, `audio_processing_failed`, `internal_error`, `interrupted`, and for Azure
+Translator: `translation_auth_failed`, `translation_quota_exceeded`, `translation_timeout`,
+`translation_network_error`, `translation_service_error`, `translation_rejected`,
+`translation_invalid_response`, `translation_terms_not_preserved`,
+`translation_input_unsupported`. Messages are safe to show (no keys, transcript text or raw
+provider output). Failed jobs are never retried automatically; submit again.
 
 ### `GET /api/jobs/{id}/result`
 Requires session and ownership.
@@ -119,7 +124,7 @@ Requires session and ownership.
   ```json
   {
     "job_id": "uuid",
-    "translation": { "text": "…", "is_illustrative": true },
+    "translation": { "text": "…", "is_illustrative": true, "provider": "mock-translation" },
     "audio": {
       "url": "/api/jobs/{id}/result/audio",
       "download_url": "/api/jobs/{id}/result/audio?download=1",
@@ -131,6 +136,9 @@ Requires session and ownership.
     "notices": ["…"]
   }
   ```
+  `translation.provider` is `azure-translator` (with `is_illustrative: false`) for a real
+  translation and `mock-translation` for the mock; `notices` states what is real and what is a
+  fixture.
 - `409 result_not_ready` (still running) or `409 job_failed` (with `job_error_code`).
 - `410 result_expired` — the job completed but its temporary result expired or was removed
   (TTL elapsed, cleanup, or restart on an ephemeral disk).
