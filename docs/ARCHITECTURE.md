@@ -148,7 +148,8 @@ of an old and a new instance during a zero-downtime deploy is supported:
 - **Graceful shutdown** (SIGTERM): queued work is cancelled, running jobs get up to
   `JOB_SHUTDOWN_GRACE_SECONDS` to finish (heartbeats continue meanwhile), and whatever this
   process accepted but did not finish is marked `interrupted`. Keep the grace period below
-  the host's kill delay (Render: `maxShutdownDelaySeconds`).
+  the host's kill delay (Render: `maxShutdownDelaySeconds`, fixed at the default 30 s on the
+  Free plan).
 - After a hard crash, the crashed process's jobs are failed by the next live instance within
   roughly `JOB_STALE_AFTER_SECONDS + JOB_HEARTBEAT_INTERVAL_SECONDS`.
 - Job status lives in PostgreSQL, so clients polling through the new instance see progress of
