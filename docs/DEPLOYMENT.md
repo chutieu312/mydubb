@@ -137,7 +137,8 @@ redirects it to `mydubb.com`.
   service's **Events**.
 - Zero-downtime deploy: the new instance starts and receives traffic once `/api/health`
   responds; the old instance gets SIGTERM about a minute later, finishes running jobs for up to
-  `JOB_SHUTDOWN_GRACE_SECONDS` (45 s), then exits within `maxShutdownDelaySeconds` (60 s).
+  `JOB_SHUTDOWN_GRACE_SECONDS` (20 s), then exits within Render's default 30 s shutdown delay
+  (`maxShutdownDelaySeconds` is not available on the Free plan).
   Jobs it could not finish are marked "interrupted" and must be resubmitted. Results produced
   by the old instance become "result expired".
 - Changes to `render.yaml` on `main` are synced to the service by Render (Blueprint sync).

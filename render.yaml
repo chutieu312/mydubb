@@ -43,7 +43,9 @@ services:
         value: "1.5"
       - key: JOB_MAX_CONCURRENCY
         value: "2"
+      # Render Free uses the default 30 s between SIGTERM and SIGKILL (not configurable
+      # there), so running jobs get 20 s to finish before the rest are marked interrupted.
       - key: JOB_SHUTDOWN_GRACE_SECONDS
-        value: "45"
+        value: "20"
       - key: LOG_LEVEL
         value: INFO
