@@ -5,12 +5,14 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 2A** (GitHub repository and CI) on top of Milestone 1 — application
-foundation, an end-to-end workflow with **mock providers**, and CI. No Azure service is
+**Status: Milestone 2B** (online Private Beta on https://mydubb.com with **mock providers**)
+in progress, on top of Milestones 1 and 2A (application foundation, mock end-to-end workflow,
+GitHub repository and CI). No Azure service is
 called, and no exact-duration dubbing is implemented yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
-[docs/API.md](docs/API.md) for API contracts and [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
-branch/CI workflow.
+[docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
+branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
+operations.
 
 ## Quick start (end to end, Docker)
 
@@ -33,6 +35,7 @@ frontend/           React + TypeScript (Vite), Vitest tests
 e2e/                Playwright browser tests + isolated Compose stack
 docker/             Container entrypoint, smoke test, local Postgres init script
 Dockerfile          Production-style image: FastAPI serves API + React build (same origin)
+render.yaml         Render Blueprint for the online mock beta (see docs/DEPLOYMENT.md)
 docker-compose.yml  Local PostgreSQL (+ optional app container)
 .github/workflows/  CI
 ```
@@ -127,7 +130,7 @@ Access Code brute-force protection) are correct.
 |---|---|
 | `frontend` | ESLint, TypeScript, Vitest regression tests, production build |
 | `backend` | Ruff lint/format, Alembic upgrade/downgrade/upgrade on empty PostgreSQL, pytest with PostgreSQL |
-| `docker` | Image build, container start, smoke test against PostgreSQL |
+| `docker` | Image build, container start, smoke test, and a second container with the production (online mock beta) configuration checked by `docker/production-config-check.sh` |
 | `e2e` | Playwright (Chromium desktop + phone viewport) against an isolated container stack with mock providers |
 | `ci-success` | Always runs; passes only if all four jobs **succeeded** (skipped/cancelled = failure). Use this as the required status check. |
 

@@ -97,3 +97,66 @@ def test_migrations_downgrade_and_upgrade_on_empty_schema(engine, database_url):
     assert set(inspect(engine).get_table_names()) <= {"alembic_version"}
     command.upgrade(config, "head")
     assert {"access_sessions", "jobs"} <= set(inspect(engine).get_table_names())
+
+
+PRODUCTION = {
+    "app_env": "production",
+    "cookie_secure": True,
+    "access_code": "a-production-access-code-0123456789",
+}
+
+
+def test_production_refuses_mock_providers_without_explicit_opt_in(make_settings):
+    with pytest.raises(ValidationError, match="ALLOW_MOCK_PROVIDERS_IN_PRODUCTION"):
+        make_settings(**PRODUCTION)
+
+
+def test_production_mock_beta_with_explicit_opt_in(make_client):
+    client = make_client(**PRODUCTION, allow_mock_providers_in_production=True)
+
+    meta = client.get("/api/meta").json()
+    assert meta["mock_mode"] is True  # the UI keeps showing the mock banner
+    response = client.post("/api/session", json={"access_code": PRODUCTION["access_code"]})
+    assert "secure" in response.headers["set-cookie"].lower()
+    assert client.get("/api/health").headers["strict-transport-security"] == "max-age=31536000"
+    assert client.get("/api/docs").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"cookie_secure": False}, "COOKIE_SECURE"),
+        ({"mock_fail_stage": "speech"}, "MOCK_FAIL_STAGE"),
+        ({"access_code": "only-fifteen-ch"}, "at least 16 characters"),
+    ],
+)
+def test_opt_in_keeps_every_other_production_rule(make_settings, overrides, message):
+    with pytest.raises(ValidationError, match=message):
+        make_settings(**{**PRODUCTION, **overrides}, allow_mock_providers_in_production=True)
+
+
+def test_no_hsts_outside_production(client):
+    assert "strict-transport-security" not in client.get("/api/health").headers
+
+
+def test_stale_threshold_must_exceed_heartbeat_interval(make_settings):
+    with pytest.raises(ValidationError, match="JOB_STALE_AFTER_SECONDS"):
+        make_settings(job_heartbeat_interval_seconds=30, job_stale_after_seconds=60)
+
+
+def test_configuration_errors_never_include_secret_values(monkeypatch, tmp_path):
+    from app.config import ConfigurationError, load_settings
+
+    monkeypatch.chdir(tmp_path)  # no local .env file
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", "mysql://user:TOPSECRET-DB-PASSWORD@host/db")
+    monkeypatch.setenv("ACCESS_CODE", "TOPSEC7")  # too short: rejected with its field
+    monkeypatch.setenv("PROVIDER_MODE", "mock")
+
+    with pytest.raises(ConfigurationError) as caught:
+        load_settings()
+
+    message = str(caught.value)
+    assert "DATABASE_URL" in message and "ACCESS_CODE" in message
+    assert "TOPSEC" not in message
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__

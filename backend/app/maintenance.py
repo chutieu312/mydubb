@@ -1,22 +1,60 @@
-"""Startup recovery and periodic cleanup."""
+"""Job liveness, startup recovery, shutdown drain and periodic cleanup."""
 
 import asyncio
 import logging
+import time
 
 from app.access.service import delete_stale_sessions
 from app.db import session_scope
-from app.jobs.service import fail_interrupted_jobs
+from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
 
 
 def recover_after_restart(services: AppServices) -> None:
-    with session_scope(services.session_factory) as db:
-        failed = fail_interrupted_jobs(db)
-    if failed:
-        logger.warning("Marked %d interrupted job(s) as failed after restart", failed)
+    """Fail jobs abandoned by instances that are gone, then clean up.
+
+    Only jobs with a stale heartbeat are failed, so jobs still running on another live
+    instance (e.g. during an overlapping deploy) are not touched.
+    """
+    fail_stale(services)
     run_cleanup(services)
+
+
+def fail_stale(services: AppServices) -> None:
+    with session_scope(services.session_factory) as db:
+        failed = fail_stale_jobs(db, services.settings.job_stale_after_seconds)
+    if failed:
+        logger.warning("Marked %d job(s) with a stale heartbeat as interrupted", failed)
+
+
+def heartbeat(services: AppServices) -> None:
+    with session_scope(services.session_factory) as db:
+        heartbeat_jobs(db, services.instance_id)
+
+
+async def job_liveness_loop(services: AppServices) -> None:
+    """Keep this instance's jobs alive and fail jobs whose instance disappeared."""
+    interval = services.settings.job_heartbeat_interval_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await asyncio.to_thread(heartbeat, services)
+            await asyncio.to_thread(fail_stale, services)
+        except Exception:
+            logger.exception("Job liveness check failed")
+
+
+async def drain_running_jobs(services: AppServices) -> None:
+    """Wait up to the configured grace period for running jobs to finish."""
+    deadline = time.monotonic() + services.settings.job_shutdown_grace_seconds
+    running = services.pipeline.running_job_ids()
+    if running:
+        logger.info("Waiting for %d running job(s) to finish before shutdown", len(running))
+    while running and time.monotonic() < deadline:
+        await asyncio.sleep(0.2)
+        running = services.pipeline.running_job_ids()
 
 
 def interrupt_unfinished_jobs(services: AppServices) -> None:

@@ -60,7 +60,8 @@ class JobPipeline:
         self._result_store = result_store
         self._result_ttl = timedelta(seconds=result_ttl_seconds)
         self._lock = threading.Lock()
-        self._accepted: set[uuid.UUID] = set()
+        self._accepted: set[uuid.UUID] = set()  # queued or running in this process
+        self._running: set[uuid.UUID] = set()
 
     def provider_names(self) -> dict[str, str]:
         return {
@@ -80,7 +81,14 @@ class JobPipeline:
         with self._lock:
             return set(self._accepted)
 
+    def running_job_ids(self) -> set[uuid.UUID]:
+        """Jobs currently executing in a worker thread of this process."""
+        with self._lock:
+            return set(self._running)
+
     def run(self, job: JobInput) -> None:
+        with self._lock:
+            self._running.add(job.job_id)
         work_dir = Path(tempfile.mkdtemp(prefix=f"mydubb-job-{job.job_id}-"))
         try:
             self._run_stages(job, work_dir)
@@ -97,6 +105,7 @@ class JobPipeline:
             shutil.rmtree(work_dir, ignore_errors=True)
             with self._lock:
                 self._accepted.discard(job.job_id)
+                self._running.discard(job.job_id)
 
     def _run_stages(self, job: JobInput, work_dir: Path) -> None:
         now = datetime.now(UTC)

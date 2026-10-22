@@ -129,3 +129,21 @@ def test_brute_force_attempts_are_throttled(make_client):
     assert blocked.status_code == 429
     assert blocked.json()["error"]["code"] == "too_many_attempts"
     assert int(blocked.headers["retry-after"]) > 0
+
+
+def test_brute_force_limit_uses_the_configured_client_ip_header(make_client):
+    client = make_client(access_max_failures_per_client=2, client_ip_header="cf-connecting-ip")
+
+    def attempt(edge_ip: str, spoofed_xff: str):
+        return client.post(
+            "/api/session",
+            json={"access_code": "wrong-guess"},
+            headers={"CF-Connecting-IP": edge_ip, "X-Forwarded-For": spoofed_xff},
+        )
+
+    # Rotating a client-controlled X-Forwarded-For does not reset the per-client limit.
+    assert attempt("203.0.113.7", "10.0.0.1").status_code == 401
+    assert attempt("203.0.113.7", "10.0.0.2").status_code == 401
+    assert attempt("203.0.113.7", "10.0.0.3").status_code == 429
+    # Another real client is unaffected.
+    assert attempt("198.51.100.9", "10.0.0.3").status_code == 401

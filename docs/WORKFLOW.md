@@ -27,7 +27,7 @@ runners, with a read-only token and no secrets.
 |---|---|---|
 | Frontend (lint, typecheck, build) | ESLint, `tsc`, Vitest, Vite build | `cd frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build` |
 | Backend (lint, migrations, tests) | Ruff lint + format, Alembic up/down/up on empty PostgreSQL, pytest | see README "Tests and checks" (needs `TEST_DATABASE_URL` pointing at a disposable DB) |
-| Docker image build and container startup | `docker build`, container start, `docker/smoke-test.sh` | `docker build -t mydubb:local .` then README "Docker" smoke test |
+| Docker image build and container startup | `docker build`, container start, `docker/smoke-test.sh`, production-config container + `docker/production-config-check.sh` | `docker build -t mydubb:local .` then README "Docker" smoke test |
 | Browser E2E (Playwright, mock providers) | `e2e/run-e2e.sh` on an isolated throwaway stack | `cd e2e && npm ci && npx playwright install chromium && bash run-e2e.sh` |
 | **CI success** | Aggregate: passes only if all four jobs above concluded `success`; failed, skipped, cancelled or missing jobs fail it | — |
 

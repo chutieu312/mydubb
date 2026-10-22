@@ -83,6 +83,8 @@ def make_settings(database_url: str, tmp_path: Path) -> Callable[..., Settings]:
             "cookie_secure": False,  # TestClient talks plain HTTP
             "result_storage_dir": tmp_path / "results",
             "cleanup_interval_seconds": 3600,
+            # Tests that need shutdown draining set this explicitly.
+            "job_shutdown_grace_seconds": 0,
         }
         values.update(overrides)
         return Settings(_env_file=None, **values)  # type: ignore[call-arg]

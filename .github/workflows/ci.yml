@@ -127,9 +127,20 @@ jobs:
         run: sh docker/smoke-test.sh
       - name: Container is still running
         run: test "$(docker inspect -f '{{.State.Running}}' mydubb)" = "true"
+      # Same image with the production configuration used on Render (online mock beta).
+      # It also exercises a second instance starting against an already migrated database.
+      - name: Start container with the production configuration
+        run: |
+          docker run -d --name mydubb-prod --network host             -e PORT=8081             -e APP_ENV=production             -e PROVIDER_MODE=mock             -e ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true             -e COOKIE_SECURE=true             -e CLIENT_IP_HEADER=cf-connecting-ip             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE             mydubb:ci
+      - name: Production configuration check
+        env:
+          BASE_URL: http://127.0.0.1:8081
+        run: sh docker/production-config-check.sh
       - name: Container logs
         if: always()
-        run: docker logs mydubb || true
+        run: |
+          docker logs mydubb || true
+          docker logs mydubb-prod || true
 
   e2e:
     name: Browser E2E (Playwright, mock providers)
