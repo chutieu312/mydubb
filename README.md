@@ -5,9 +5,9 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 2B** (online Private Beta on https://mydubb.com with **mock providers**)
-in progress, on top of Milestones 1 and 2A (application foundation, mock end-to-end workflow,
-GitHub repository and CI). No Azure service is
+**Status: Milestone 2B done**: the online Private Beta runs at https://mydubb.com with **mock
+providers** (on top of Milestones 1 and 2A: application foundation, mock end-to-end workflow,
+GitHub repository and CI). Next: Milestone 3 (Azure Translator, Azure Speech, FFmpeg). No Azure service is
 called, and no exact-duration dubbing is implemented yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the

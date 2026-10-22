@@ -12,8 +12,12 @@
 2. Commit focused changes; never commit `.env`, real Access Codes, keys or user data
    (`.gitignore` covers the usual cases; check `git diff --cached` before committing).
 3. Push the branch and open a pull request into `main`: `gh pr create --base main`.
-4. Merge only when the **CI success** check is green and the Product Owner approves.
+4. Merge only when the **CI success** check is green and the Product Owner approves. Use
+   **Squash and merge**: one commit per pull request on `main`.
 5. Never force-push or delete `main`.
+6. After a pull request is merged, delete its branch and start any follow-up from a fresh
+   branch off `main`. Commits pushed to an already merged branch belong to no pull request,
+   get no CI run and never reach `main` (squash merging gives `main` a new commit SHA).
 
 Steps 3–5 are a team rule, **not enforced by GitHub** on the current plan (see
 [Protections](#protections)).
