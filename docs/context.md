@@ -1,6 +1,6 @@
 # MyDubb — Context và handoff hiện tại
 
-Cập nhật: **2026-10-22**. Mốc hoàn tất gần nhất: **Milestone 2B**. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
+Cập nhật: **2026-10-22**. Mốc hoàn tất gần nhất: **Milestone 3A** (Azure Translator thật, speech/audio còn mock), sau 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
 
 ## 1. Cách đọc và duy trì context
 
@@ -47,7 +47,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 - Ưu tiên free tiers; không tự mua/nâng tier, chuyển paid provider hay fallback âm thầm. Provider quota hết phải báo rõ.
 - Transcript xử lý tạm; metadata tối thiểu trong DB; translation/audio trong temporary result store. Không lưu audio binary vào DB.
 
-## 4. Hệ thống đã có ở baseline hoàn tất 2B
+## 4. Hệ thống hiện có (baseline 2B + 3A)
 
 | Thành phần | Hiện trạng |
 |---|---|
@@ -59,7 +59,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 | Hosting | Docker multi-stage, FastAPI phục vụ React build và API cùng origin; Render Free Oregon |
 | Domain | https://mydubb.com; `www` và HTTP redirect về HTTPS; DNS GoDaddy |
 | CI/CD | GitHub Actions, Render auto-deploy sau checks pass; chưa dùng Jenkins |
-| Production providers tại mốc 2B | Translation mock, speech là MP3 fixture khoảng 3 giây, audio processing pass-through |
+| Production providers | Translation: **Azure Translator thật** (`TRANSLATION_PROVIDER=azure`, resource Free F0 `mydubb-translator`, Global endpoint, region `westus2`, key chỉ nằm trong Render environment) + glossary backend. Speech: MP3 fixture khoảng 3 giây. Audio processing: pass-through. Ở mốc 2B cả ba đều là mock |
 
 Giới hạn đã chấp nhận: Render có cold start; disk ephemeral làm mất results sau restart/deploy; session trong PostgreSQL vẫn tồn tại. Không scale ngang với execution/result storage hiện tại. Khoảng overlap khi deploy được hỗ trợ ở mức job ownership/recovery, không biến local results thành shared storage.
 
@@ -72,6 +72,7 @@ Các invariants vận hành:
 - Result store publish bằng rename, cleanup bỏ qua active staging. Result mất/hết hạn trả `410 result_expired`. Logout chỉ coi thành công khi server trả `204` hoặc session đã hết hạn `401`.
 - Defaults đã chạy: result TTL 1 giờ; session TTL 12 giờ; job metadata chưa tự cleanup. Không nhầm với retention đề xuất ở mục 6.
 - Migrations chạy ở container startup và phải backward compatible. Expand-only **không đủ** để bảo đảm rollback: target image phải biết Alembic revision hiện tại. Mốc 2B là `0002`. Chi tiết và rehearsal nằm trong DEPLOYMENT.md.
+- Azure translation (3A): `PROVIDER_MODE=mock` vẫn mô tả speech/audio nên production vẫn cần `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`; `PROVIDER_MODE=azure` (mọi thứ thật) bị từ chối cho tới khi có Speech và FFmpeg. Chọn Azure mà thiếu `AZURE_TRANSLATOR_KEY` thì app không khởi động. Không tự retry, không fallback về mock; một chunk lỗi thì job lỗi, không có bản dịch một phần. Log chỉ có kích thước và mã lỗi, không có transcript, bản dịch hay key.
 - Roll forward là mặc định khi rollback target không tương thích. Bỏ migration step để chạy code cũ chỉ là đường khẩn cấp có điều kiện, cần Product Owner duyệt; không downgrade production DB tự động.
 
 ## 5. Milestones và bằng chứng bàn giao
@@ -83,6 +84,8 @@ Các invariants vận hành:
 | M2A | Private GitHub repo, CI thực cho push/PR, SHA-pinned actions, least-privilege token, aggregate `CI success`; PR #1 handoff | Hoàn tất |
 | M2B | Render + Neon + domain/HTTPS, production mock opt-in, heartbeat/recovery, security hardening, smoke tests; PR #2–#7 | Hoàn tất |
 | M2B review | PR #8 sửa heartbeat nuôi job mồ côi, cleanup khi mkdtemp/scheduling lỗi; giới hạn rollback và rehearsal | Đã merge/deploy, kiểm chứng production |
+| M3A | Azure Translator thật + glossary backend (PR #9); speech/audio còn mock | Hoàn tất: đã merge, deploy, Product Owner xác nhận trên production (2026-10-22) |
+| M3 phần tiếp theo | Azure Speech thật; sau đó FFmpeg duration processing | Chưa bắt đầu |
 
 Bằng chứng cuối của 2B (không phải kiểm tra live tự động mỗi khi đọc file):
 
@@ -93,13 +96,25 @@ Bằng chứng cuối của 2B (không phải kiểm tra live tự động mỗi
 - Product Owner xác nhận sau deploy: nhập transcript/timestamps, job Completed, nghe audio và download thành công. **Product Owner đã đồng ý đóng 2B**. Đây là mock beta hoạt động, chưa phải real dubbing hoàn chỉnh.
 - iPhone Safari đã mở được login qua HTTPS; authenticated end-to-end trên iPhone/iPad thật chưa được xác nhận đầy đủ.
 
+Kết quả và bằng chứng của 3A:
+
+- Đã có: `AzureTranslationProvider` (Text Translation API v3.0, `from=en&to=vi`, `textType=html`) qua `TranslationProvider`; `TRANSLATION_PROVIDER=mock|azure` (mặc định mock, cấu hình mock cũ vẫn dùng được; credentials chỉ được validate khi chọn Azure). Glossary backend `backend/app/translation/data/glossary.txt` (56 term khởi đầu về software, AI, khoa học): giữ spelling/casing từng occurrence, whole-word, plural `s`, longest match, `=TERM` cho case-sensitive, không đưa từ đa nghĩa thường (class, model, cell, key…). Cơ chế `notranslate`: escape transcript trước, chỉ thêm span của hệ thống, parse kết quả về plain text, kiểm tra term còn nguyên, nếu không thì job lỗi `translation_terms_not_preserved`. Chunking tuần tự theo giới hạn service (mặc định 10.000 ký tự/request gồm markup, service tối đa 50.000), không cắt giữa term. Timeout hữu hạn, giới hạn kích thước response, không theo redirect, 9 mã lỗi `translation_*` an toàn. UI: banner theo từng thành phần, disclosure trước khi submit rằng transcript được gửi tới Azure, badge/notices ở kết quả.
+- [PR #9](https://github.com/chutieu312/mydubb/pull/9): reviewed HEAD `44f8f2e59c39cb0553cb4e96aa48dacc68ba7039` ([CI PR](https://github.com/chutieu312/mydubb/actions/runs/39853447652) pass, gồm 288 backend test và 17 frontend test với fake HTTP); merge SHA `5ade22201dd7c9d8b589a3d4d296cb94417be334`.
+- [CI trên merge commit main](https://github.com/chutieu312/mydubb/actions/runs/39854321185) pass. GitHub Deployment `7263700601` success đúng merge SHA; dashboard Render chưa được đối chiếu độc lập.
+- Live Azure (F0) bằng synthetic transcript, chạy bằng `uv run python -m scripts.azure_translator_smoke` từ `backend/` và thêm vài phép thử: term được giữ nguyên, hoa/thường và plural được giữ, chunking thật 8 request/8 dòng đúng thứ tự; app local chạy end-to-end qua API với Azure.
+- Kiểm tra từ bên ngoài sau deploy: `/api/meta` báo `translation=azure, speech=mock, audio=mock`; health/ready 200; HSTS, CSP, X-Frame-Options còn; API docs 404; tạo job khi chưa đăng nhập 401.
+- Product Owner gửi job trên https://mydubb.com (transcript giả bốn dòng) và xác nhận qua ảnh chụp: disclosure trước nút submit, các stage hoàn thành, badge "Azure Translator", bản dịch tự nhiên giữ nguyên `machine learning`, `neural network`, `gradient descent`, `loss function`, `Spring Boot`, `Dependency Injection`, `REST API`, `JSON` và `10:30`, audio gắn nhãn "Mock fixture". Product Owner đánh giá chất lượng này là đạt. Claude không tự chạy job trên production vì không có Access Code.
+- Giới hạn còn lại: glossary chỉ bảo vệ term đã khai báo; Microsoft tính phí cả markup (mỗi lần một term xuất hiện thêm 31 ký tự vào quota); Azure có thể sửa ký hiệu code (quan sát `a && b` thành `a & b`); nếu Azure bỏ/sửa span thì job lỗi thay vì trả bản dịch sai (chưa gặp ở live test); dùng API v3.0, bản GA `2026-06-06` khác request/response và là migration riêng; speech vẫn là fixture, audio processing vẫn pass-through, chưa có duration guarantee.
+
 ## 6. Quyết định còn mở
 
 - **Duration tolerance:** ±50 ms trên audio sau decode mới là đề xuất, chưa được chốt riêng hay chứng minh đạt được. Trước FFmpeg cần thống nhất cách đo, xử lý encoder delay/padding và tiêu chí pass/fail.
 - **Tempo quá lớn/nhỏ:** cần xác định cách bảo vệ chất lượng, giới hạn kỹ thuật và lỗi hiển thị; không tự thay target hoặc cắt nội dung.
 - **Metadata retention:** 7 ngày mới là đề xuất; chưa có quyết định triển khai cleanup. Result/session defaults 1 giờ/12 giờ không có nghĩa metadata cũng đã có TTL.
-- **Chi phí:** budget GitHub Actions $0 kèm hard stop chưa được xác nhận. Không coi số phút/free-tier allowance trong tài liệu lịch sử là số dư hiện tại. Resource/credentials Azure và live translation quality chưa được xác nhận tại mốc 2B.
-- **Glossary quality:** cần transcript đại diện và đánh giá term chưa biết/đa nghĩa. Không hứa glossary nhỏ sẽ bảo vệ mọi thuật ngữ hoặc đã có automatic domain-wide term detection.
+- **Chi phí:** budget GitHub Actions $0 kèm hard stop chưa được xác nhận. Không coi số phút/free-tier allowance trong tài liệu lịch sử là số dư hiện tại. Azure Translator dùng resource Free F0; Product Owner cần tự xác nhận pricing tier là Free F0 trong portal (Claude không xem được) và theo dõi mức dùng so với 2 triệu ký tự/tháng, nhớ rằng markup của glossary được tính phí. Không nâng tier hay thêm provider trả phí khi chưa được duyệt.
+- **Glossary quality:** mới được thử bằng transcript giả ngắn. Cần transcript đại diện từ khóa học thật để đánh giá term chưa biết/đa nghĩa, chất lượng dịch dài và mức hao quota; glossary UI và automatic domain-wide term detection chưa thuộc scope. Không hứa glossary nhỏ sẽ bảo vệ mọi thuật ngữ.
+- **Translation provider/API:** v3.0 đang dùng; chuyển sang API `2026-06-06` hoặc provider khác chỉ khi có lý do (chất lượng, ngừng hỗ trợ) và cần quyết định riêng cùng live test. Paid LLM translation chưa được duyệt.
+- **Mixed pronunciation:** phát âm thuật ngữ English trong giọng Việt cần đánh giá khi có Azure Speech; chưa có kết luận.
 
 ## 7. Tài liệu và workflow cần dùng
 
