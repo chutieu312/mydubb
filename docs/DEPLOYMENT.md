@@ -113,10 +113,15 @@ redirects it to `mydubb.com`.
    never stored):
    ```bash
    read -rs ACCESS_CODE && export ACCESS_CODE      # paste the code, press Enter
-   BASE_URL=https://mydubb.com PYTHON=python sh docker/smoke-test.sh
+   echo ${#ACCESS_CODE}                             # prints only the length (Render: ~44)
+   BASE_URL=https://mydubb.com SMOKE_SKIP_WRONG_CODE_CHECK=1 PYTHON=python sh docker/smoke-test.sh
    unset ACCESS_CODE
    ```
    Expected last line: `mock job <id> completed; result and audio retrievable`.
+   `SMOKE_SKIP_WRONG_CODE_CHECK=1` avoids spending one of the 5 failed attempts per client per
+   15 minutes allowed by the brute-force protection. A `login failed: HTTP 429` means that
+   allowance is used up (all users behind the same IP share it): wait 15 minutes. `HTTP 401`
+   means the pasted code is wrong or incomplete.
 4. Security headers:
    ```bash
    curl -s -D - -o /dev/null https://mydubb.com/api/health | grep -iE "strict-transport|content-security|x-frame"
