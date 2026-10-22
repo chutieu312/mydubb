@@ -138,8 +138,12 @@ worker** (the entrypoint enforces `--workers 1`; do not scale horizontally). A b
 of an old and a new instance during a zero-downtime deploy is supported:
 
 - **Job ownership and heartbeats**: each process gets a random `instance_id` at start. Jobs
-  record it as `runner_id`; the owning process refreshes `heartbeat_at` on its active jobs
-  every `JOB_HEARTBEAT_INTERVAL_SECONDS` (default 15 s) and on every stage change.
+  record it as `runner_id`. Every `JOB_HEARTBEAT_INTERVAL_SECONDS` (default 15 s), and on
+  every stage change, the process refreshes `heartbeat_at` only for the jobs it still has
+  **queued or running in memory**, not for every row carrying its `runner_id`. A job whose
+  worker ended without recording a terminal state (for example, the database was unreachable
+  when the failure was written) therefore stops receiving heartbeats, goes stale and is
+  interrupted once the database is reachable again.
 - **Recovery** (at startup and on every heartbeat tick): only active jobs whose heartbeat is
   older than `JOB_STALE_AFTER_SECONDS` (default 90 s) are marked `failed` with code
   `interrupted`. Jobs still running on another live instance are left alone. Rows written
@@ -161,8 +165,11 @@ of an old and a new instance during a zero-downtime deploy is supported:
   memory and reset on restart.
 - **Migrations** run at container start (`alembic upgrade head`) while the old instance may
   still serve traffic, so every migration must be **expand-only / backward compatible**
-  (e.g. add nullable columns; no renames or drops in the same release). This also keeps code
-  rollbacks possible without downgrading the database.
+  (e.g. add nullable columns; no renames or drops in the same release). Expand-only keeps the
+  **schema** usable by older code, but not the **Alembic revision graph**: an image that does
+  not know the database's current revision stops at startup with "Can't locate revision".
+  Code rollbacks are therefore limited to commits that know the current revision; see
+  [DEPLOYMENT.md](DEPLOYMENT.md#rolling-back).
 
 Running several instances permanently would need a durable job queue and shared result
 storage; that is intentionally out of scope.

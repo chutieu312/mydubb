@@ -30,8 +30,15 @@ def fail_stale(services: AppServices) -> None:
 
 
 def heartbeat(services: AppServices) -> None:
+    """Refresh heartbeats of the jobs this process still has queued or running.
+
+    The in-memory snapshot can race with a worker finishing: a job that reaches a terminal
+    state in between is filtered out by its status, and a job orphaned in between gets at
+    most one extra heartbeat, delaying its interruption by one interval.
+    """
+    owned = services.pipeline.unfinished_job_ids()
     with session_scope(services.session_factory) as db:
-        heartbeat_jobs(db, services.instance_id)
+        heartbeat_jobs(db, services.instance_id, owned)
 
 
 async def job_liveness_loop(services: AppServices) -> None:

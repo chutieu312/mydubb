@@ -74,7 +74,13 @@ class JobPipeline:
         """Run the job on a reserved executor slot and track it until it finishes."""
         with self._lock:
             self._accepted.add(job.job_id)
-        slot.start(lambda: self.run(job))
+        try:
+            slot.start(lambda: self.run(job))
+        except Exception:
+            # Not scheduled (e.g. executor shut down): stop tracking so it is not kept alive.
+            with self._lock:
+                self._accepted.discard(job.job_id)
+            raise
 
     def unfinished_job_ids(self) -> set[uuid.UUID]:
         """Jobs accepted by this process that have not finished running (queued or running)."""
@@ -89,8 +95,9 @@ class JobPipeline:
     def run(self, job: JobInput) -> None:
         with self._lock:
             self._running.add(job.job_id)
-        work_dir = Path(tempfile.mkdtemp(prefix=f"mydubb-job-{job.job_id}-"))
+        work_dir: Path | None = None
         try:
+            work_dir = Path(tempfile.mkdtemp(prefix=f"mydubb-job-{job.job_id}-"))
             self._run_stages(job, work_dir)
         except _Superseded:
             logger.info("Job %s no longer active; stopping", job.job_id)
@@ -102,10 +109,15 @@ class JobPipeline:
             logger.exception("Job %s failed unexpectedly", job.job_id)
             self._fail(job.job_id, "internal_error", "Processing failed due to an internal error.")
         finally:
-            shutil.rmtree(work_dir, ignore_errors=True)
-            with self._lock:
-                self._accepted.discard(job.job_id)
-                self._running.discard(job.job_id)
+            try:
+                if work_dir is not None:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+            finally:
+                # Always stop tracking: a job left active in the database without a worker
+                # then stops receiving heartbeats and is interrupted by the liveness check.
+                with self._lock:
+                    self._accepted.discard(job.job_id)
+                    self._running.discard(job.job_id)
 
     def _run_stages(self, job: JobInput, work_dir: Path) -> None:
         now = datetime.now(UTC)
@@ -154,5 +166,6 @@ class JobPipeline:
             with session_scope(self._session_factory) as db:
                 service.mark_failed(db, job_id, code, message)
         except Exception:
-            # The job stays active in the DB; startup recovery will mark it failed.
+            # The job stays active in the DB. This process stops heartbeating it once the
+            # worker ends, so the liveness check marks it interrupted when it goes stale.
             logger.exception("Could not record failure for job %s", job_id)
