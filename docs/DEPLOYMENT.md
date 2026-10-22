@@ -182,15 +182,83 @@ automatically and redirects it to `mydubb.com`.
 - The container runs `alembic upgrade head` on every start, while the previous instance may
   still be serving. Migrations must therefore be **expand-only** (add nullable columns or new
   tables; rename/drop only in a later release after no code uses them).
+- If the migration step fails, the container stops before the app starts and logs what to
+  check. Migration errors are never ignored, and the database is never downgraded
+  automatically.
 - Never run `alembic downgrade` against production as part of a rollback.
+- To see the production schema revision: Neon **SQL Editor** →
+  `SELECT version_num FROM alembic_version;`
 
 ### Rolling back
 
-1. Render → service → **Deploys** → pick the last good deploy → **Rollback** → confirm.
+Two kinds of compatibility matter:
+
+| | Old code vs. newer **schema** | Old code vs. newer **Alembic revision** |
+|---|---|---|
+| Guaranteed by | Expand-only migrations | Nothing: an image only knows the migrations it contains |
+| If broken | Old code may fail at runtime | Startup stops with `Can't locate revision identified by '<rev>'`; the rollback deploy fails and the database is unchanged; the current instance keeps serving because a zero-downtime deploy only switches traffic to an instance that started and passed its health check |
+
+**Supported rollback targets**: deploys built from a commit whose
+`backend/alembic/versions/` contains the database's current revision. Today the production
+database is at `0002`, and every production deploy so far (from `3806012`, the merge of
+PR #2, onwards) contains `0002`, so all of them are supported targets. After a future
+migration (`0003`) is deployed, older deploys stop being supported targets.
+
+**Before rolling back** (read-only checks):
+
+1. Read the production revision: Neon SQL Editor → `SELECT version_num FROM alembic_version;`
+2. Check the target commit (shown on Render's **Deploys** page):
+   ```bash
+   git fetch origin
+   sh docker/rollback-target-check.sh <target-commit> <revision>
+   ```
+   `OK` means a supported target; `NOT SUPPORTED` means do not use Render's Rollback.
+
+**Supported target: Render rollback**
+
+1. Render → service → **Deploys** → the target deploy → **Rollback** → confirm. The rollback
+   reuses the target deploy's build, environment variables and start command.
 2. A dashboard rollback **disables auto-deploy**. After fixing the problem on `main` (via a
    pull request), re-enable auto-deploy in **Settings**.
-3. Because migrations are expand-only, the older code runs against the newer schema; the
-   database is not rolled back.
+
+**Unsupported target: roll forward instead (default)**
+
+Revert the faulty change in a pull request (`git revert <commit>`), keeping every migration
+file. The new image knows the current revision, so it starts normally; CI runs and Render
+deploys it after the checks pass.
+
+**Emergency only: run older code without its migration step.** Use only if rolling forward
+is not possible in time, with the Product Owner's approval:
+
+- Conditions: every migration between the target's newest revision and the database's
+  revision is expand-only (read those migration files), and the target code was verified
+  against the current schema (see "Rollback rehearsal").
+- Render's **Rollback** cannot do this: it reuses the target deploy's environment variables.
+  Instead: **Environment** → add `RUN_MIGRATIONS_ON_START=false` → save (Render redeploys the
+  current commit without migrations; harmless because the database is already at its
+  head), then **Deploys** → **Manual Deploy** → **Deploy a specific commit** → the target
+  commit. Deploying a specific commit disables auto-deploy.
+- Restore afterwards, in this order: merge the fix to `main` and wait for CI; delete
+  `RUN_MIGRATIONS_ON_START` in **Environment** (it defaults to `true`); deploy the latest
+  `main` commit; re-enable auto-deploy in **Settings**; confirm the logs show the migration
+  step running again (no error) and run the production smoke test.
+
+**Rollback rehearsal (test database only)** - verified on 2026-10-22 against a local
+PostgreSQL database migrated to `0002` by the current image, with job data created by
+the smoke test:
+
+| Target image | Knows | Startup | Result |
+|---|---|---|---|
+| `18b4e40` (production) | `0001`, `0002` | default | Starts; smoke test passes |
+| `002e2bb` (Milestone 2A) | `0001` | default | Exits: `Can't locate revision identified by '0002'`; database unchanged |
+| `002e2bb` | `0001` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (schema compatible) |
+| Current branch image | `0001`, `0002` | default, after the above | Starts; reads rows written by the `0001`-era code |
+
+Repeat it for any pull request that adds a migration: build the previous production commit
+and the new one (`git worktree add <dir> <commit>` + `docker build`), migrate a throwaway
+database with the new image, then start the previous image against it with default
+startup and with `RUN_MIGRATIONS_ON_START=false`, running `docker/smoke-test.sh` each time.
+Never rehearse against production.
 
 ### Rotating secrets
 
@@ -206,6 +274,7 @@ automatically and redirects it to `mydubb.com`.
 | Symptom | Likely cause |
 |---|---|
 | Deploy fails at startup with a settings error | Missing/invalid `DATABASE_URL`, or `ACCESS_CODE` shorter than 16 characters. The log names the variable (never its value). |
+| `Can't locate revision identified by ...` followed by "database migration failed" | The deployed commit predates the database's migration (e.g. an unsupported rollback target). The database was not changed; see "Rolling back". |
 | `alembic` connection error in the logs | Wrong Neon string (pooled `-pooler` host, missing `sslmode=require`, or reset password). |
 | Site shows a Render error page after idling | Cold start of the free instance; wait and reload. |
 | "Result expired" right after a deploy | Expected: results are kept on the instance's ephemeral disk. Generate again. |

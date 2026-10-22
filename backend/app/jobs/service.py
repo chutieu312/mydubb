@@ -100,12 +100,25 @@ def fail_interrupted_jobs(db: Session, job_ids: Collection[uuid.UUID]) -> int:
     return _fail_active(db, Job.id.in_(list(job_ids)))
 
 
-def heartbeat_jobs(db: Session, runner_id: str) -> int:
-    """Refresh the liveness signal of every active job owned by this instance."""
+def heartbeat_jobs(db: Session, runner_id: str, job_ids: Collection[uuid.UUID]) -> int:
+    """Refresh the liveness signal of the active jobs this instance still owns.
+
+    `job_ids` must be the jobs the process currently has queued or running. A job whose
+    worker is gone without recording a terminal state (e.g. the database was down when it
+    failed) is deliberately not refreshed, so it goes stale and `fail_stale_jobs` marks it
+    interrupted. Terminal jobs are never touched.
+    """
+    if not job_ids:
+        return 0
     result = db.execute(
         update(Job)
-        .where(Job.runner_id == runner_id, Job.status.in_(ACTIVE_STATUSES))
+        .where(
+            Job.runner_id == runner_id,
+            Job.id.in_(list(job_ids)),
+            Job.status.in_(ACTIVE_STATUSES),
+        )
         .values(heartbeat_at=datetime.now(UTC))
+        .execution_options(synchronize_session=False)
     )
     return result.rowcount or 0  # type: ignore[attr-defined]
 
