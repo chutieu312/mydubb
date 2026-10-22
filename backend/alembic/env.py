@@ -1,4 +1,5 @@
 import os
+from logging.config import fileConfig
 
 from alembic import context
 from dotenv import dotenv_values
@@ -10,6 +11,11 @@ from app.db import Base
 from app.jobs.models import Job  # noqa: F401
 
 target_metadata = Base.metadata
+
+# Log migration progress when run from the CLI (e.g. container start). Programmatic callers
+# such as the test suite pass the URL as an attribute and keep their own logging setup.
+if context.config.config_file_name and "database_url" not in context.config.attributes:
+    fileConfig(context.config.config_file_name, disable_existing_loggers=False)
 
 
 def _database_url() -> str:

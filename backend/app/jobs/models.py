@@ -48,6 +48,10 @@ class Job(Base):
         Uuid, ForeignKey("access_sessions.id", ondelete="SET NULL"), index=True
     )
     status: Mapped[str] = mapped_column(String(20), index=True)
+    # Instance (process) that accepted and runs the job, and its last liveness signal.
+    # Nullable so the schema change stays backward compatible with older code.
+    runner_id: Mapped[str | None] = mapped_column(String(64))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     voice: Mapped[str] = mapped_column(String(20))
     first_sentence_start_seconds: Mapped[int] = mapped_column(Integer)
     last_sentence_start_seconds: Mapped[int] = mapped_column(Integer)

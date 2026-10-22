@@ -8,7 +8,7 @@ import tempfile
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,12 +55,19 @@ class Settings(BaseSettings):
     access_code: SecretStr
 
     provider_mode: ProviderMode
+    # Explicit opt-in to run mock providers with APP_ENV=production (online mock beta).
+    # Every other production security rule still applies.
+    allow_mock_providers_in_production: bool = False
     mock_fail_stage: MockFailStage = MockFailStage.NONE
     # Artificial delay per mock stage so processing stages are observable in the UI.
     mock_stage_delay_seconds: float = Field(default=0.0, ge=0, le=30)
 
     session_ttl_seconds: int = Field(default=12 * 3600, ge=60)
     cookie_secure: bool = True
+    # Header set (overwritten) by the edge proxy with the real client IP, e.g.
+    # "cf-connecting-ip". Used for Access Code brute-force protection. When unset or absent,
+    # the connection peer (after uvicorn proxy-header handling) is used.
+    client_ip_header: str | None = None
     # Extra origins allowed on state-changing requests (e.g. the Vite dev server).
     trusted_origins: list[str] = Field(default_factory=list)
 
@@ -70,6 +77,14 @@ class Settings(BaseSettings):
 
     job_max_concurrency: int = Field(default=2, ge=1)
     job_max_queued: int = Field(default=8, ge=0)
+    # Each instance refreshes `heartbeat_at` on the active jobs it runs. Active jobs whose
+    # heartbeat is older than `job_stale_after_seconds` are failed as interrupted, which is
+    # safe while an old and a new instance overlap during a deploy.
+    job_heartbeat_interval_seconds: int = Field(default=15, ge=1)
+    job_stale_after_seconds: int = Field(default=90, ge=3)
+    # On shutdown, wait up to this long for running jobs to finish before interrupting them.
+    # Keep it below the host's shutdown delay (Render: maxShutdownDelaySeconds).
+    job_shutdown_grace_seconds: float = Field(default=20, ge=0, le=280)
 
     result_ttl_seconds: int = Field(default=3600, ge=60)
     result_storage_dir: Path = Path(tempfile.gettempdir()) / "mydubb-results"
@@ -101,13 +116,22 @@ class Settings(BaseSettings):
     def _check_environment_rules(self) -> "Settings":
         if self.provider_mode is ProviderMode.AZURE:
             raise ValueError(
-                "PROVIDER_MODE=azure is not implemented in Milestone 1; use PROVIDER_MODE=mock"
+                "PROVIDER_MODE=azure is not implemented yet (Milestone 3); use PROVIDER_MODE=mock"
+            )
+        if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
+            raise ValueError(
+                "JOB_STALE_AFTER_SECONDS must be at least 3x JOB_HEARTBEAT_INTERVAL_SECONDS"
             )
         if self.app_env is AppEnv.PRODUCTION:
             if not self.cookie_secure:
                 raise ValueError("COOKIE_SECURE must be true when APP_ENV=production")
-            if self.provider_mode is ProviderMode.MOCK:
-                raise ValueError("Mock providers are not allowed when APP_ENV=production")
+            if self.provider_mode is ProviderMode.MOCK and not (
+                self.allow_mock_providers_in_production
+            ):
+                raise ValueError(
+                    "Mock providers are not allowed when APP_ENV=production unless "
+                    "ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true"
+                )
             if self.mock_fail_stage is not MockFailStage.NONE:
                 raise ValueError("MOCK_FAIL_STAGE is not allowed when APP_ENV=production")
             if len(self.access_code.get_secret_value()) < 16:
@@ -121,3 +145,24 @@ class Settings(BaseSettings):
     @property
     def is_mock_mode(self) -> bool:
         return self.provider_mode is ProviderMode.MOCK
+
+
+class ConfigurationError(RuntimeError):
+    """Invalid configuration. The message never contains configured values."""
+
+
+def load_settings() -> Settings:
+    """Load settings from the environment, failing with a message safe for logs.
+
+    Pydantic's default error text includes the rejected input (which may be a database
+    password or the Access Code), so only field names and messages are reported.
+    """
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except ValidationError as exc:
+        problems = []
+        for error in exc.errors(include_input=False, include_url=False, include_context=False):
+            field = ".".join(str(part) for part in error["loc"]).upper() or "SETTINGS"
+            message = str(error["msg"]).removeprefix("Value error, ")
+            problems.append(f"{field}: {message}")
+        raise ConfigurationError("Invalid configuration: " + "; ".join(problems)) from None

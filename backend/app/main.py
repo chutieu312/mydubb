@@ -15,10 +15,16 @@ from fastapi.responses import FileResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.access.router import router as access_router
-from app.config import Settings
+from app.config import AppEnv, Settings, load_settings
 from app.errors import error_response, install_error_handlers
 from app.jobs.router import router as jobs_router
-from app.maintenance import cleanup_loop, interrupt_unfinished_jobs, recover_after_restart
+from app.maintenance import (
+    cleanup_loop,
+    drain_running_jobs,
+    interrupt_unfinished_jobs,
+    job_liveness_loop,
+    recover_after_restart,
+)
 from app.services import AppServices, build_services
 from app.system.router import router as system_router
 
@@ -43,10 +49,13 @@ class RequestGuardMiddleware:
     """Security headers, same-origin enforcement for state-changing API calls, and a
     request-body size guard. Implemented as pure ASGI to avoid buffering bodies."""
 
-    def __init__(self, app: ASGIApp, *, trusted_origins: list[str], max_body_bytes: int):
+    def __init__(
+        self, app: ASGIApp, *, trusted_origins: list[str], max_body_bytes: int, hsts: bool
+    ):
         self.app = app
         self.trusted_origins = {o.rstrip("/") for o in trusted_origins}
         self.max_body_bytes = max_body_bytes
+        self.hsts = hsts
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -66,6 +75,9 @@ class RequestGuardMiddleware:
                     for header in _SECURITY_HEADERS
                     if not (is_docs and header[0] == b"content-security-policy")
                 ]
+                if self.hsts:
+                    # Production is served over HTTPS only (TLS terminates at the host proxy).
+                    extra.append((b"strict-transport-security", b"max-age=31536000"))
                 existing = {k.lower() for k, _ in message.get("headers", [])}
                 if is_api and b"cache-control" not in existing:
                     extra.append((b"cache-control", b"no-store"))
@@ -128,21 +140,34 @@ def _install_frontend(app: FastAPI, dist_dir: Path) -> None:
 
 def create_app(settings: Settings | None = None, services: AppServices | None = None) -> FastAPI:
     if services is None:
-        services = build_services(settings or Settings())  # type: ignore[call-arg]
+        services = build_services(settings or load_settings())
     settings = services.settings
     logging.basicConfig(level=settings.log_level.upper())
+
+    if settings.app_env is AppEnv.PRODUCTION and settings.is_mock_mode:
+        logger.warning(
+            "Running in production with MOCK providers (ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true): "
+            "no real translation or speech is produced"
+        )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(recover_after_restart, services)
         cleanup_task = asyncio.create_task(cleanup_loop(services))
+        liveness_task = asyncio.create_task(job_liveness_loop(services))
         try:
             yield
         finally:
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
+            # Stop accepting queued work, let running jobs finish within the grace period
+            # (heartbeats continue meanwhile), then interrupt whatever is left.
             services.executor.shutdown()
+            await drain_running_jobs(services)
+            liveness_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await liveness_task
             try:
                 await asyncio.to_thread(interrupt_unfinished_jobs, services)
             except Exception:
@@ -162,6 +187,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
         RequestGuardMiddleware,
         trusted_origins=settings.trusted_origins,
         max_body_bytes=settings.max_request_body_bytes,
+        hsts=settings.app_env is AppEnv.PRODUCTION,
     )
     install_error_handlers(app)
     app.include_router(system_router)

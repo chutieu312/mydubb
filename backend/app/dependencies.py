@@ -1,6 +1,7 @@
 """FastAPI dependencies shared by routers: services, DB session, session auth, CSRF."""
 
 import hmac
+import logging
 from collections.abc import Iterator
 
 from fastapi import Depends, Request, status
@@ -10,6 +11,8 @@ from app.access.models import AccessSession
 from app.access.service import find_active_session
 from app.errors import ApiError, not_authenticated
 from app.services import AppServices
+
+logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "mydubb_session"
 CSRF_HEADER = "X-CSRF-Token"
@@ -52,6 +55,25 @@ def require_csrf(
     return session
 
 
+_missing_ip_header_logged = False
+
+
 def client_key(request: Request) -> str:
-    # With uvicorn --proxy-headers and a trusted proxy, client.host is the real client IP.
+    """Client identity for brute-force protection.
+
+    Prefers the configured CLIENT_IP_HEADER, which the edge proxy overwrites. The
+    left-most X-Forwarded-For entry is not trustworthy on hosts whose proxy appends to a
+    client-supplied header.
+    """
+    global _missing_ip_header_logged
+    header = request.app.state.services.settings.client_ip_header
+    if header:
+        value = request.headers.get(header, "").split(",")[0].strip()
+        if value:
+            return value
+        if not _missing_ip_header_logged:
+            _missing_ip_header_logged = True
+            logger.warning(
+                "CLIENT_IP_HEADER %r is configured but absent; using peer address", header
+            )
     return request.client.host if request.client else "unknown"

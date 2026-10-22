@@ -1,5 +1,6 @@
 """Composition root: builds the application's long-lived collaborators from settings."""
 
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import Engine
@@ -19,6 +20,8 @@ from app.translation.mock import MockTranslationProvider
 @dataclass
 class AppServices:
     settings: Settings
+    # Unique per process start; recorded as `jobs.runner_id` for jobs this process runs.
+    instance_id: str
     engine: Engine
     session_factory: sessionmaker[Session]
     access_limiter: FailedAttemptLimiter
@@ -52,6 +55,7 @@ def build_services(settings: Settings) -> AppServices:
 
     return AppServices(
         settings=settings,
+        instance_id=uuid.uuid4().hex,
         engine=engine,
         session_factory=session_factory,
         access_limiter=FailedAttemptLimiter(

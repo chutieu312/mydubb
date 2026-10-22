@@ -63,6 +63,11 @@ Interfaces are deliberately small `Protocol`s with one method each
   check on all state-changing API requests, plus `SameSite=Strict`.
 - Brute-force protection counts **failed** attempts per client IP and globally in a sliding
   window (in memory). It never limits job creation.
+- The client identity for brute-force protection comes from `CLIENT_IP_HEADER` when set
+  (a header the edge proxy overwrites, e.g. `cf-connecting-ip`). Behind a proxy that appends
+  to a client-supplied `X-Forwarded-For` (as Render's does), the left-most entry is
+  spoofable, so it is only the fallback. The global failure limit applies in all cases.
+- In production, responses carry `Strict-Transport-Security` and API docs are disabled.
 - Ownership: every job row has `session_id`; all job/result/audio queries filter by the
   caller's session. A job ID alone grants nothing; foreign jobs return `404`.
 
@@ -125,33 +130,41 @@ Result publication and cleanup are race-safe within the single process:
 A completed job whose result is gone returns `410 result_expired` from `/result` and
 `/result/audio`; `GET /api/jobs/{id}` still shows `completed`.
 
-## Restart behavior and the single-instance limitation
+## Restart behavior, deploys and the single-instance design
 
 Execution state (worker threads, the in-memory transcript, the brute-force counters) lives in
-**one process**. Therefore:
+the process that accepted the job. The design is **one serving instance with one uvicorn
+worker** (the entrypoint enforces `--workers 1`; do not scale horizontally). A brief overlap
+of an old and a new instance during a zero-downtime deploy is supported:
 
-- **Exactly one application instance with one uvicorn worker** may run against a database.
-  The entrypoint enforces `--workers 1`. Do not scale horizontally.
-- **Startup recovery**: every job still `queued/translating/synthesizing/processing` in the
-  database is marked `failed` with code `interrupted` and a clear message. Its transcript is
-  gone, and provider calls whose outcome is unknown are **never repeated automatically**; the
-  user resubmits.
-- **Graceful shutdown**: queued work is cancelled and jobs this process accepted but did not
-  finish are marked `interrupted`.
-- **Overlapping deploys are an open deployment issue (resolve before public beta).** Startup
-  recovery assumes it is the only instance: it fails *every* active job in the database. If a
-  new instance starts while the old one is still running (as zero-downtime deploys do), the
-  new instance marks the old instance's in-flight jobs as `interrupted` even though they are
-  still executing; the compare-and-set updates then stop the old worker and discard its
-  result. Users must resubmit those jobs. This is **not** safe for multiple active instances
-  and must be addressed (e.g. per-instance job ownership, or a deploy strategy that stops the
-  old instance first) before relying on overlapping deploys.
-- Sessions are in PostgreSQL and survive restarts. Results on an ephemeral disk (e.g. Render)
-  do not; they become `result_expired`.
-- Brute-force counters reset on restart.
+- **Job ownership and heartbeats**: each process gets a random `instance_id` at start. Jobs
+  record it as `runner_id`; the owning process refreshes `heartbeat_at` on its active jobs
+  every `JOB_HEARTBEAT_INTERVAL_SECONDS` (default 15 s) and on every stage change.
+- **Recovery** (at startup and on every heartbeat tick): only active jobs whose heartbeat is
+  older than `JOB_STALE_AFTER_SECONDS` (default 90 s) are marked `failed` with code
+  `interrupted`. Jobs still running on another live instance are left alone. Rows written
+  before heartbeats existed fall back to `updated_at`. Jobs are **never re-run
+  automatically** because provider call outcomes are unknown; the user resubmits.
+- **Graceful shutdown** (SIGTERM): queued work is cancelled, running jobs get up to
+  `JOB_SHUTDOWN_GRACE_SECONDS` to finish (heartbeats continue meanwhile), and whatever this
+  process accepted but did not finish is marked `interrupted`. Keep the grace period below
+  the host's kill delay (Render: `maxShutdownDelaySeconds`).
+- After a hard crash, the crashed process's jobs are failed by the next live instance within
+  roughly `JOB_STALE_AFTER_SECONDS + JOB_HEARTBEAT_INTERVAL_SECONDS`.
+- Job status lives in PostgreSQL, so clients polling through the new instance see progress of
+  jobs still running on the old one.
+- **Results are per instance**: they are stored on the local (ephemeral) disk of the instance
+  that produced them. After a deploy or restart, results produced by the previous instance
+  return `result_expired`.
+- Sessions are in PostgreSQL and survive restarts and deploys. Brute-force counters are in
+  memory and reset on restart.
+- **Migrations** run at container start (`alembic upgrade head`) while the old instance may
+  still serve traffic, so every migration must be **expand-only / backward compatible**
+  (e.g. add nullable columns; no renames or drops in the same release). This also keeps code
+  rollbacks possible without downgrading the database.
 
-Lifting the single-instance limit later would need a durable job queue/lease mechanism; that
-is intentionally out of scope.
+Running several instances permanently would need a durable job queue and shared result
+storage; that is intentionally out of scope.
 
 ## What is mocked in Milestone 1
 
@@ -165,38 +178,38 @@ The UI shows a "Development mock mode" banner and per-result notices. The fixtur
 generated from the transcript and does **not** demonstrate target-duration compliance.
 
 Failure scenarios are deterministic via `MOCK_FAIL_STAGE` (`translation`, `speech`, `audio`,
-`unexpected`), which is rejected in production. `PROVIDER_MODE` must be set explicitly; mock
-mode is refused when `APP_ENV=production`, and `PROVIDER_MODE=azure` fails at startup until it
-is implemented — there is no silent fallback to mocks.
+`unexpected`), which is rejected in production. `PROVIDER_MODE` must be set explicitly. With
+`APP_ENV=production`, mock mode is refused unless `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`
+(the online mock beta); that opt-in relaxes nothing else (Secure cookies, HSTS, a 16+
+character Access Code and the `MOCK_FAIL_STAGE` ban still apply). `PROVIDER_MODE=azure` fails
+at startup until it is implemented — there is no silent fallback to mocks.
 
 ## Roadmap and remaining work
 
 | Milestone | Scope | Status |
 |---|---|---|
 | 1 | Local foundation, mock end-to-end workflow, CI definition, review fixes | Done |
-| 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | In review |
-| 2B | Online Private Beta on mydubb.com running with **mock** providers | Next |
+| 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | Done |
+| 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | In progress |
 | 3 | Azure Translator, Azure Speech and FFmpeg duration processing | Later |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
-### Milestone 2B (online mock Private Beta) - not implemented yet
+### Milestone 2B (online mock Private Beta)
 
-- An explicit configuration that allows mock providers online while keeping production
-  security (Secure cookies, Origin/CSRF checks, strong Access Code). Today
-  `APP_ENV=production` refuses mock providers by design; 2B must not work around this by
-  running in development mode.
-- Job recovery for overlapping deployments (see "Restart behavior"): resolve before relying on
-  zero-downtime deploys.
-- Database migrations on deploy, health/readiness checks, result cleanup and a rollback
-  procedure.
-- Render CD ("After CI Checks Pass"), Neon database, mydubb.com domain and HTTPS, online
-  smoke tests.
-- Neon `DATABASE_URL` with `sslmode=require`; Render web service built from the Dockerfile
-  with `COOKIE_SECURE=true`, a strong `ACCESS_CODE` and health check path `/api/health`.
-- Account for Render Free sleep/cold starts, its ephemeral disk (results expire on restart)
-  and memory limits when choosing `JOB_MAX_CONCURRENCY`; set `FORWARDED_ALLOW_IPS` for the
-  proxy.
+Implemented in the repository:
+
+- `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION`: explicit opt-in for mock providers with
+  `APP_ENV=production`; all other production rules stay enforced.
+- Heartbeat-based job ownership and recovery, shutdown drain (see "Restart behavior").
+- `CLIENT_IP_HEADER` for brute-force protection behind Render's proxy; HSTS in production.
+- `render.yaml` Blueprint (Render Free, Oregon, auto-deploy after checks pass, health check,
+  shutdown delay, `mydubb.com`) and the setup/operations guide [DEPLOYMENT.md](DEPLOYMENT.md):
+  Neon, Render, GoDaddy DNS, online smoke test, rollback.
+
+Remaining (Product Owner actions with the guide, then online verification): create the Neon
+database and the Render Blueprint, configure DNS, verify HTTPS, run the online smoke test,
+and confirm `CLIENT_IP_HEADER` is present on Render requests.
 
 ### Milestone 3 (real providers)
 

@@ -59,6 +59,7 @@ def create_job(
             last_sentence_start_seconds=parse_timestamp(body.last_sentence_start),
             transcript_char_count=len(body.transcript),
             **services.pipeline.provider_names(),
+            runner_id=services.instance_id,
         )
         # Commit before starting so the worker always sees the queued row.
         db.commit()
