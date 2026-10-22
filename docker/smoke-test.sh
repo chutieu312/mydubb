@@ -11,6 +11,13 @@ trap 'rm -f "$JAR"' EXIT
 
 json() { "$PY" -c "import sys, json; print(json.load(sys.stdin)$1)"; }
 
+# Catch paste problems before spending a login attempt (e.g. Ctrl+V in Git Bash inserts a
+# control character instead of pasting). The value itself is never printed.
+if printf '%s' "$ACCESS_CODE" | LC_ALL=C grep -q '[[:cntrl:][:space:]]'; then
+  echo "ACCESS_CODE contains whitespace or control characters (paste problem?); not sent" >&2
+  exit 1
+fi
+
 echo "Waiting for readiness..."
 i=0
 until curl -fsS "$BASE_URL/api/ready" >/dev/null 2>&1; do
@@ -34,9 +41,10 @@ fi
 
 # Error responses carry only a code and message, never the submitted Access Code.
 login_body="$(mktemp)"
-status=$(curl -s -o "$login_body" -w '%{http_code}' -c "$JAR" -X POST \
-  -H 'Content-Type: application/json' \
-  -d "{\"access_code\":\"$ACCESS_CODE\"}" "$BASE_URL/api/session")
+# Build the JSON with Python so any character in the code is encoded correctly.
+login_payload=$("$PY" -c 'import json, os; print(json.dumps({"access_code": os.environ["ACCESS_CODE"]}))')
+status=$(printf '%s' "$login_payload" | curl -s -o "$login_body" -w '%{http_code}' -c "$JAR" \
+  -X POST -H 'Content-Type: application/json' --data-binary @- "$BASE_URL/api/session")
 if [ "$status" != "200" ]; then
   echo "login failed: HTTP $status $(cat "$login_body")" >&2
   rm -f "$login_body"
