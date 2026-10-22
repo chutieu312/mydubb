@@ -191,7 +191,7 @@ at startup until it is implemented — there is no silent fallback to mocks.
 |---|---|---|
 | 1 | Local foundation, mock end-to-end workflow, CI definition, review fixes | Done |
 | 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | Done |
-| 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | In progress |
+| 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
 | 3 | Azure Translator, Azure Speech and FFmpeg duration processing | Later |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
@@ -208,9 +208,10 @@ Implemented in the repository:
   shutdown delay, `mydubb.com`) and the setup/operations guide [DEPLOYMENT.md](DEPLOYMENT.md):
   Neon, Render, GoDaddy DNS, online smoke test, rollback.
 
-Remaining (Product Owner actions with the guide, then online verification): create the Neon
-database and the Render Blueprint, configure DNS, verify HTTPS, run the online smoke test,
-and confirm `CLIENT_IP_HEADER` is present on Render requests.
+Deployed and verified on 2026-10-22: Neon, Render Blueprint, GoDaddy DNS, HTTPS, online
+smoke test, and `CLIENT_IP_HEADER` present on Render requests (details in
+[DEPLOYMENT.md](DEPLOYMENT.md#current-deployment)). Render Free does not support
+`maxShutdownDelaySeconds`, so the shutdown drain is 20 s within Render's fixed 30 s delay.
 
 ### Milestone 3 (real providers)
 
