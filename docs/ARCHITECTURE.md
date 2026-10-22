@@ -169,17 +169,36 @@ Failure scenarios are deterministic via `MOCK_FAIL_STAGE` (`translation`, `speec
 mode is refused when `APP_ENV=production`, and `PROVIDER_MODE=azure` fails at startup until it
 is implemented — there is no silent fallback to mocks.
 
-## Remaining work
+## Roadmap and remaining work
 
-Planned sequence after the Milestone 1 review:
+| Milestone | Scope | Status |
+|---|---|---|
+| 1 | Local foundation, mock end-to-end workflow, CI definition, review fixes | Done |
+| 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | In review |
+| 2B | Online Private Beta on mydubb.com running with **mock** providers | Next |
+| 3 | Azure Translator, Azure Speech and FFmpeg duration processing | Later |
 
-1. Set up the GitHub repository with the Product Owner.
-2. Push the reviewed code and verify CI on GitHub (not yet run there).
-3. Implement and validate Azure translation, Azure speech and FFmpeg processing.
-4. Configure Render CD and deploy the functional Private Beta.
+Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
-Before public beta, resolve the overlapping-deployment job-recovery issue described in
-"Restart behavior".
+### Milestone 2B (online mock Private Beta) - not implemented yet
+
+- An explicit configuration that allows mock providers online while keeping production
+  security (Secure cookies, Origin/CSRF checks, strong Access Code). Today
+  `APP_ENV=production` refuses mock providers by design; 2B must not work around this by
+  running in development mode.
+- Job recovery for overlapping deployments (see "Restart behavior"): resolve before relying on
+  zero-downtime deploys.
+- Database migrations on deploy, health/readiness checks, result cleanup and a rollback
+  procedure.
+- Render CD ("After CI Checks Pass"), Neon database, mydubb.com domain and HTTPS, online
+  smoke tests.
+- Neon `DATABASE_URL` with `sslmode=require`; Render web service built from the Dockerfile
+  with `COOKIE_SECURE=true`, a strong `ACCESS_CODE` and health check path `/api/health`.
+- Account for Render Free sleep/cold starts, its ephemeral disk (results expire on restart)
+  and memory limits when choosing `JOB_MAX_CONCURRENCY`; set `FORWARDED_ALLOW_IPS` for the
+  proxy.
+
+### Milestone 3 (real providers)
 
 **Azure Translator (F0)**
 - `AzureTranslationProvider`: chunk text to the service's per-request limits, preserve order,
@@ -204,11 +223,7 @@ Before public beta, resolve the overlapping-deployment job-recovery issue descri
   tempo factors.
 - Add FFmpeg to the runtime image.
 
-**Deployment (Render Free + Neon Free)**
-- Neon database + `DATABASE_URL` (with `sslmode=require`); Render web service from the
-  Dockerfile with `APP_ENV=production`, `COOKIE_SECURE=true`, `FORWARDED_ALLOW_IPS=*`,
-  a strong `ACCESS_CODE`, Azure secrets; health check path `/api/health`.
-- Render "Auto-Deploy: After CI Checks Pass", custom domain `mydubb.com`, HTTPS.
-- Account for Render Free sleep/cold starts, its ephemeral disk (results expire on restart) and
-  memory limits when choosing `JOB_MAX_CONCURRENCY`.
+**Production with real providers**
 - Disclose in the UI that submitted text is processed by Azure services.
+- Production configuration with Azure credentials (`PROVIDER_MODE=azure`); missing
+  credentials must fail startup, never fall back to mocks.

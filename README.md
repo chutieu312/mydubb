@@ -3,10 +3,14 @@
 Private-beta web app that turns a user-provided English transcript into Vietnamese speech
 for learning technical content.
 
-**Status: Milestone 1** — application foundation, an end-to-end workflow with **mock
-providers**, and CI. No Azure service is called, and no exact-duration dubbing is
-implemented yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and remaining
-work and [docs/API.md](docs/API.md) for API contracts.
+Repository: https://github.com/chutieu312/mydubb (private).
+
+**Status: Milestone 2A** (GitHub repository and CI) on top of Milestone 1 — application
+foundation, an end-to-end workflow with **mock providers**, and CI. No Azure service is
+called, and no exact-duration dubbing is implemented yet. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
+[docs/API.md](docs/API.md) for API contracts and [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
+branch/CI workflow.
 
 ## Quick start (end to end, Docker)
 
@@ -128,6 +132,5 @@ Access Code brute-force protection) are correct.
 | `ci-success` | Always runs; passes only if all four jobs **succeeded** (skipped/cancelled = failure). Use this as the required status check. |
 
 Permissions are `contents: read`; no secrets, cloud resources or deployments are used.
-The workflow has been validated locally (actionlint, and the same commands run on this
-machine) but has **not yet run on GitHub**; it remains unverified until the repository is
-pushed.
+CI runs on GitHub for every pull request and every push to `main`. Branch workflow, how to
+read CI logs, actual protections and billing limits: [docs/WORKFLOW.md](docs/WORKFLOW.md).
