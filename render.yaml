@@ -14,8 +14,6 @@ services:
     autoDeployTrigger: checksPass
     # Liveness only: a slow Neon wake-up must not make Render restart the service.
     healthCheckPath: /api/health
-    # Time between SIGTERM and SIGKILL; leaves room for JOB_SHUTDOWN_GRACE_SECONDS.
-    maxShutdownDelaySeconds: 60
     # Render adds www.mydubb.com automatically and redirects it to the root domain.
     domains:
       - mydubb.com
