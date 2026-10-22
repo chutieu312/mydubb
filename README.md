@@ -8,9 +8,12 @@ Repository: https://github.com/chutieu312/mydubb (private).
 **Status: Milestone 3A done**: the online Private Beta runs at https://mydubb.com with real
 English-to-Vietnamese translation by Azure Translator and a glossary that keeps technical
 terms in English (`TRANSLATION_PROVIDER=azure`; off by default, so local and CI runs stay
-all-mock). Speech and audio processing are still mock (on top of Milestones 1, 2A and 2B:
-application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon). Azure Speech and FFmpeg (Milestone 3B/3C) are not
-implemented, so the audio is always a mock fixture and no exact-duration dubbing exists yet. See
+all-mock). Speech and audio processing are still mock on production (on top of Milestones 1, 2A
+and 2B: application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon).
+Real Vietnamese speech by Azure Speech (`SPEECH_PROVIDER=azure`, Milestone 3B) is implemented
+behind configuration and awaits acceptance, so production still serves the mock fixture; FFmpeg
+duration processing (Milestone 3C) is not implemented, so no exact-duration dubbing exists yet.
+See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
 branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
@@ -47,6 +50,8 @@ docker-compose.yml  Local PostgreSQL (+ optional app container)
 - Docker (for PostgreSQL and image builds)
 - Python tooling: [uv](https://docs.astral.sh/uv/) 0.11+ (installs Python 3.12 if needed)
 - Node.js 22+
+- FFmpeg with `ffprobe` (only for the audio tests and `SPEECH_PROVIDER=azure` outside Docker; the
+  Docker image includes it). Audio tests are skipped locally when it is missing and fail in CI.
 
 ## Local development
 
@@ -97,6 +102,20 @@ Technical terms listed in
 [backend/app/translation/data/glossary.txt](backend/app/translation/data/glossary.txt) stay in
 English; add a term by adding a line to that file in a pull request.
 
+### Azure speech (Milestone 3B)
+
+`SPEECH_PROVIDER=azure` makes the speech stage generate real Vietnamese speech from the
+translated text with Azure Speech (REST API). It works with either translation provider
+(`mock | azure`) and keeps `PROVIDER_MODE=mock`: audio processing is still a pass-through, so the
+audio length is **not** adjusted to the target. Required: `AZURE_SPEECH_KEY` and
+`AZURE_SPEECH_REGION` (the Speech resource's own key; the Translator key is never reused), plus
+`ffmpeg`/`ffprobe` on `PATH`. Startup fails if any is missing; there is no fallback to the mock.
+Optional: `AZURE_SPEECH_TIMEOUT_SECONDS`, `AZURE_SPEECH_MAX_CHUNK_CHARS` (default 2000),
+`AZURE_SPEECH_MAX_REQUESTS_PER_WINDOW` / `AZURE_SPEECH_RATE_WINDOW_SECONDS` (default 20 per 60 s,
+the Free F0 limit shared by all jobs). Resource setup and the live smoke test that creates MP3
+samples to listen to (`uv run python -m scripts.azure_speech_smoke`) are in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#azure-speech-milestone-3b).
+
 ## Tests and checks
 
 ```bash
@@ -115,6 +134,9 @@ cd e2e
 npm ci && npx playwright install chromium
 bash run-e2e.sh
 ```
+
+Audio tests use the real `ffmpeg`/`ffprobe`; on a machine without them (e.g. plain Windows) run
+the suite in a Linux container with FFmpeg, as CI does.
 
 Database tests fail (they are not skipped) when `TEST_DATABASE_URL` is missing. Point it only
 at a disposable database such as `mydubb_test`, never at one holding data you need.

@@ -71,6 +71,14 @@ jobs:
           version: "0.11.30"
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
+      # FFmpeg/ffprobe: the audio tests encode and verify real MP3 files (the runtime image
+      # installs the same programs). Tests fail, not skip, when they are missing in CI.
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
       - name: Install dependencies (locked)
         run: uv sync --frozen
       - name: Lint
@@ -154,12 +162,35 @@ jobs:
           echo "$out" | tail -5
           [ "$status" -ne 0 ] || { echo "container started without a key" >&2; exit 1; }
           echo "$out" | grep -q AZURE_TRANSLATOR_KEY
+      # Azure translation + Azure speech with fake keys. Azure is never called (no job is
+      # created); startup proves the image contains ffmpeg/ffprobe. Real Azure Speech is only
+      # exercised by the manual live smoke test.
+      - name: Start container with Azure translation and speech configuration
+        run: |
+          docker run -d --name mydubb-speech --network host             -e PORT=8084             -e APP_ENV=development             -e PROVIDER_MODE=mock             -e TRANSLATION_PROVIDER=azure             -e AZURE_TRANSLATOR_KEY=ci-only-fake-key             -e SPEECH_PROVIDER=azure             -e AZURE_SPEECH_KEY=ci-only-fake-speech-key             -e AZURE_SPEECH_REGION=westus2             -e COOKIE_SECURE=false             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE             mydubb:ci
+      - name: Azure translation and speech configuration check
+        env:
+          BASE_URL: http://127.0.0.1:8084
+        run: sh docker/azure-speech-mode-check.sh
+      # Real FFmpeg and ffprobe inside the runtime image: several fake-Azure chunks are joined
+      # and encoded to an MP3 that is then probed. No credentials, no network.
+      - name: Speech audio runtime check (real FFmpeg in the image)
+        run: docker exec -i mydubb python - < docker/speech_runtime_check.py
+      - name: Azure speech without a key refuses to start
+        run: |
+          set +e
+          out=$(docker run --rm --network host -e PORT=8085 -e APP_ENV=development             -e PROVIDER_MODE=mock -e SPEECH_PROVIDER=azure -e AZURE_SPEECH_REGION=westus2             -e AZURE_TRANSLATOR_KEY=ci-only-fake-key -e TRANSLATION_PROVIDER=azure             -e COOKIE_SECURE=false             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE mydubb:ci 2>&1)
+          status=$?
+          echo "$out" | tail -5
+          [ "$status" -ne 0 ] || { echo "container started without a speech key" >&2; exit 1; }
+          echo "$out" | grep -q AZURE_SPEECH_KEY
       - name: Container logs
         if: always()
         run: |
           docker logs mydubb || true
           docker logs mydubb-prod || true
           docker logs mydubb-azure || true
+          docker logs mydubb-speech || true
 
   e2e:
     name: Browser E2E (Playwright, mock providers)

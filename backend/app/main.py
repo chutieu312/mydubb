@@ -167,6 +167,9 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             # (heartbeats continue meanwhile), then interrupt whatever is left.
             services.executor.shutdown()
             await drain_running_jobs(services)
+            if services.speech_limiter is not None:
+                # Jobs still waiting for a speech request slot stop instead of outliving us.
+                services.speech_limiter.close()
             liveness_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await liveness_task

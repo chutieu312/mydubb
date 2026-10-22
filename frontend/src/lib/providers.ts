@@ -1,6 +1,32 @@
 import type { AppMeta } from "../api/types";
 
-/** True when submitting a transcript sends its text to Azure. */
-export function sendsTranscriptToAzure(providers: AppMeta["providers"]): boolean {
-  return providers.translation === "azure";
+type Providers = AppMeta["providers"];
+
+/**
+ * What the user must be told before submitting: which text is sent to which Azure service.
+ * Null when nothing leaves the server (all mock).
+ */
+export function azureDisclosure(providers: Providers): string | null {
+  const translator = providers.translation === "azure";
+  const speech = providers.speech === "azure";
+  if (translator && speech) {
+    return (
+      "When you generate dubbing, the transcript text is sent to Microsoft Azure Translator " +
+      "to be translated, and the translated Vietnamese text is sent to Microsoft Azure " +
+      "Speech to generate the audio."
+    );
+  }
+  if (translator) {
+    return (
+      "When you generate dubbing, the transcript text is sent to Microsoft Azure Translator " +
+      "to be translated."
+    );
+  }
+  if (speech) {
+    return (
+      "When you generate dubbing, the Vietnamese text (here a mock placeholder that still " +
+      "contains your transcript text) is sent to Microsoft Azure Speech to generate the audio."
+    );
+  }
+  return null;
 }

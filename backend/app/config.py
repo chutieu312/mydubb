@@ -30,6 +30,11 @@ class TranslationProviderChoice(StrEnum):
     AZURE = "azure"
 
 
+class SpeechProviderChoice(StrEnum):
+    MOCK = "mock"
+    AZURE = "azure"
+
+
 DEFAULT_AZURE_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
 # Azure Translator limit per request is 50,000 characters (service-limits documentation).
 AZURE_TRANSLATOR_MAX_REQUEST_CHARS = 50_000
@@ -46,6 +51,8 @@ class MockFailStage(StrEnum):
 
 _HEADER_VALUE = re.compile(r"[!-~]+")
 _REGION = re.compile(r"[A-Za-z0-9-]{1,64}")
+# Speech region identifiers (e.g. westus2) become part of the host name, so they stay strict.
+_SPEECH_REGION = re.compile(r"[a-z0-9]{2,30}")
 _SUPPORTED_DB_SCHEMES = ("postgresql+psycopg://", "postgresql://", "postgres://")
 
 
@@ -76,6 +83,9 @@ class Settings(BaseSettings):
     # (Milestone 3 in progress). PROVIDER_MODE=mock keeps meaning "mock everything" unless this
     # overrides the translation stage.
     translation_provider: TranslationProviderChoice = TranslationProviderChoice.MOCK
+    # Same for speech: SPEECH_PROVIDER=azure generates real Vietnamese speech while audio
+    # processing (duration fitting, Milestone 3C) is still a pass-through mock.
+    speech_provider: SpeechProviderChoice = SpeechProviderChoice.MOCK
     mock_fail_stage: MockFailStage = MockFailStage.NONE
     # Artificial delay per mock stage so processing stages are observable in the UI.
     mock_stage_delay_seconds: float = Field(default=0.0, ge=0, le=30)
@@ -94,6 +104,23 @@ class Settings(BaseSettings):
     azure_translator_max_request_chars: int = Field(
         default=10_000, ge=500, le=AZURE_TRANSLATOR_MAX_REQUEST_CHARS
     )
+
+    # Azure Speech text to speech over REST (only validated and used when SPEECH_PROVIDER=azure).
+    # It has its own resource and key: the Translator key is never reused. Both stay in the
+    # backend environment.
+    azure_speech_key: SecretStr | None = None
+    # Region of the Speech resource (e.g. westus2); it selects the regional TTS endpoint.
+    azure_speech_region: str | None = None
+    # Total time allowed for one synthesis request.
+    azure_speech_timeout_seconds: float = Field(default=60, ge=10, le=300)
+    # Largest text per request. A request is cut off by the service at 10 minutes of audio
+    # without an error, so chunks stay far below that (2,000 characters is a few minutes).
+    azure_speech_max_chunk_chars: int = Field(default=2000, ge=200, le=4000)
+    # Request rate shared by all jobs of this process. Defaults are the Free (F0) limit
+    # (20 transactions per 60 seconds, not adjustable); raise them only for a Standard (S0)
+    # resource whose quota is higher.
+    azure_speech_max_requests_per_window: int = Field(default=20, ge=1, le=1000)
+    azure_speech_rate_window_seconds: float = Field(default=60, ge=1, le=600)
 
     session_ttl_seconds: int = Field(default=12 * 3600, ge=60)
     cookie_secure: bool = True
@@ -149,8 +176,9 @@ class Settings(BaseSettings):
     def _check_environment_rules(self) -> "Settings":
         if self.provider_mode is ProviderMode.AZURE:
             raise ValueError(
-                "PROVIDER_MODE=azure is not implemented yet (Azure Speech and FFmpeg are "
-                "pending); use PROVIDER_MODE=mock, optionally with TRANSLATION_PROVIDER=azure"
+                "PROVIDER_MODE=azure is not implemented yet (FFmpeg duration processing is "
+                "pending); use PROVIDER_MODE=mock, optionally with TRANSLATION_PROVIDER=azure "
+                "and SPEECH_PROVIDER=azure"
             )
         if self.translation_provider is TranslationProviderChoice.AZURE:
             self._check_azure_translator()
@@ -158,6 +186,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "MOCK_FAIL_STAGE=translation/unexpected only applies to the mock "
                     "translation provider; unset it or use TRANSLATION_PROVIDER=mock"
+                )
+        if self.speech_provider is SpeechProviderChoice.AZURE:
+            self._check_azure_speech()
+            if self.mock_fail_stage is MockFailStage.SPEECH:
+                raise ValueError(
+                    "MOCK_FAIL_STAGE=speech only applies to the mock speech provider; "
+                    "unset it or use SPEECH_PROVIDER=mock"
                 )
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
             raise ValueError(
@@ -204,13 +239,25 @@ class Settings(BaseSettings):
                 "e.g. https://api.cognitive.microsofttranslator.com"
             )
 
+    def _check_azure_speech(self) -> None:
+        key = self.azure_speech_key.get_secret_value() if self.azure_speech_key else ""
+        if not key:
+            raise ValueError("AZURE_SPEECH_KEY is required when SPEECH_PROVIDER=azure")
+        if not _HEADER_VALUE.fullmatch(key):
+            raise ValueError("AZURE_SPEECH_KEY must be printable ASCII without spaces")
+        if not self.azure_speech_region or not _SPEECH_REGION.fullmatch(self.azure_speech_region):
+            raise ValueError(
+                "AZURE_SPEECH_REGION is required when SPEECH_PROVIDER=azure and must be a "
+                "region name such as westus2"
+            )
+
     @property
     def sqlalchemy_url(self) -> str:
         return to_sqlalchemy_url(self.database_url.get_secret_value())
 
     @property
     def is_mock_mode(self) -> bool:
-        """True while any component (speech, audio processing) is still a mock."""
+        """True while any component is still a mock (audio processing always is, until 3C)."""
         return self.provider_mode is ProviderMode.MOCK
 
     @property
@@ -218,8 +265,8 @@ class Settings(BaseSettings):
         """Which implementation serves each pipeline stage (reported by /api/meta)."""
         return {
             "translation": self.translation_provider.value,
-            # Azure Speech and FFmpeg arrive in later Milestone 3 pull requests.
-            "speech": "mock",
+            "speech": self.speech_provider.value,
+            # FFmpeg duration processing arrives in Milestone 3C.
             "audio": "mock",
         }
 

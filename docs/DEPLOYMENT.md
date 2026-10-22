@@ -250,6 +250,75 @@ missing or invalid the service refuses to start (the log names the variable, not
 - The key is rotated in the Azure portal (Keys and Endpoint → Regenerate) and updated in
   Render; a regenerated key invalidates the old one immediately.
 
+## Azure Speech (Milestone 3B)
+
+Not enabled in production yet: production still uses the mock speech fixture until the Product
+Owner accepts the listening evaluation below. Cost rule: **Free (F0) only**; never choose
+Standard (S0) or change billing without a decision.
+
+### 1. Create the resource (Azure portal)
+
+1. Open https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices (create a
+   "Speech" single-service resource).
+2. **Resource group**: the same as the Translator, e.g. `mydubb`. **Region**: a region that
+   offers the Vietnamese voices, e.g. **West US 2** (`westus2`); note it, it is
+   `AZURE_SPEECH_REGION`. **Name**: e.g. `mydubb-speech`.
+3. **Pricing tier**: **Free F0**. It allows 20 transactions per 60 seconds, not adjustable, and a
+   monthly allowance listed on the
+   [pricing page](https://azure.microsoft.com/pricing/details/cognitive-services/speech-services/).
+   If the portal only offers paid tiers, stop and check with the team.
+4. **Review + create** -> **Create** -> **Go to resource** -> **Resource Management -> Keys and
+   Endpoint**. Copy **KEY 1** and the **Location/Region**. Do not paste the key in chat,
+   issues, pull requests or logs. This is a different key from the Translator's.
+
+### 2. Live smoke test: create MP3 samples to listen to
+
+Put the values in `backend/.env` (git-ignored) and have `ffmpeg` and `ffprobe` on `PATH` (or run
+inside the Docker image, which contains them):
+
+```
+AZURE_SPEECH_KEY=<KEY 1>
+AZURE_SPEECH_REGION=westus2
+```
+
+```bash
+cd backend
+uv run python -m scripts.azure_speech_smoke                # both voices, 2 requests (~600 characters)
+uv run python -m scripts.azure_speech_smoke --multi-chunk  # also 8 small requests to test joining
+```
+
+It sends only short synthetic Vietnamese sentences that contain `neural network`,
+`gradient descent`, `loss function`, `Spring Boot`, `Dependency Injection`, `REST API`, `JSON` and
+`CI/CD`, and writes `speech-samples/speech-HoaiMy.mp3`, `speech-NamMinh.mp3` (and
+`speech-multi-chunk-*.mp3`, which uses an 80 character chunk limit, so each of its four sentences is
+its own request). Exit code 0 only means the requests worked and the MP3s are structurally valid.
+**Listen to them** and judge: clear Vietnamese, recognizable English terms, no lost or repeated
+sentence, sensible pauses (including where chunks were joined). As of this pull request the live
+test has **not** been run (no Speech resource yet).
+
+### 3. Enable on Render (after acceptance only)
+
+Render -> service **mydubb** -> **Environment** -> add `SPEECH_PROVIDER=azure`,
+`AZURE_SPEECH_KEY` (secret) and `AZURE_SPEECH_REGION`; keep `PROVIDER_MODE=mock` and
+`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` (audio processing is still a pass-through). The image
+already contains FFmpeg. The banner then reads "Beta: real translation and speech, duration not
+adjusted" and the form says that text is sent to Azure Translator and Azure Speech. Remove
+`SPEECH_PROVIDER` to go back to the mock fixture. A missing key or region, or a missing FFmpeg,
+stops the service at startup; the log names the variable, never its value. `render.yaml` is
+unchanged.
+
+### Expected behavior and limits
+
+- The audio length is **not** adjusted to the target duration (Milestone 3C); the result says so.
+- F0 allows 20 requests per minute for the whole resource, shared by all jobs: a 2,000-character
+  chunk is one request, so a long transcript takes minutes in the `synthesizing` stage. Quota or
+  rate errors fail the job with a clear message; nothing is retried automatically.
+- Azure cuts a request at 10 minutes of audio without an error. Chunks are small (2,000
+  characters by default) and a chunk within 10 s of the limit is rejected.
+- The image grows with FFmpeg (Debian `ffmpeg`: about 405 MB -> 1.04 GB). A static FFmpeg build
+  would be smaller but is an unsigned third-party binary, which was not chosen.
+- Rotate the key in the Azure portal (Keys and Endpoint -> Regenerate) and update Render.
+
 ## Operations
 
 ### Deploying

@@ -9,12 +9,23 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.access.rate_limit import FailedAttemptLimiter
+from app.audio.ffmpeg import locate_tools
 from app.audio.mock import MockAudioProcessor
-from app.config import MockFailStage, ProviderMode, Settings, TranslationProviderChoice
+from app.config import (
+    ConfigurationError,
+    MockFailStage,
+    ProviderMode,
+    Settings,
+    SpeechProviderChoice,
+    TranslationProviderChoice,
+)
 from app.db import create_db_engine, create_session_factory
 from app.jobs.executor import BoundedThreadJobExecutor, JobExecutor
 from app.jobs.pipeline import JobPipeline
+from app.speech.azure import AzureSpeechProvider
+from app.speech.base import SpeechProvider
 from app.speech.mock import MockSpeechProvider
+from app.speech.rate_limit import RequestRateLimiter
 from app.storage.result_store import LocalFileResultStore, ResultStore
 from app.translation.azure import AzureTranslationProvider
 from app.translation.base import TranslationProvider
@@ -33,6 +44,8 @@ class AppServices:
     result_store: ResultStore
     executor: JobExecutor
     pipeline: JobPipeline
+    # Request-rate limiter shared by all jobs when speech uses Azure; closed at shutdown.
+    speech_limiter: RequestRateLimiter | None = None
 
 
 def build_translator(
@@ -60,10 +73,45 @@ def build_translator(
     )
 
 
+def build_speech(
+    settings: Settings,
+    limiter: RequestRateLimiter | None,
+    transport: httpx.BaseTransport | None = None,
+) -> SpeechProvider:
+    if settings.speech_provider is SpeechProviderChoice.AZURE:
+        # Settings validation guarantees the key and region; never fall back to the mock.
+        assert settings.azure_speech_key is not None and settings.azure_speech_region is not None
+        assert limiter is not None
+        tools = locate_tools()
+        if tools is None:
+            raise ConfigurationError(
+                "Invalid configuration: SPEECH_PROVIDER=azure needs the ffmpeg and ffprobe "
+                "programs on PATH to build the MP3 (they are part of the Docker image)"
+            )
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        return AzureSpeechProvider(
+            key=settings.azure_speech_key,
+            region=settings.azure_speech_region,
+            glossary=default_glossary(),
+            tools=tools,
+            limiter=limiter,
+            timeout_seconds=settings.azure_speech_timeout_seconds,
+            max_chunk_chars=settings.azure_speech_max_chunk_chars,
+            transport=transport,
+        )
+    return MockSpeechProvider(
+        fail=settings.mock_fail_stage is MockFailStage.SPEECH,
+        delay=settings.mock_stage_delay_seconds,
+    )
+
+
 def build_services(
-    settings: Settings, *, translation_transport: httpx.BaseTransport | None = None
+    settings: Settings,
+    *,
+    translation_transport: httpx.BaseTransport | None = None,
+    speech_transport: httpx.BaseTransport | None = None,
 ) -> AppServices:
-    """`translation_transport` replaces the network for Azure Translator (tests only)."""
+    """The transports replace the network for Azure Translator / Azure Speech (tests only)."""
     engine = create_db_engine(settings.sqlalchemy_url, settings.db_connect_timeout_seconds)
     session_factory = create_session_factory(engine)
     result_store = LocalFileResultStore(settings.result_storage_dir)
@@ -73,10 +121,18 @@ def build_services(
         raise RuntimeError(f"Unsupported provider mode: {settings.provider_mode}")
     fail = settings.mock_fail_stage
     delay = settings.mock_stage_delay_seconds
+    speech_limiter = (
+        RequestRateLimiter(
+            settings.azure_speech_max_requests_per_window,
+            settings.azure_speech_rate_window_seconds,
+        )
+        if settings.speech_provider is SpeechProviderChoice.AZURE
+        else None
+    )
     pipeline = JobPipeline(
         session_factory=session_factory,
         translator=build_translator(settings, translation_transport),
-        speech=MockSpeechProvider(fail=fail is MockFailStage.SPEECH, delay=delay),
+        speech=build_speech(settings, speech_limiter, speech_transport),
         audio=MockAudioProcessor(fail=fail is MockFailStage.AUDIO, delay=delay),
         result_store=result_store,
         result_ttl_seconds=settings.result_ttl_seconds,
@@ -98,4 +154,5 @@ def build_services(
             max_queued=settings.job_max_queued,
         ),
         pipeline=pipeline,
+        speech_limiter=speech_limiter,
     )

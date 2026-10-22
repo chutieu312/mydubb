@@ -22,15 +22,48 @@ export function ProviderBanner({ providers }: Props) {
 
   return (
     <div className="mock-banner" role="status">
-      <strong>Beta: real translation, mock audio.</strong> The Vietnamese text is translated by
-      Azure Translator. Speech and audio processing are still mock: the audio is a fixed sample,
-      not generated from your transcript, and does not match the target duration.
+      {summary(providers)}
       <ul className="provider-list">
         <li>Translation: {describe(providers.translation, "Azure Translator (real)")}</li>
         <li>Speech: {describe(providers.speech, "Azure Speech (real)")}</li>
-        <li>Audio processing: {describe(providers.audio, "FFmpeg (real)")}</li>
+        <li>
+          Audio processing:{" "}
+          {providers.audio === "mock"
+            ? "mock (pass-through: duration not adjusted)"
+            : "FFmpeg (real)"}
+        </li>
       </ul>
     </div>
+  );
+}
+
+function summary(providers: Props["providers"]) {
+  const realTranslation = providers.translation !== "mock";
+  const realSpeech = providers.speech !== "mock";
+  if (realTranslation && realSpeech) {
+    return (
+      <>
+        <strong>Beta: real translation and speech, duration not adjusted.</strong> The Vietnamese
+        text is translated by Azure Translator and read aloud by Azure Speech. The audio length is
+        not adjusted to the target duration yet, so it can be longer or shorter than the target.
+      </>
+    );
+  }
+  if (realSpeech) {
+    return (
+      <>
+        <strong>Beta: mock translation, real speech.</strong> The Vietnamese text is an
+        illustrative placeholder, read aloud by Azure Speech. The audio length is not adjusted to
+        the target duration yet.
+      </>
+    );
+  }
+  return (
+    <>
+      <strong>Beta: real translation, mock audio.</strong> The Vietnamese text is translated by
+      Azure Translator. Speech and audio processing are still mock: the audio is a fixed sample,
+      not generated from your transcript, and does not match the target duration.
+    </>
   );
 }
 

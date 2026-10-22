@@ -86,6 +86,10 @@ export function ResultView({ jobId, onSessionExpired }: Props) {
       <h3>
         Audio
         {result.audio.is_fixture && <span className="badge">Mock fixture</span>}
+        {!result.audio.is_fixture && result.audio.provider === "azure-speech" && (
+          <span className="badge">Azure Speech</span>
+        )}
+        {!result.audio.duration_adjusted && <span className="badge">Duration not adjusted</span>}
       </h3>
       <audio controls preload="metadata" src={result.audio.url} className="player">
         Your browser does not support audio playback.

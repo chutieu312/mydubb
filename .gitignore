@@ -30,3 +30,4 @@ e2e/test-results/
 # Logs and local runtime data (results are stored in the system temp dir by default)
 *.log
 mydubb-results/
+speech-samples/

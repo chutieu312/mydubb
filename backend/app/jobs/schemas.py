@@ -88,6 +88,8 @@ class AudioOut(BaseModel):
     url: str
     download_url: str
     content_type: str
+    # Speech provider that produced the audio (e.g. "mock-speech", "azure-speech").
+    provider: str
     is_fixture: bool
     duration_adjusted: bool
 
