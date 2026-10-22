@@ -1,7 +1,8 @@
 # Deployment: online mock Private Beta (Milestone 2B)
 
-Target: `https://mydubb.com` running the production Docker image with **mock providers**
-(no Azure, no real translation or speech), on free tiers.
+Target: `https://mydubb.com` running the production Docker image on free tiers. Speech and
+audio processing are **mock**; translation is real (Azure Translator) since Milestone 3A, see
+"Current deployment" and "Azure Translator" below.
 
 ```
 Browser ──HTTPS──► Render edge (TLS, mydubb.com) ──► Render Free web service "mydubb"
@@ -35,10 +36,22 @@ Set up on 2026-10-22 (Milestone 2B) and verified end to end.
 | Database | Neon project `mydubb`, Postgres 17, AWS US West 2 (Oregon), direct connection |
 | DNS (GoDaddy) | `A @ 216.24.57.1`, `CNAME www mydubb.onrender.com`; NS/SOA/`_domainconnect`/`_dmarc` unchanged |
 | TLS | Google Trust Services certificates for `mydubb.com` and `www.mydubb.com`, renewed by Render |
-| Providers | Mock (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) |
+| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech and audio processing: mock (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) |
 | Client IP header | `cf-connecting-ip` confirmed present (no "configured but absent" warning in the logs) |
 
-Verification performed: health/readiness, security headers (HSTS, CSP, X-Frame-Options,
+Milestone 3A (enabled 2026-10-22): PR #9, merge SHA `5ade22201dd7c9d8b589a3d4d296cb94417be334`;
+CI on the merge commit passed
+([run](https://github.com/chutieu312/mydubb/actions/runs/39854321185)) and Render deployed that
+SHA (GitHub Deployment `7263700601`, success). Checked from outside: `/api/meta` reports
+`translation=azure, speech=mock, audio=mock`, health/readiness 200, HSTS/CSP/X-Frame-Options
+present, API docs 404, job creation without login 401. The Product Owner ran a job on
+https://mydubb.com (synthetic four-line transcript) and confirmed from the UI: Azure disclosure
+before submit, all stages completed, "Azure Translator" badge, natural Vietnamese with
+`machine learning`, `neural network`, `gradient descent`, `loss function`, `Spring Boot`,
+`Dependency Injection`, `REST API` and `JSON` kept in English and `10:30` unchanged, mock-fixture
+audio labeled as such. The audio is still a fixed sample; no Azure Speech or FFmpeg yet.
+
+Verification performed at the 2B deployment: health/readiness, security headers (HSTS, CSP, X-Frame-Options,
 nosniff, Referrer-Policy), API docs disabled, unauthenticated job creation and wrong Access
 Code rejected; in the browser (desktop Chrome): login, mock job with the stage list, result
 text (timestamp-like content preserved), audio playback, MP3 download, logout; iPhone Safari
@@ -163,7 +176,8 @@ automatically and redirects it to `mydubb.com`.
 
 ## Azure Translator (Milestone 3A)
 
-Production still runs **all-mock**. Nothing below is enabled until you do it. Cost rule: use
+Production uses Azure translation since 2026-10-22 (see "Current deployment"); these are the
+steps that were followed. Cost rule: use
 only the **Free (F0)** pricing tier; never pick Standard (S1) without a decision.
 
 ### 1. Create the resource (Azure portal)
@@ -210,7 +224,7 @@ Microsoft charged. Measured on 2026-10-22 (F0, Global endpoint, region `westus2`
 term occurrence adds 31 characters to the usage counted against the 2 million characters per
 month of F0, so term-dense transcripts use noticeably more quota than their plain length.
 
-### 3. Enable on Render (later, after the pull request is merged and the smoke test passed)
+### 3. Enable on Render (done for production on 2026-10-22)
 
 Render → service **mydubb** → **Environment** → add `TRANSLATION_PROVIDER=azure`,
 `AZURE_TRANSLATOR_KEY` (mark as secret) and, only for a regional resource,
