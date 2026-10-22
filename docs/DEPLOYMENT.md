@@ -161,6 +161,75 @@ automatically and redirects it to `mydubb.com`.
    per-client limit is then bypassable and needs a different header (the global limit still
    applies).
 
+## Azure Translator (Milestone 3A)
+
+Production still runs **all-mock**. Nothing below is enabled until you do it. Cost rule: use
+only the **Free (F0)** pricing tier; never pick Standard (S1) without a decision.
+
+### 1. Create the resource (Azure portal)
+
+1. Sign in at https://portal.azure.com and open
+   https://portal.azure.com/#create/Microsoft.CognitiveServicesTextTranslation (create
+   "Translator" - a single-service resource).
+2. **Subscription**: your Azure subscription. **Resource group**: create a new one, e.g.
+   `mydubb`.
+3. **Region**: choose **Global** (Microsoft's default recommendation; then no region setting is
+   needed). If you pick a specific region, you must set `AZURE_TRANSLATOR_REGION` later.
+4. **Name**: any unique name, e.g. `mydubb-translator`.
+5. **Pricing tier**: **Free F0** (one free resource per subscription; 2 million characters per
+   month included, 2 million per hour rate cap). On F0 Microsoft rejects requests over the
+   free quota (`403001`/`429`) instead of charging; MyDubb shows "quota or rate limit reached".
+   If the portal offers only paid tiers, stop and check with the team.
+6. **Review + create** → **Create** → **Go to resource**.
+7. Left menu → **Resource Management → Keys and Endpoint**. Copy **KEY 1** and note
+   **Location/Region**. Do not paste the key in chat, issues, pull requests or logs.
+
+### 2. Live smoke test from your computer
+
+Put the key in `backend/.env` (git-ignored; edit it in your editor):
+
+```
+AZURE_TRANSLATOR_KEY=<KEY 1>
+AZURE_TRANSLATOR_REGION=<Location/Region, omit for Global>
+```
+
+```bash
+cd backend
+uv run python -m scripts.azure_translator_smoke
+```
+
+It sends one short synthetic transcript (about 250 characters), prints the Vietnamese result
+and checks that `neural network`, `gradient descent`, `loss function`, `Spring Boot`, `API`,
+`JSON`, `pull request`, `CI/CD` and `Dependency Injection` stayed exactly as written. Exit code
+0 means the live service, credentials, no-translate markup and parsing work. Unit tests with
+fake HTTP do not replace this check. To see the request in the app too, start it with
+`TRANSLATION_PROVIDER=azure` (README, "Azure translation + mock audio") and run a job; the
+backend log line `Azure Translator request ok: ... metered_chars=N` shows how many characters
+Microsoft charged, which tells you whether the no-translate markup counts toward usage.
+
+### 3. Enable on Render (later, after the pull request is merged and the smoke test passed)
+
+Render → service **mydubb** → **Environment** → add `TRANSLATION_PROVIDER=azure`,
+`AZURE_TRANSLATOR_KEY` (mark as secret) and, only for a regional resource,
+`AZURE_TRANSLATOR_REGION`; keep `PROVIDER_MODE=mock` and
+`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` (speech and audio are still mock). Save; Render
+redeploys. The site banner then reads "Beta: real translation, mock audio" and the form
+shows that the transcript is sent to Azure. `render.yaml` is intentionally unchanged: the key
+must be entered in the dashboard, never committed.
+
+To switch back: remove `TRANSLATION_PROVIDER` (or set it to `mock`) and save. If the key is
+missing or invalid the service refuses to start (the log names the variable, not its value).
+
+### Expected behavior and limits
+
+- Jobs fail with a clear message on bad credentials, quota/rate limits, timeouts, network
+  problems, service errors or an unexpected answer. Nothing is retried automatically and the
+  mock is never used as a fallback; the user submits again.
+- Only terms in the glossary are protected; see
+  [ARCHITECTURE.md](ARCHITECTURE.md#azure-translator-and-technical-terms-milestone-3a).
+- The key is rotated in the Azure portal (Keys and Endpoint → Regenerate) and updated in
+  Render; a regenerated key invalidates the old one immediately.
+
 ## Operations
 
 ### Deploying

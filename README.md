@@ -5,10 +5,13 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 2B done**: the online Private Beta runs at https://mydubb.com with **mock
-providers** (on top of Milestones 1 and 2A: application foundation, mock end-to-end workflow,
-GitHub repository and CI). Next: Milestone 3 (Azure Translator, Azure Speech, FFmpeg). No Azure service is
-called, and no exact-duration dubbing is implemented yet. See
+**Status: Milestone 2B done, Milestone 3A in review**: the online Private Beta runs at
+https://mydubb.com with **mock providers** (on top of Milestones 1 and 2A: application
+foundation, mock end-to-end workflow, GitHub repository and CI). Milestone 3A adds real
+English-to-Vietnamese translation with Azure Translator and a glossary that keeps technical
+terms in English; it is off unless `TRANSLATION_PROVIDER=azure`, and production still runs
+all-mock until the Product Owner enables it. Azure Speech and FFmpeg (Milestone 3B/3C) are not
+implemented, so the audio is always a mock fixture and no exact-duration dubbing exists yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
 branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
@@ -81,6 +84,19 @@ variable with placeholders and comments. Required: `APP_ENV`, `DATABASE_URL` (Po
 `ACCESS_CODE`, `PROVIDER_MODE`. Invalid or unsafe combinations stop the app at startup, e.g.
 a non-PostgreSQL URL, `PROVIDER_MODE=azure` (not implemented yet), or mock providers /
 `COOKIE_SECURE=false` with `APP_ENV=production`.
+
+### Azure translation + mock audio
+
+Set `PROVIDER_MODE=mock` (speech and audio stay mock), `TRANSLATION_PROVIDER=azure` and
+`AZURE_TRANSLATOR_KEY` (plus `AZURE_TRANSLATOR_REGION` for a regional resource) in
+`backend/.env`, which is git-ignored. Startup fails if the key is missing; there is never a
+silent fallback to the mock translator. The UI then labels translation as real and
+speech/audio as mock, and tells users that their transcript text is sent to Azure. Resource
+setup, the live smoke test (`uv run python -m scripts.azure_translator_smoke`) and enabling it on
+Render are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#azure-translator-milestone-3a).
+Technical terms listed in
+[backend/app/translation/data/glossary.txt](backend/app/translation/data/glossary.txt) stay in
+English; add a term by adding a line to that file in a pull request.
 
 ## Tests and checks
 

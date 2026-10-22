@@ -7,6 +7,7 @@ import { App } from "./App";
 const META = {
   provider_mode: "mock",
   mock_mode: true,
+  providers: { translation: "mock", speech: "mock", audio: "mock" },
   voices: [{ id: "HoaiMy", provider_voice: "vi-VN-HoaiMyNeural", description: "Female" }],
   timestamp_format: "HH:MM:SS",
   result_ttl_seconds: 3600,

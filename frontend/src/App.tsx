@@ -5,6 +5,8 @@ import type { AppMeta, Job } from "./api/types";
 import { AccessGate } from "./features/access/AccessGate";
 import { DubbingForm } from "./features/dubbing/DubbingForm";
 import { JobPanel } from "./features/jobs/JobPanel";
+import { ProviderBanner } from "./features/providers/ProviderBanner";
+import { sendsTranscriptToAzure } from "./lib/providers";
 
 type AuthState = "checking" | "anonymous" | "authenticated";
 
@@ -104,13 +106,7 @@ export function App() {
         </p>
       )}
 
-      {meta?.mock_mode && (
-        <div className="mock-banner" role="status">
-          <strong>Development mock mode.</strong> No Azure services are called. Translations
-          are illustrative placeholders and the audio is a fixed sample, not generated from your
-          transcript.
-        </div>
-      )}
+      {meta && <ProviderBanner providers={meta.providers} />}
 
       <main className="main">
         {loadError && (
@@ -125,6 +121,7 @@ export function App() {
           <>
             <DubbingForm
               voices={meta.voices}
+              sendsToAzure={sendsTranscriptToAzure(meta.providers)}
               onJobCreated={handleJobCreated}
               onSessionExpired={handleSessionExpired}
             />

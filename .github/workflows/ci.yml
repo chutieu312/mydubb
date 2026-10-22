@@ -136,11 +136,30 @@ jobs:
         env:
           BASE_URL: http://127.0.0.1:8081
         run: sh docker/production-config-check.sh
+      # Azure translation + mock speech/audio with a fake key. Azure is never called (no job
+      # is created); this proves the image has the glossary and HTTP client and labels each
+      # component. Real Azure is only exercised by the manual live smoke test.
+      - name: Start container with Azure translation configuration
+        run: |
+          docker run -d --name mydubb-azure --network host             -e PORT=8082             -e APP_ENV=development             -e PROVIDER_MODE=mock             -e TRANSLATION_PROVIDER=azure             -e AZURE_TRANSLATOR_KEY=ci-only-fake-key             -e COOKIE_SECURE=false             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE             mydubb:ci
+      - name: Azure translation configuration check
+        env:
+          BASE_URL: http://127.0.0.1:8082
+        run: sh docker/azure-mode-check.sh
+      - name: Azure translation without a key refuses to start
+        run: |
+          set +e
+          out=$(docker run --rm --network host -e PORT=8083 -e APP_ENV=development             -e PROVIDER_MODE=mock -e TRANSLATION_PROVIDER=azure -e COOKIE_SECURE=false             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE mydubb:ci 2>&1)
+          status=$?
+          echo "$out" | tail -5
+          [ "$status" -ne 0 ] || { echo "container started without a key" >&2; exit 1; }
+          echo "$out" | grep -q AZURE_TRANSLATOR_KEY
       - name: Container logs
         if: always()
         run: |
           docker logs mydubb || true
           docker logs mydubb-prod || true
+          docker logs mydubb-azure || true
 
   e2e:
     name: Browser E2E (Playwright, mock providers)

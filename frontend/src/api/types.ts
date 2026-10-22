@@ -16,7 +16,10 @@ export interface VoiceOption {
 
 export interface AppMeta {
   provider_mode: string;
+  // True while any pipeline component (speech, audio processing) is still a mock.
   mock_mode: boolean;
+  // Implementation behind each pipeline stage: "mock" or "azure".
+  providers: { translation: string; speech: string; audio: string };
   voices: VoiceOption[];
   timestamp_format: string;
   result_ttl_seconds: number;
@@ -52,7 +55,7 @@ export interface Job {
 
 export interface JobResult {
   job_id: string;
-  translation: { text: string; is_illustrative: boolean };
+  translation: { text: string; is_illustrative: boolean; provider: string };
   audio: {
     url: string;
     download_url: string;

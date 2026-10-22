@@ -29,6 +29,10 @@ FIXTURE_NOTICE = (
     "and does NOT match the target duration."
 )
 ILLUSTRATIVE_NOTICE = "The Vietnamese text is illustrative mock content, not a real translation."
+GLOSSARY_NOTICE = (
+    "Translated by Azure Translator. Technical terms from the MyDubb glossary are kept in "
+    "English; terms that are not in the glossary may be translated."
+)
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=JobResponse)
@@ -129,13 +133,17 @@ def get_result(
     notices = []
     if stored.translation_is_illustrative:
         notices.append(ILLUSTRATIVE_NOTICE)
+    else:
+        notices.append(GLOSSARY_NOTICE)
     if stored.audio_is_fixture:
         notices.append(FIXTURE_NOTICE)
     audio_url = f"/api/jobs/{job.id}/result/audio"
     return JobResultResponse(
         job_id=job.id,
         translation=TranslationOut(
-            text=stored.translation_text, is_illustrative=stored.translation_is_illustrative
+            text=stored.translation_text,
+            is_illustrative=stored.translation_is_illustrative,
+            provider=job.translation_provider,
         ),
         audio=AudioOut(
             url=audio_url,

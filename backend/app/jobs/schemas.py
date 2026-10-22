@@ -81,6 +81,7 @@ class JobResponse(BaseModel):
 class TranslationOut(BaseModel):
     text: str
     is_illustrative: bool
+    provider: str
 
 
 class AudioOut(BaseModel):

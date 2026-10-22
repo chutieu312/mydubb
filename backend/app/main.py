@@ -145,9 +145,11 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     logging.basicConfig(level=settings.log_level.upper())
 
     if settings.app_env is AppEnv.PRODUCTION and settings.is_mock_mode:
+        mocked = [stage for stage, impl in settings.component_providers.items() if impl == "mock"]
         logger.warning(
-            "Running in production with MOCK providers (ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true): "
-            "no real translation or speech is produced"
+            "Running in production with MOCK providers for %s "
+            "(ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true)",
+            ", ".join(mocked),
         )
 
     @contextlib.asynccontextmanager
