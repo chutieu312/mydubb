@@ -5,12 +5,11 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 2B done, Milestone 3A in review**: the online Private Beta runs at
-https://mydubb.com with **mock providers** (on top of Milestones 1 and 2A: application
-foundation, mock end-to-end workflow, GitHub repository and CI). Milestone 3A adds real
-English-to-Vietnamese translation with Azure Translator and a glossary that keeps technical
-terms in English; it is off unless `TRANSLATION_PROVIDER=azure`, and production still runs
-all-mock until the Product Owner enables it. Azure Speech and FFmpeg (Milestone 3B/3C) are not
+**Status: Milestone 3A done**: the online Private Beta runs at https://mydubb.com with real
+English-to-Vietnamese translation by Azure Translator and a glossary that keeps technical
+terms in English (`TRANSLATION_PROVIDER=azure`; off by default, so local and CI runs stay
+all-mock). Speech and audio processing are still mock (on top of Milestones 1, 2A and 2B:
+application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon). Azure Speech and FFmpeg (Milestone 3B/3C) are not
 implemented, so the audio is always a mock fixture and no exact-duration dubbing exists yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
