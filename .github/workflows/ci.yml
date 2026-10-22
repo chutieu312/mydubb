@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: CI only reads the repository. No deployment, no secrets.
+# Actions are pinned to full commit SHAs verified against the upstream release tags.
+# Triggered by pull_request (never pull_request_target), so fork code runs without secrets.
+permissions:
+  contents: read
+
+# Superseded PR runs are cancelled; every commit pushed to main keeps a complete run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  frontend:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  backend:
+    name: Backend (lint, migrations, tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: mydubb
+          POSTGRES_PASSWORD: mydubb_ci # throwaway CI-only database
+          POSTGRES_DB: mydubb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mydubb -d mydubb_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: "0.11.30"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies (locked)
+        run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format check
+        run: uv run ruff format --check .
+      - name: Migrations on an empty database (upgrade, downgrade, upgrade)
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: Tests (PostgreSQL integration)
+        run: uv run pytest -v
+
+  docker:
+    name: Docker image build and container startup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: mydubb
+          POSTGRES_PASSWORD: mydubb_ci # throwaway CI-only database
+          POSTGRES_DB: mydubb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mydubb -d mydubb"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # Non-secret value used only inside this ephemeral CI container.
+      ACCESS_CODE: ci-only-access-code
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t mydubb:ci .
+      - name: Start container
+        run: |
+          docker run -d --name mydubb --network host \
+            -e APP_ENV=development \
+            -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb \
+            -e ACCESS_CODE \
+            -e PROVIDER_MODE=mock \
+            -e COOKIE_SECURE=false \
+            mydubb:ci
+      - name: Smoke test (health, readiness, frontend, mock job)
+        run: sh docker/smoke-test.sh
+      - name: Container is still running
+        run: test "$(docker inspect -f '{{.State.Running}}' mydubb)" = "true"
+      - name: Container logs
+        if: always()
+        run: docker logs mydubb || true
+
+  e2e:
+    name: Browser E2E (Playwright, mock providers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      # Non-secret value used only by the throwaway E2E stack.
+      E2E_ACCESS_CODE: ci-only-e2e-access-code
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E suite against an isolated Docker stack
+        run: bash run-e2e.sh
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          # Mock data and the CI-only E2E access code only; kept briefly.
+          retention-days: 5
+          if-no-files-found: ignore
+
+  # Single required status check for branch protection. Always runs; succeeds only if
+  # every mandatory job succeeded (skipped or cancelled jobs count as failure).
+  ci-success:
+    name: CI success
+    if: always()
+    needs: [frontend, backend, docker, e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify mandatory checks
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'length == 4 and (to_entries | all(.value.result == "success"))' > /dev/null

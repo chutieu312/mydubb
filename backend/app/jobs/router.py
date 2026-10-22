@@ -1,0 +1,167 @@
+import uuid
+
+from fastapi import APIRouter, Depends, Response, status
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+from app.access.models import AccessSession
+from app.dependencies import get_db, get_services, require_csrf, require_session
+from app.errors import ApiError
+from app.jobs import service
+from app.jobs.executor import ExecutorAtCapacity
+from app.jobs.models import Job, JobStatus
+from app.jobs.pipeline import JobInput
+from app.jobs.schemas import (
+    AudioOut,
+    CreateJobRequest,
+    JobResponse,
+    JobResultResponse,
+    TranslationOut,
+)
+from app.services import AppServices
+from app.storage.result_store import StoredResult
+from app.transcript.timestamps import parse_timestamp
+
+router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+FIXTURE_NOTICE = (
+    "The audio is a fixed development fixture. It was NOT generated from your transcript "
+    "and does NOT match the target duration."
+)
+ILLUSTRATIVE_NOTICE = "The Vietnamese text is illustrative mock content, not a real translation."
+
+
+@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=JobResponse)
+def create_job(
+    body: CreateJobRequest,
+    response: Response,
+    session: AccessSession = Depends(require_csrf),
+    db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
+) -> JobResponse:
+    try:
+        slot = services.executor.reserve()
+    except ExecutorAtCapacity:
+        raise ApiError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "server_at_capacity",
+            "The server is already processing the maximum number of jobs it can handle. "
+            "Please try again when a running job finishes.",
+            headers={"Retry-After": "30"},
+        ) from None
+
+    try:
+        job = service.create_job(
+            db,
+            session_id=session.id,
+            voice=body.voice.value,
+            first_sentence_start_seconds=parse_timestamp(body.first_sentence_start),
+            last_sentence_start_seconds=parse_timestamp(body.last_sentence_start),
+            transcript_char_count=len(body.transcript),
+            **services.pipeline.provider_names(),
+        )
+        # Commit before starting so the worker always sees the queued row.
+        db.commit()
+    except Exception:
+        slot.cancel()
+        raise
+
+    job_input = JobInput(
+        job_id=job.id,
+        transcript=body.transcript,
+        voice=body.voice,
+        target_duration_seconds=job.target_duration_seconds,
+    )
+    services.pipeline.start(slot, job_input)
+    response.headers["Location"] = f"/api/jobs/{job.id}"
+    return JobResponse.from_job(job)
+
+
+def _owned_job_or_404(db: Session, job_id: uuid.UUID, session: AccessSession) -> Job:
+    job = service.get_owned_job(db, job_id, session.id)
+    if job is None:
+        raise ApiError(status.HTTP_404_NOT_FOUND, "job_not_found", "Job not found.")
+    return job
+
+
+def _available_result(job: Job, services: AppServices) -> StoredResult:
+    if job.status == JobStatus.FAILED:
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "job_failed",
+            job.error_message or "The job failed.",
+            extra={"job_error_code": job.error_code},
+        )
+    if job.status != JobStatus.COMPLETED:
+        raise ApiError(
+            status.HTTP_409_CONFLICT, "result_not_ready", "The job has not completed yet."
+        )
+    stored = services.result_store.get(job.id)
+    if stored is None:
+        raise ApiError(
+            status.HTTP_410_GONE,
+            "result_expired",
+            "The temporary result has expired or was removed from the server. "
+            "Results are not stored permanently; please generate the dubbing again.",
+        )
+    return stored
+
+
+@router.get("/{job_id}", response_model=JobResponse)
+def get_job(
+    job_id: uuid.UUID,
+    session: AccessSession = Depends(require_session),
+    db: Session = Depends(get_db),
+) -> JobResponse:
+    return JobResponse.from_job(_owned_job_or_404(db, job_id, session))
+
+
+@router.get("/{job_id}/result", response_model=JobResultResponse)
+def get_result(
+    job_id: uuid.UUID,
+    session: AccessSession = Depends(require_session),
+    db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
+) -> JobResultResponse:
+    job = _owned_job_or_404(db, job_id, session)
+    stored = _available_result(job, services)
+    notices = []
+    if stored.translation_is_illustrative:
+        notices.append(ILLUSTRATIVE_NOTICE)
+    if stored.audio_is_fixture:
+        notices.append(FIXTURE_NOTICE)
+    audio_url = f"/api/jobs/{job.id}/result/audio"
+    return JobResultResponse(
+        job_id=job.id,
+        translation=TranslationOut(
+            text=stored.translation_text, is_illustrative=stored.translation_is_illustrative
+        ),
+        audio=AudioOut(
+            url=audio_url,
+            download_url=f"{audio_url}?download=1",
+            content_type="audio/mpeg",
+            is_fixture=stored.audio_is_fixture,
+            duration_adjusted=stored.duration_adjusted,
+        ),
+        expires_at=stored.expires_at,
+        notices=notices,
+    )
+
+
+@router.get("/{job_id}/result/audio")
+def get_result_audio(
+    job_id: uuid.UUID,
+    download: bool = False,
+    session: AccessSession = Depends(require_session),
+    db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
+) -> FileResponse:
+    job = _owned_job_or_404(db, job_id, session)
+    stored = _available_result(job, services)
+    return FileResponse(
+        stored.audio_path,
+        media_type="audio/mpeg",
+        filename=f"mydubb-{job.id}.mp3",
+        content_disposition_type="attachment" if download else "inline",
+        headers={"Cache-Control": "private, no-store"},
+    )

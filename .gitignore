@@ -1,0 +1,32 @@
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Playwright E2E output
+e2e/playwright-report/
+e2e/test-results/
+
+# Logs and local runtime data (results are stored in the system temp dir by default)
+*.log
+mydubb-results/

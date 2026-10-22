@@ -1,0 +1,42 @@
+# Local development only. Credentials here are throwaway local defaults, not secrets.
+#
+#   docker compose up -d db        # PostgreSQL only (run backend/frontend on the host)
+#   docker compose up --build      # PostgreSQL + the production-style app image
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mydubb
+      POSTGRES_PASSWORD: mydubb_local
+      POSTGRES_DB: mydubb
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mydubb -d mydubb"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql://mydubb:mydubb_local@db:5432/mydubb
+      # Set ACCESS_CODE in your shell or a root .env file (see .env.example).
+      # The app refuses to start if it is missing or shorter than 8 characters.
+      ACCESS_CODE: ${ACCESS_CODE:-}
+      PROVIDER_MODE: mock
+      MOCK_STAGE_DELAY_SECONDS: "1.5"
+      # Plain HTTP on localhost; production must keep COOKIE_SECURE=true.
+      COOKIE_SECURE: "false"
+    ports:
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  pgdata:

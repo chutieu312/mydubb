@@ -1,0 +1,52 @@
+[project]
+name = "mydubb-backend"
+version = "0.1.0"
+description = "MyDubb backend: English transcript to Vietnamese speech (private beta)."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi>=0.159,<0.160",
+    "uvicorn[standard]>=0.54,<0.55",
+    "sqlalchemy>=2.1.6,<2.2",
+    "alembic>=1.20,<1.21",
+    "psycopg[binary]>=3.3.6,<3.4",
+    "pydantic-settings>=2.16,<2.17",
+    "python-dotenv>=1.2,<2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",
+    "httpx>=0.28,<0.29",
+    "ruff==0.17.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = [
+    "S101",  # assert is fine in tests
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+]
+
+[tool.ruff.lint.isort]
+# The local alembic/ migrations directory must not make the alembic package first-party.
+known-third-party = ["alembic"]
+known-first-party = ["app", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    # Starlette 1.x prefers `httpx2` for TestClient; `httpx` remains supported.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

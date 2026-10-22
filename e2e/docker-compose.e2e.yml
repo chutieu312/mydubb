@@ -1,0 +1,52 @@
+# Isolated stack for the browser E2E suite (see e2e/README.md).
+#
+# Its own Compose project, its own PostgreSQL on tmpfs (no volume, no published port),
+# and mock providers only. It never touches the development database. `run-e2e.sh`
+# removes the whole stack, including its data, when the run ends.
+name: mydubb-e2e
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mydubb_e2e
+      POSTGRES_PASSWORD: e2e_only_not_secret
+      POSTGRES_DB: mydubb_e2e
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mydubb_e2e -d mydubb_e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql://mydubb_e2e:e2e_only_not_secret@db:5432/mydubb_e2e
+      # Set by run-e2e.sh; the app refuses to start if it is empty.
+      ACCESS_CODE: ${E2E_ACCESS_CODE:-}
+      PROVIDER_MODE: mock
+      # Long enough for the UI to observe intermediate stages.
+      MOCK_STAGE_DELAY_SECONDS: "1.0"
+      COOKIE_SECURE: "false"
+      # Each test signs in separately; one test deliberately uses a wrong code.
+      ACCESS_MAX_FAILURES_PER_CLIENT: "20"
+    ports:
+      - "127.0.0.1:${E2E_PORT:-8001}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3)"
+      interval: 2s
+      timeout: 4s
+      retries: 45
+      start_period: 5s

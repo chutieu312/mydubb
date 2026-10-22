@@ -1,0 +1,16 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.pyc
+frontend/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+docs
+backend/tests
+e2e
+*.md

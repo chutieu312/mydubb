@@ -1,0 +1,172 @@
+"""FastAPI application factory.
+
+In production one process serves both the API (/api/*) and the React build (same origin).
+"""
+
+import asyncio
+import contextlib
+import logging
+from collections.abc import AsyncIterator
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from app.access.router import router as access_router
+from app.config import Settings
+from app.errors import error_response, install_error_handlers
+from app.jobs.router import router as jobs_router
+from app.maintenance import cleanup_loop, interrupt_unfinished_jobs, recover_after_restart
+from app.services import AppServices, build_services
+from app.system.router import router as system_router
+
+logger = logging.getLogger(__name__)
+
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+_SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"same-origin"),
+    (
+        b"content-security-policy",
+        b"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        b"media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        b"form-action 'self'; frame-ancestors 'none'",
+    ),
+]
+
+
+class RequestGuardMiddleware:
+    """Security headers, same-origin enforcement for state-changing API calls, and a
+    request-body size guard. Implemented as pure ASGI to avoid buffering bodies."""
+
+    def __init__(self, app: ASGIApp, *, trusted_origins: list[str], max_body_bytes: int):
+        self.app = app
+        self.trusted_origins = {o.rstrip("/") for o in trusted_origins}
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path: str = scope["path"]
+        is_api = path.startswith("/api/") or path == "/api"
+        is_docs = path == "/api/docs"
+        headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                # Swagger UI (development only) relies on inline scripts and a CDN.
+                extra = [
+                    header
+                    for header in _SECURITY_HEADERS
+                    if not (is_docs and header[0] == b"content-security-policy")
+                ]
+                existing = {k.lower() for k, _ in message.get("headers", [])}
+                if is_api and b"cache-control" not in existing:
+                    extra.append((b"cache-control", b"no-store"))
+                message["headers"] = list(message.get("headers", [])) + extra
+            await send(message)
+
+        if is_api and scope["method"] in _UNSAFE_METHODS:
+            rejection = self._check_unsafe_request(headers)
+            if rejection is not None:
+                await rejection(scope, receive, send_with_headers)
+                return
+
+        await self.app(scope, receive, send_with_headers)
+
+    def _check_unsafe_request(self, headers: dict[str, str]):
+        origin = headers.get("origin")
+        if origin is not None and not self._origin_allowed(origin, headers.get("host", "")):
+            return error_response(403, "origin_rejected", "Cross-origin request rejected.")
+        length = headers.get("content-length")
+        if length is None:
+            if "chunked" in headers.get("transfer-encoding", "").lower():
+                return error_response(
+                    411, "length_required", "Requests must include a Content-Length header."
+                )
+        elif not length.isdigit() or int(length) > self.max_body_bytes:
+            limit_mb = self.max_body_bytes / (1024 * 1024)
+            return error_response(
+                413,
+                "request_too_large",
+                f"The request body exceeds this server's {limit_mb:g} MB processing limit.",
+            )
+        return None
+
+    def _origin_allowed(self, origin: str, host: str) -> bool:
+        if origin.rstrip("/") in self.trusted_origins:
+            return True
+        return bool(host) and urlsplit(origin).netloc == host
+
+
+def _install_frontend(app: FastAPI, dist_dir: Path) -> None:
+    dist = dist_dir.resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        logger.warning("Frontend build not found at %s; serving API only", dist)
+        return
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found.")
+        candidate = (dist / path).resolve()
+        if path and candidate.is_file() and candidate.is_relative_to(dist):
+            # Vite emits content-hashed file names under /assets.
+            cache = (
+                "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
+            )
+            return FileResponse(candidate, headers={"Cache-Control": cache})
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
+
+
+def create_app(settings: Settings | None = None, services: AppServices | None = None) -> FastAPI:
+    if services is None:
+        services = build_services(settings or Settings())  # type: ignore[call-arg]
+    settings = services.settings
+    logging.basicConfig(level=settings.log_level.upper())
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await asyncio.to_thread(recover_after_restart, services)
+        cleanup_task = asyncio.create_task(cleanup_loop(services))
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cleanup_task
+            services.executor.shutdown()
+            try:
+                await asyncio.to_thread(interrupt_unfinished_jobs, services)
+            except Exception:
+                logger.exception("Could not mark unfinished jobs at shutdown")
+            services.engine.dispose()
+
+    app = FastAPI(
+        title="MyDubb API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/api/docs" if settings.app_env != "production" else None,
+        redoc_url=None,
+        openapi_url="/api/openapi.json" if settings.app_env != "production" else None,
+    )
+    app.state.services = services
+    app.add_middleware(
+        RequestGuardMiddleware,
+        trusted_origins=settings.trusted_origins,
+        max_body_bytes=settings.max_request_body_bytes,
+    )
+    install_error_handlers(app)
+    app.include_router(system_router)
+    app.include_router(access_router)
+    app.include_router(jobs_router)
+    if settings.frontend_dist_dir is not None:
+        _install_frontend(app, settings.frontend_dist_dir)
+    return app
