@@ -112,7 +112,7 @@ redirects it to `mydubb.com`.
 3. Smoke test from Git Bash in the repository root (the Access Code is typed without echo and
    never stored):
    ```bash
-   read -rs ACCESS_CODE && export ACCESS_CODE      # paste the code, press Enter
+   read -rs ACCESS_CODE && export ACCESS_CODE      # paste with Shift+Insert, press Enter
    echo ${#ACCESS_CODE}                             # prints only the length (Render: ~44)
    BASE_URL=https://mydubb.com SMOKE_SKIP_WRONG_CODE_CHECK=1 PYTHON=python sh docker/smoke-test.sh
    unset ACCESS_CODE
@@ -121,7 +121,9 @@ redirects it to `mydubb.com`.
    `SMOKE_SKIP_WRONG_CODE_CHECK=1` avoids spending one of the 5 failed attempts per client per
    15 minutes allowed by the brute-force protection. A `login failed: HTTP 429` means that
    allowance is used up (all users behind the same IP share it): wait 15 minutes. `HTTP 401`
-   means the pasted code is wrong or incomplete.
+   means the pasted code is wrong or incomplete. In Git Bash, paste with **Shift+Insert** or
+   right-click → Paste: **Ctrl+V inserts a control character** instead of pasting. The script
+   refuses codes containing whitespace or control characters without sending them.
 4. Security headers:
    ```bash
    curl -s -D - -o /dev/null https://mydubb.com/api/health | grep -iE "strict-transport|content-security|x-frame"
