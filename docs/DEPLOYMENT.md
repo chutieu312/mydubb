@@ -373,7 +373,9 @@ longer needed but harmless). Save; Render redeploys the service. Then `/api/meta
 `ffmpeg`/`ffprobe`, the `atempo` filter or the `libmp3lame` encoder is missing, never falling
 back to the pass-through.
 
-Cleanup after acceptance (done in a separate change): `render.yaml` declares
+Cleanup after acceptance (PR #15, merge SHA `5d4d1c9118cb5a2355289d4c3ccd0255e7af4517`, deployed
+2026-10-23; Deployments `7270753572` and `7270784065` success, `/api/meta` unchanged afterwards):
+`render.yaml` declares
 `PROVIDER_MODE=azure` and no longer `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION`, so the service refuses
 to start with any mock component. Render's Blueprint sync applies the changed value but does **not**
 delete a variable that was removed from the file: delete `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION` in
