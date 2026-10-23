@@ -532,15 +532,27 @@ padding. At 24 kHz an MP3 frame is 576 samples, and when a target is 1-46 sample
 number of frames the encoder emits one frame more than the audio fills; the padding then exceeds
 the cap and the header (and every gapless decoder) plays up to 46 samples (1.9 ms) too many.
 Whole-second targets are always 0, 192 or 384 samples over, so this never showed before speeds
-existed; about 8% of fractional targets hit it (measured on FFmpeg 7.1.5, e.g. a 68,571-sample target
-decoded to 68,591). `set_exact_padding` (`audio/mp3_header.py`) fixes exactly that case after
-encoding: it rewrites the 12-bit padding field to `frames x 576 - delay - target` and recomputes the
-LAME tag CRC (CRC-16, reflected 0xA001, over the first 190 bytes with the CRC bytes zeroed, checked
-against files FFmpeg wrote). It refuses (the job fails with `audio_verification_failed`) when the
-stored CRC does not match what it computes, the true padding does not fit, or anything else is
-unexpected; audio frames are never touched, and the decoded and header lengths are then verified as
-before. The amount is reported as `mp3_padding_adjusted_samples`. The limit for players that ignore
-the header is unchanged (up to about 50-70 ms longer).
+existed; about 8% of fractional targets hit it (measured on FFmpeg 6.1 and 7.1.5, e.g. a
+68,571-sample target decoded to 68,591). The fitter repairs that case and only that case:
+
+1. **Signature** (`capped_padding_excess`, `audio/mp3_header.py`), all of: 24 kHz, 576 samples per
+   frame, encoder delay 576, stored padding exactly 1105, and the header over-claiming 1-46
+   samples relative to the **measured** PCM sample count handed to the encoder (never a wished-for
+   target). Any other difference, however small (for example padding 960 and one sample off), is
+   not repaired: the file is left unchanged and the normal verification judges it (one sample of
+   rounding at most, as before), so it fails.
+2. **Silence**: the MP3 is decoded first, and the over-claimed samples must be silent by the same
+   rule that allows trimming in `conform_wav` (each at most 32/32768). The header cannot tell padding
+   from audio, so a repair can never stop audible audio from playing; a wrong encode whose header
+   happens to look like the defect fails instead. Azure speech ends with about 300 ms of silence,
+   so real jobs pass; audio that is loud up to its very last sample fails in this case.
+3. **Rewrite**: `set_exact_padding` sets the 12-bit padding to `frames x 576 - delay - samples` and
+   recomputes the LAME tag CRC (CRC-16, reflected 0xA001, over the first 190 bytes with the CRC
+   bytes zeroed, checked against files FFmpeg wrote); it refuses a stored CRC it cannot reproduce.
+   Audio frames are never touched. Then the decoded and header lengths are verified as before.
+
+The amount is reported as `mp3_padding_adjusted_samples`. The limit for players that ignore the
+header is unchanged (up to about 50-70 ms longer).
 
 **Limits that remain.** An MP3 or a player that ignores the gapless header plays up to about 50-70 ms
 more than the target, as before. Extreme speeds relative to the natural speech (for example 0.5x of

@@ -20,10 +20,11 @@ the target, not a second tempo step: the source is fitted directly to the final 
    samples a decoder produces and the playable length declared by the MP3's own gapless
    header (frames - encoder delay - padding, read without FFmpeg) must both equal the target
    (one sample of rounding at most). FFmpeg's muxer caps the padding it writes, which would
-   leave the header up to 46 samples too long for some targets; `set_exact_padding` corrects
-   exactly that case first (and reports it), see audio/mp3_header.py. ffprobe's container
-   duration is recorded but not used to decide: FFmpeg versions disagree on whether it
-   includes the encoder delay and padding.
+   leave the header up to 46 samples too long for some targets; that exact signature (and no
+   other mismatch) is corrected first, only when the over-claimed samples decode as silence,
+   and reported, see audio/mp3_header.py. ffprobe's container duration is recorded but not
+   used to decide: FFmpeg versions disagree on whether it includes the encoder delay and
+   padding.
 """
 
 import logging
@@ -51,7 +52,12 @@ from app.audio.ffmpeg import (
     probe_mp3,
     tempo_filter_chain,
 )
-from app.audio.mp3_header import Mp3HeaderError, read_gapless_info, set_exact_padding
+from app.audio.mp3_header import (
+    Mp3HeaderError,
+    capped_padding_excess,
+    read_gapless_info,
+    set_exact_padding,
+)
 from app.audio.speed import DurationTarget
 from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info
 from app.processing_errors import ProcessingError
@@ -178,12 +184,13 @@ class FfmpegAudioProcessor:
         fitted = scratch / "fitted.wav"
         padded, trimmed = conform_wav(processed.path, processed.info, fitted, target_frames)
 
+        # The PCM handed to the encoder, measured: the header repair works from this count, never
+        # from the wished-for target.
+        encoded_frames = read_wav_info(fitted).frames
+        if encoded_frames != target_frames:
+            raise InvalidAudioError("conformed audio has the wrong length")
         encode_mp3(self._tools, fitted, output, target_frames / rate, cancel=self._cancel)
-        try:
-            padding_adjusted = set_exact_padding(output, target_frames)
-        except Mp3HeaderError:
-            logger.warning("Encoded MP3 header cannot be made to match the target")
-            raise _failure("audio_verification_failed") from None
+        padding_adjusted = self._repair_padding_cap(output, encoded_frames, rate, scratch)
         container_seconds = probe_mp3(self._tools, output, cancel=self._cancel)
         decoded_wav = scratch / "decoded.wav"
         decode_to_wav(self._tools, output, decoded_wav, target_frames / rate, cancel=self._cancel)
@@ -226,6 +233,43 @@ class FfmpegAudioProcessor:
             mp3_container_seconds=container_seconds,
             mp3_padding_adjusted_samples=padding_adjusted,
         )
+
+    def _repair_padding_cap(
+        self, output: Path, encoded_frames: int, rate: int, scratch: Path
+    ) -> int:
+        """Correct FFmpeg's capped MP3 end padding, and only that; returns the samples corrected.
+
+        Not the known signature (see mp3_header.FFMPEG_PADDING_CAP): nothing is changed and the
+        verification below judges the file as it is. The signature: the samples the header
+        over-claims are decoded first and must be silent (TRIMMABLE_PEAK, the rule for trimming
+        in conform_wav), so the repair can never stop audible audio from playing; then the header
+        is corrected.
+        """
+        try:
+            header = read_gapless_info(output)
+        except Mp3HeaderError:
+            logger.warning("Encoded MP3 has no readable gapless header")
+            raise _failure("audio_verification_failed") from None
+        excess = capped_padding_excess(header, encoded_frames)
+        if excess is None:
+            return 0
+        before = scratch / "before-repair.wav"
+        decode_to_wav(self._tools, output, before, encoded_frames / rate, cancel=self._cancel)
+        decoded = read_wav_info(before)
+        if decoded.frames != header.playable_samples or not tail_is_silent(before, decoded, excess):
+            logger.warning(
+                "MP3 padding cap not repaired: over-claimed samples=%d decoded_samples=%d "
+                "header_samples=%d (not silent or not what the header declares)",
+                excess,
+                decoded.frames,
+                header.playable_samples,
+            )
+            raise _failure("audio_verification_failed")
+        try:
+            return set_exact_padding(output, encoded_frames)
+        except Mp3HeaderError:
+            logger.warning("Encoded MP3 header cannot be repaired")
+            raise _failure("audio_verification_failed") from None
 
     def _tempo(
         self, lossless: Path, source: WavInfo, target_frames: int, scratch: Path

@@ -3,6 +3,7 @@
 from fractions import Fraction
 
 import pytest
+from pydantic import ValidationError
 
 from app.audio.speed import (
     DEFAULT_SPEED,
@@ -11,6 +12,7 @@ from app.audio.speed import (
     speed_from_api,
     speed_from_percent,
 )
+from app.jobs.schemas import CreateJobRequest
 
 RATE = 24000
 SEVEN = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -67,6 +69,31 @@ def test_the_seven_numbers_are_accepted(value):
 def test_everything_else_is_rejected(value):
     with pytest.raises(ValueError, match="Speed must be one of"):
         speed_from_api(value)
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400), 2**1024, 10**20 + 1, 2**53 + 1])
+def test_integers_too_large_for_a_float_are_rejected_not_overflowed(value):
+    # float(10**400) raises OverflowError; the lookup must not convert at all.
+    with pytest.raises(ValueError, match="Speed must be one of"):
+        speed_from_api(value)
+
+
+JOB_JSON = (
+    '{"transcript": "Hello there.", "first_sentence_start": "00:00:01",'
+    ' "last_sentence_start": "00:00:05", "speed": %s}'
+)
+
+
+@pytest.mark.parametrize("raw", ["1" + "0" * 400, "-" + "9" * 400, "1e400", "-1e400", "1.0000001"])
+def test_the_request_model_reports_a_validation_error_for_huge_numbers(raw):
+    with pytest.raises(ValidationError) as raised:
+        CreateJobRequest.model_validate_json(JOB_JSON % raw)
+    assert [error["loc"] for error in raised.value.errors()] == [("speed",)]
+
+
+@pytest.mark.parametrize("raw", ["1", "2", "1.0", "0.50", "1.75", "2.0"])
+def test_the_request_model_accepts_the_supported_numbers_in_any_json_spelling(raw):
+    assert CreateJobRequest.model_validate_json(JOB_JSON % raw).speed.number == float(raw)
 
 
 def test_a_stored_speed_that_is_not_supported_is_an_error_not_one_x():

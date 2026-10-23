@@ -47,6 +47,7 @@ DEFAULT_SPEED = AudioSpeed.X1
 # API values. All seven are exactly representable as binary floats, so a JSON number maps to
 # a speed without any tolerance: 1.2500001 is not 1.25.
 _BY_NUMBER = {speed.number: speed for speed in AudioSpeed}
+_INVALID = "Speed must be one of 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2."
 
 
 def speed_from_percent(percent: int) -> AudioSpeed:
@@ -63,11 +64,13 @@ def speed_from_api(value: object) -> AudioSpeed:
     if isinstance(value, AudioSpeed):
         return value
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError("Speed must be one of 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2.")
-    try:
-        return _BY_NUMBER[float(value)]
-    except KeyError:
-        raise ValueError("Speed must be one of 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2.") from None
+        raise ValueError(_INVALID)
+    # No conversion: an int is compared with the float keys exactly, so a huge JSON integer
+    # (10**400) is simply not found instead of overflowing float(); NaN equals nothing.
+    speed = _BY_NUMBER.get(value)
+    if speed is None:
+        raise ValueError(_INVALID)
+    return speed
 
 
 @dataclass(frozen=True)

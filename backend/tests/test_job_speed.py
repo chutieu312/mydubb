@@ -1,5 +1,6 @@
 """Audio speed through the API (mock providers): validation, persistence, old data."""
 
+import json
 import uuid
 
 import pytest
@@ -83,6 +84,22 @@ def test_baseline_twenty_seconds_gives_the_documented_outputs(client):
 def test_other_speeds_are_rejected(client, db_engine, speed):
     csrf = login(client)
     assert "speed" in field_errors(create_job(client, csrf, speed=speed))
+    with db_engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
+
+
+@pytest.mark.parametrize("raw", ["1" + "0" * 400, "-" + "9" * 400, "1e400"])
+def test_a_number_too_large_for_a_float_is_a_422_not_a_server_error(client, db_engine, raw):
+    """Sent as raw JSON: Python's json would turn a 400-digit literal into a huge int."""
+    csrf = login(client)
+    body = json.dumps(VALID_JOB)[:-1] + f', "speed": {raw}}}'
+    response = client.post(
+        "/api/jobs",
+        content=body,
+        headers={"X-CSRF-Token": csrf, "Content-Type": "application/json"},
+    )
+    errors = field_errors(response)
+    assert list(errors) == ["speed"]
     with db_engine.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
 

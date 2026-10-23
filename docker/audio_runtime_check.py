@@ -24,11 +24,12 @@ RATE = 24000
 CASES = [(5.5, 4), (2.5, 6), (10.0, 2), (2.0, 10), (5.0, 5)]
 
 
-def write_tone(path: Path, seconds: float) -> None:
+def write_tone(path: Path, seconds: float, silence: float = 0.0) -> None:
+    """A 440 Hz tone, optionally followed by silence (Azure speech ends with ~300 ms of it)."""
     frames = b"".join(
         struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * n / RATE)))
         for n in range(round(seconds * RATE))
-    )
+    ) + bytes(2 * round(silence * RATE))
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
@@ -65,12 +66,13 @@ for natural, target in CASES:
             f"ffprobe_container={report.mp3_container_seconds:.6f}"
         )
 # Audio speed: fractional targets (baseline / speed), including one that hits FFmpeg's MP3 end
-# padding cap (68,571 samples is 27 over a whole number of frames).
-for natural, baseline, speed in [(5.5, 5, AudioSpeed.X1_75), (20.4, 20, AudioSpeed.X0_75)]:
+# padding cap (68,571 samples is 27 over a whole number of frames; repaired only because the
+# over-claimed samples decode as silence). (tone seconds, then 0.5 s of silence)
+for natural, baseline, speed in [(5.0, 5, AudioSpeed.X1_75), (19.9, 20, AudioSpeed.X0_75)]:
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
         wav = work / "speech.wav"
-        write_tone(wav, natural)
+        write_tone(wav, natural, silence=0.5)
         speech = SpeechAudio(path=work / "speech.mp3", is_fixture=False, lossless_path=wav)
         target = DurationTarget(baseline, speed)
         result = processor.fit_to_duration(speech, target, work)
@@ -86,6 +88,7 @@ for natural, baseline, speed in [(5.5, 5, AudioSpeed.X1_75), (20.4, 20, AudioSpe
         assert abs(header - expected) <= 1, (baseline, speed, header, expected)
         print(
             f"baseline {baseline} s at {speed.label}: target={expected} decoded={decoded} "
-            f"header={header} padding_adjusted={result.duration_report.mp3_padding_adjusted_samples}"
+            f"header={header} "
+            f"padding_adjusted={result.duration_report.mp3_padding_adjusted_samples}"
         )
 print("audio duration runtime OK: every MP3 has exactly the target number of samples")
