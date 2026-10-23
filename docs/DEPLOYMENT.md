@@ -1,9 +1,9 @@
 # Deployment: online mock Private Beta (Milestone 2B)
 
-Target: `https://mydubb.com` running the production Docker image on free tiers. Audio
-processing is **mock** (pass-through); translation is real (Azure Translator, Milestone 3A) and
-speech is real (Azure Speech, Milestone 3B), see "Current deployment", "Azure Translator" and
-"Azure Speech" below.
+Target: `https://mydubb.com` running the production Docker image on free tiers. Translation is
+real (Azure Translator, Milestone 3A), speech is real (Azure Speech, Milestone 3B) and audio
+processing is real (FFmpeg duration fitting, Milestone 3C), see "Current deployment", "Azure
+Translator", "Azure Speech" and "FFmpeg duration fitting" below.
 
 ```
 Browser ──HTTPS──► Render edge (TLS, mydubb.com) ──► Render Free web service "mydubb"
@@ -37,7 +37,7 @@ Set up on 2026-10-22 (Milestone 2B) and verified end to end.
 | Database | Neon project `mydubb`, Postgres 17, AWS US West 2 (Oregon), direct connection |
 | DNS (GoDaddy) | `A @ 216.24.57.1`, `CNAME www mydubb.onrender.com`; NS/SOA/`_domainconnect`/`_dmarc` unchanged |
 | TLS | Google Trust Services certificates for `mydubb.com` and `www.mydubb.com`, renewed by Render |
-| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: mock pass-through (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) until Milestone 3C is accepted and `AUDIO_PROCESSOR=ffmpeg` is set (see "FFmpeg duration fitting") |
+| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: **FFmpeg duration fitting** (`AUDIO_PROCESSOR=ffmpeg`, since 2026-10-23, see "FFmpeg duration fitting"); `PROVIDER_MODE=mock` and `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` from `render.yaml` are still set, though no component is a mock any more |
 | Client IP header | `cf-connecting-ip` confirmed present (no "configured but absent" warning in the logs) |
 
 Milestone 3A (enabled 2026-10-22): PR #9, merge SHA `5ade22201dd7c9d8b589a3d4d296cb94417be334`;
@@ -62,7 +62,18 @@ from outside: `/api/meta` reports `translation=azure, speech=azure, audio=mock` 
 `AndrewMultilingual`/`EmmaMultilingual`, readiness 200. The first attempt returned `401`
 (`speech_auth_failed`) because the key entered in Render was not the Speech resource's key; after
 re-entering the correct key a job completed and the Product Owner listened to the result and
-accepted it. The audio length is still not adjusted to the target (Milestone 3C).
+accepted it. The audio length was not yet adjusted to the target at that point (Milestone 3C).
+
+Milestone 3C (enabled 2026-10-23): PR #13, merge SHA `86f1f280b68a16f3f4908ecff5007ec56889b975`;
+CI on the merge commit passed
+([run](https://github.com/chutieu312/mydubb/actions/runs/39900587178)) and GitHub Deployment
+`7270247651` (success) is for that SHA; the Product Owner then added `AUDIO_PROCESSOR=ffmpeg` in
+the Render dashboard and Deployment `7270316120` (same SHA, success) followed. `render.yaml` is
+unchanged. Checked from outside afterwards: health and readiness 200, `/api/meta` reports
+`translation=azure, speech=azure, audio=ffmpeg`, `mock_mode=false`, `provider_mode=azure`. The
+Product Owner ran jobs on https://mydubb.com and reported that everything was OK (see
+`docs/context.md` for what was and was not itemized). The Render dashboard's Deploys page was not
+checked independently.
 
 Verification performed at the 2B deployment: health/readiness, security headers (HSTS, CSP, X-Frame-Options,
 nosniff, Referrer-Policy), API docs disabled, unauthenticated job creation and wrong Access
@@ -316,7 +327,7 @@ nothing about pronunciation quality.
 
 Render -> service **mydubb** -> **Environment** -> add `SPEECH_PROVIDER=azure`,
 `AZURE_SPEECH_KEY` (secret) and `AZURE_SPEECH_REGION`; keep `PROVIDER_MODE=mock` and
-`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` (audio processing is still a pass-through). The image
+`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` (at that time audio processing was still a pass-through). The image
 already contains FFmpeg. The banner then reads "Beta: real translation and speech, duration not
 adjusted" and the form says that text is sent to Azure Translator and Azure Speech. Remove
 `SPEECH_PROVIDER` to go back to the mock fixture. A missing key or region, or a missing FFmpeg,
@@ -338,9 +349,9 @@ unchanged.
 
 ## FFmpeg duration fitting (Milestone 3C)
 
-Implemented in a pull request; **not enabled in production** until the Product Owner has listened
-to the result and accepted it. No new Azure resource, key or cost is involved: FFmpeg is already
-in the image (3B) and runs on the instance.
+Enabled in production on 2026-10-23 after the Product Owner tested it on https://mydubb.com. No
+new Azure resource, key or cost is involved: FFmpeg is already in the image (3B) and runs on the
+instance.
 
 **Check locally first** (no credentials): `cd backend && uv run python -m scripts.duration_smoke`
 prints, for each case, the target, the natural source length, the processed PCM and the final MP3
