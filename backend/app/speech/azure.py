@@ -17,7 +17,8 @@ REST rather than the Speech SDK, checked against Microsoft Learn on 2026-10-22:
   The 64 KB SSML limit in the same table is for WebSocket and is not applied here.
 * Voices are `en-US-AndrewMultilingualNeural` / `en-US-EmmaMultilingualNeural`. One `<voice>`
   per request holds `<lang xml:lang="vi-VN">` spans for Vietnamese and `<lang xml:lang="en-US">`
-  spans for glossary terms (see `ssml.py`); the same speaker reads both.
+  spans for glossary terms and for English detected in the job's translation (see `ssml.py`
+  and `pronunciation/`); the same speaker reads both.
 * `riff-24khz-16bit-mono-pcm` is requested so chunks can be joined as samples and encoded once
   to MP3 (see `app/audio`); MP3/WAV files are never concatenated byte for byte.
 
@@ -41,11 +42,11 @@ from app.audio.ffmpeg import AudioToolError, AudioTools, encode_mp3, probe_mp3
 from app.audio.wav import InvalidAudioError, PcmFormat, concat_wavs, read_wav_info
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio
-from app.speech.chunker import SpeechTextTooLongError, split_for_speech
+from app.speech.chunker import SpeechTextTooLongError, speech_text, split_for_speech
 from app.speech.rate_limit import RateLimiterClosed, RequestRateLimiter
-from app.speech.ssml import build_ssml
+from app.speech.ssml import build_ssml_from_spans, chunk_language_spans
 from app.speech.voices import Voice
-from app.translation.glossary import Glossary
+from app.translation.glossary import Glossary, TermMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -136,21 +137,31 @@ class AzureSpeechProvider:
         self._max_chunk_chars = max_chunk_chars
         self._transport = transport
 
-    def synthesize(self, text: str, voice: Voice, work_dir: Path) -> SpeechAudio:
+    def synthesize(
+        self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
+    ) -> SpeechAudio:
+        terms = self._glossary if terms is None else terms
         try:
-            chunks = split_for_speech(text, self._glossary, self._max_chunk_chars)
+            chunks = split_for_speech(text, terms, self._max_chunk_chars)
         except SpeechTextTooLongError:
             raise _failure("speech_input_unsupported") from None
+        # Languages are decided on the whole text, so a span cut by a chunk keeps its language.
+        spans = chunk_language_spans(speech_text(text), chunks, terms)
         # Text with no letter or digit (e.g. only punctuation) has nothing to read aloud.
-        chunks = [chunk for chunk in chunks if any(char.isalnum() for char in chunk)]
-        if not chunks:
+        speakable = [
+            (chunk, chunk_spans)
+            for chunk, chunk_spans in zip(chunks, spans, strict=True)
+            if any(char.isalnum() for char in chunk)
+        ]
+        if not speakable:
             raise _failure("speech_no_speakable_text")
+        chunks = [chunk for chunk, _ in speakable]
 
         wav = work_dir / "speech.wav"
         mp3 = work_dir / "speech.mp3"
         scratch = Path(tempfile.mkdtemp(prefix="speech-", dir=work_dir))
         try:
-            chunk_files = self._synthesize_chunks(chunks, voice, scratch)
+            chunk_files = self._synthesize_chunks(speakable, voice, scratch)
             duration = self._join_and_encode(chunk_files, wav, mp3)
         except BaseException:
             # Never leave partial audio behind, whatever the failure was.
@@ -168,17 +179,19 @@ class AzureSpeechProvider:
         )
         return SpeechAudio(path=mp3, is_fixture=False, lossless_path=wav)
 
-    def _synthesize_chunks(self, chunks: list[str], voice: Voice, scratch: Path) -> list[Path]:
+    def _synthesize_chunks(
+        self, chunks: list[tuple[str, list[tuple[str, str]]]], voice: Voice, scratch: Path
+    ) -> list[Path]:
         files = []
         timeout = httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
         with httpx.Client(timeout=timeout, transport=self._transport) as client:
-            for index, chunk in enumerate(chunks):
+            for index, (chunk, spans) in enumerate(chunks):
                 try:
                     self._limiter.acquire()
                 except RateLimiterClosed:
                     raise _failure("speech_cancelled") from None
                 target = scratch / f"chunk-{index:05d}.wav"
-                self._synthesize_chunk(client, build_ssml(chunk, voice, self._glossary), target)
+                self._synthesize_chunk(client, build_ssml_from_spans(spans, voice), target)
                 self._validate_chunk(target, len(chunk))
                 files.append(target)
         return files

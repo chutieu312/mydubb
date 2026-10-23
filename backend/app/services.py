@@ -159,6 +159,7 @@ def build_services(
         audio=audio,
         result_store=result_store,
         result_ttl_seconds=settings.result_ttl_seconds,
+        glossary=default_glossary(),
     )
 
     return AppServices(

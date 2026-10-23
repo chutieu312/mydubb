@@ -401,6 +401,102 @@ database migration).
 - The MP3 is exact for gapless-aware players (browsers, FFmpeg). A player that ignores the MP3
   header plays up to about 50-70 ms more; see [ARCHITECTURE.md](ARCHITECTURE.md#duration-fitting-milestone-3c).
 
+## Glossary candidates (English detection)
+
+No new service, resource, key or setting: detection is plain code in the app, and candidates are a
+table in the existing Neon database (migration `0004`). Speech reads the English a translation
+kept with `en-US` (see [ARCHITECTURE.md](ARCHITECTURE.md#english-left-in-the-translation-and-glossary-candidates)),
+and every completed job with a real translation adds its new terms to `glossary_candidates`.
+Nothing there is used at runtime until a term is added to `glossary.txt` by a pull request.
+
+### Listen before accepting
+
+```bash
+cd backend
+uv run python -m scripts.pronunciation_smoke            # offline: classification table and SSML
+uv run python -m scripts.pronunciation_smoke --speak    # 4 Azure Speech requests (F0), MP3s
+```
+
+`--speak` writes `pronunciation-samples/before-<voice>.mp3` (glossary only, as production reads
+today) and `after-<voice>.mp3` (with detection) for both voices; ffmpeg must be on `PATH` (or run
+it inside the image, see the pull request). `--translate` translates the sample live instead of
+using the stored translation (1 Translator request). Only listening tells whether `container`,
+`Kernel`, `trenchcoat` and `/proc` sound right; HTTP 200 and a valid MP3 do not.
+
+### Review in batches (local tool, no API)
+
+Run from `backend/` on your computer. The tool reads `DATABASE_URL` from the environment (or the
+git-ignored `backend/.env` for a local database); never pass it on the command line. For
+production, copy the Neon **direct** connection string (Neon -> Connect, pooling off) and type it
+without echo in Git Bash:
+
+```bash
+read -rs DATABASE_URL && export DATABASE_URL    # paste with Shift+Insert, press Enter
+uv run python -m scripts.glossary_candidates list                 # pending, most jobs first
+uv run python -m scripts.glossary_candidates list --status all --limit 200
+uv run python -m scripts.glossary_candidates approve 12 --term "container image" --case insensitive --by "PO"
+uv run python -m scripts.glossary_candidates approve 15 --term Podman --case exact --note "product"
+uv run python -m scripts.glossary_candidates reject 13 --note "ordinary word (trenchcoat)"
+uv run python -m scripts.glossary_candidates reopen 13           # only when a rejection was wrong
+uv run python -m scripts.glossary_candidates export --output ../glossary-proposal.txt
+unset DATABASE_URL
+```
+
+Rules the tool enforces:
+
+- `list` orders by number of jobs, then last seen. A high count is only a reason to look first;
+  nothing is approved automatically.
+- `approve` needs the canonical spelling and the case policy: `insensitive` becomes an ordinary
+  glossary line, `exact` a `=TERM` line (for terms that are also ordinary words in another case,
+  like `REST`). The canonical term must match a spelling actually seen (the singular may stand for
+  a plural seen). Approved means "for the next glossary pull request", **not** "in use".
+- `reject` keeps the term rejected however often it is seen again (its count still grows);
+  `reopen` returns it to pending. Promoted terms cannot be reopened: removing a glossary term is a
+  pull request.
+- `export` writes glossary lines for the approved candidates and checks them first: duplicates
+  among approved (error, nothing exported), already in the glossary (skipped, promote it), already
+  matched by an existing term (for example a plural), case overlaps with an exact term, and single
+  lowercase words (the glossary keeps everyday words out). It changes nothing in the database.
+- Errors print the type only (no database message, no connection string).
+
+Then, by hand: add the reviewed lines to `backend/app/translation/data/glossary.txt` in their
+sections, open **one** pull request for the batch, let CI run, and merge it as usual. Production
+uses the new terms after that commit is deployed.
+
+### Promote after the merge
+
+```bash
+git fetch origin
+read -rs DATABASE_URL && export DATABASE_URL
+uv run python -m scripts.glossary_candidates promote --ref origin/main --dry-run
+uv run python -m scripts.glossary_candidates promote --ref origin/main
+unset DATABASE_URL
+```
+
+`promote` reads the glossary file of that commit with `git show`, refuses a commit that is not an
+ancestor of `origin/main`, and marks promoted only the approved candidates whose exact line (term
+and case policy) is in it, recording the commit SHA. Approved candidates that are not there stay
+approved. Exporting never promotes.
+
+### Production acceptance (after merge and deploy)
+
+1. `/api/meta` unchanged (`azure/azure/ffmpeg`, `mock_mode=false`); the Render log of the first
+   start shows `Running upgrade 0003 -> 0004`. Optionally in the Neon SQL Editor:
+   `SELECT version_num FROM alembic_version;` -> `0004`.
+2. Run a job with the sample transcript (or another synthetic one), listen to it, and compare with
+   the local before/after samples.
+3. The Render log of that job has `pronunciation: glossary=... term=... code=...` and
+   `N glossary candidate(s) counted` (numbers only).
+4. `scripts.glossary_candidates list` shows the terms (for the sample: `container`, `containers`,
+   `kernel`, `trenchcoat`) as pending with 1 job; running the same transcript again makes them 2.
+5. Reject `trenchcoat`, run the job again: it stays rejected (count 3).
+
+### Roll back
+
+There is no switch: detection and counting are part of the code. To go back, revert the pull
+request (roll forward); keep migration `0004` (see "Rolling back"). The candidate table can stay;
+older code ignores it.
+
 ## Operations
 
 ### Deploying
@@ -463,7 +559,11 @@ request adds migration `0003` (`jobs.audio_speed_percent`, expand-only: a `NOT N
 constant default and a CHECK). Once it is deployed, the database is at `0003` and every deploy
 built before it (including the Milestone 3C ones) stops being a supported Render rollback target;
 use `docker/rollback-target-check.sh <commit> 0003` to check. Rolling forward by reverting the
-change in a pull request keeps working, because the image still contains `0003`.
+change in a pull request keeps working, because the image still contains `0003`. The English
+detection pull request adds migration `0004` (table `glossary_candidates` and the nullable column
+`jobs.glossary_candidates_recorded_at`, expand-only). Once it is deployed, the database is at
+`0004` and every deploy built before it (including the audio speed ones) stops being a supported
+Render rollback target; check with `docker/rollback-target-check.sh <commit> 0004`.
 
 **Before rolling back** (read-only checks):
 
@@ -535,6 +635,22 @@ This confirms that migration `0003` is expand-only for the **schema**, and that 
 graph** limit described above applies (step 3). Production was not touched and nothing was migrated
 there; `alembic upgrade head` runs on the first start of the new image after the pull request is
 merged and deployed.
+
+Rehearsal for migration `0004` (glossary candidates), local throwaway PostgreSQL 17 on tmpfs,
+previous production commit `fe9988a` (audio speed, knows `0001`-`0003`) against the new image
+(knows `0004`), mock smoke test each time; a candidate row was inserted by hand after step 2:
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `fe9988a` | default, empty database | Migrates to `0003`; smoke test passes |
+| 2 | new | default | `0003` -> `0004`; smoke test passes; the job written by `fe9988a` reads normally (marker `NULL`) |
+| 3 | `fe9988a` | default, database at `0004` | Exits 1: `Can't locate revision identified by '0004'`; database unchanged (`0004`) |
+| 4 | `fe9988a` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (it never reads the new table or column); the candidate row is untouched |
+| 5 | new | default, after step 4 | Starts; smoke test passes; all four jobs completed, the candidate row unchanged |
+
+Mock jobs never count candidates (the mock translation is the source itself), so the marker stays
+`NULL` for all of them; counting is covered by the backend tests against PostgreSQL. Production
+was not touched.
 
 Repeat it for any pull request that adds a migration: build the previous production commit
 and the new one (`git worktree add <dir> <commit>` + `docker build`), migrate a throwaway

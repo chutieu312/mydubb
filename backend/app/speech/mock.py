@@ -5,6 +5,7 @@ from pathlib import Path
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio
 from app.speech.voices import Voice
+from app.translation.glossary import TermMatcher
 
 FIXTURE_MP3 = Path(__file__).resolve().parent.parent / "audio" / "fixtures" / "mock_audio.mp3"
 
@@ -22,7 +23,9 @@ class MockSpeechProvider:
         self._fail = fail
         self._delay = delay
 
-    def synthesize(self, text: str, voice: Voice, work_dir: Path) -> SpeechAudio:
+    def synthesize(
+        self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
+    ) -> SpeechAudio:
         time.sleep(self._delay)
         if self._fail:
             raise ProcessingError(

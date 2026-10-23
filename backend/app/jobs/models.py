@@ -87,3 +87,7 @@ class Job(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     result_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When this job's glossary candidates were counted (at most once per job; NULL = never).
+    glossary_candidates_recorded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )

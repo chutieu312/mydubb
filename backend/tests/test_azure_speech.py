@@ -11,6 +11,7 @@ from pydantic import SecretStr
 
 from app.audio.ffmpeg import AudioTools, probe_mp3
 from app.processing_errors import ProcessingError
+from app.pronunciation.detector import SpeechTerms
 from app.speech import azure
 from app.speech.azure import AzureSpeechProvider
 from app.speech.chunker import split_for_speech
@@ -116,6 +117,42 @@ def test_request_url_headers_and_voice(make_provider, work_dir):
         ("en-US", "neural network"),
         ("vi-VN", "."),
     ]
+
+
+def test_english_detected_for_the_job_gets_english_spans_after_the_glossary(
+    make_provider, work_dir
+):
+    text = "Kernel của neural network chạy trong /proc, còn run thì không chắc."
+    terms = SpeechTerms(default_glossary(), code=["/proc"], english=["Kernel"])
+    provider, calls = make_provider()
+    provider.synthesize(text, Voice.ANDREW, work_dir, terms)
+
+    (request,) = calls
+    assert ssml_voice(request.content).get("name") == "en-US-AndrewMultilingualNeural"
+    assert ssml_spans(request.content) == [
+        ("en-US", "Kernel"),
+        ("vi-VN", " của "),
+        ("en-US", "neural network"),
+        ("vi-VN", " chạy trong "),
+        ("en-US", "/proc"),
+        ("vi-VN", ", còn run thì không chắc."),
+    ]
+
+
+def test_a_long_english_span_cut_into_requests_stays_english_in_each(make_provider, work_dir):
+    clause = " ".join(["widget registry"] * 30)  # 479 characters, longer than a chunk
+    text = f"Một\t{clause} ở đây."
+    terms = SpeechTerms(default_glossary(), english=[clause, "widget registry"])
+    provider, calls = make_provider(max_chunk_chars=200)
+    provider.synthesize(text, Voice.ANDREW, work_dir, terms)
+
+    assert len(calls) >= 3
+    spans = [span for request in calls for span in ssml_spans(request.content)]
+    assert all(len(ssml_text(request)) <= 200 for request in calls)
+    assert " ".join(ssml_text(r) for r in calls).split() == text.split()
+    assert spans[0] == ("vi-VN", "Một ")
+    assert spans[-1] == ("vi-VN", " ở đây.")
+    assert all(language == "en-US" for language, _ in spans[1:-1])
 
 
 def test_the_other_voice_uses_its_own_name(make_provider, work_dir):

@@ -69,7 +69,7 @@ def engine(database_url: str) -> Iterator[Engine]:
 def db_engine(engine: Engine) -> Engine:
     """A migrated database with empty tables."""
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE jobs, access_sessions"))
+        conn.execute(text("TRUNCATE jobs, access_sessions, glossary_candidates"))
     return engine
 
 

@@ -1,8 +1,11 @@
 # MyDubb glossary: English terms that stay in English in the Vietnamese translation.
 #
-# Only terms listed here are protected. MyDubb does NOT detect unknown technical terms
-# automatically; a term that is missing here may be translated (or left alone) by the
-# translation service, depending on the service.
+# Only terms listed here are protected. A term that is missing here may be translated (or
+# left alone) by the translation service, depending on the service. When the translation
+# leaves an unlisted English word in place, speech still reads it in English and the job adds
+# it to the glossary *candidates* (database) for a batch review; that never changes this file.
+# This file only changes through a reviewed pull request (see docs/DEPLOYMENT.md, "Glossary
+# candidates").
 #
 # Format (one term per line, reviewed through Git):
 #   * Lines starting with "#" and blank lines are ignored.
@@ -39,6 +42,10 @@ NoSQL
 CI/CD
 Docker
 Kubernetes
+Linux
+Linux kernel
+# "container" and "kernel" alone have everyday meanings; the phrases are specific.
+container runtime
 Git
 GitHub
 PostgreSQL

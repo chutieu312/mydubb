@@ -129,7 +129,12 @@ English; add a term by adding a line to that file in a pull request.
 `SPEECH_PROVIDER=azure` makes the speech stage generate real speech from the translated text
 with Azure Speech (REST API), using one multilingual voice per audio (`AndrewMultilingual`,
 the default, or `EmmaMultilingual`) with the Vietnamese text and the glossary's English terms
-marked by language. Terms outside the glossary are not marked and may be mispronounced. It works with either translation provider
+marked by language. English that a real translation kept outside the glossary (words that cannot be
+Vietnamese and were copied from the transcript, and code such as `/proc`) is marked English too;
+short English words that could be Vietnamese syllables (`run`, `Go`) are not, and may be
+mispronounced. Those terms are also collected as glossary candidates for a batch review
+([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#glossary-candidates-english-detection); samples to
+listen to: `uv run python -m scripts.pronunciation_smoke --speak`). It works with either translation provider
 (`mock | azure`); without `AUDIO_PROCESSOR=ffmpeg` (below) audio processing is a pass-through and
 the audio length is **not** adjusted to the target. Required: `AZURE_SPEECH_KEY` and
 `AZURE_SPEECH_REGION` (the Speech resource's own key; the Translator key is never reused), plus

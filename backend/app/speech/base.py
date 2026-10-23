@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.speech.voices import Voice
+from app.translation.glossary import TermMatcher
 
 
 @dataclass(frozen=True)
@@ -18,10 +19,15 @@ class SpeechAudio:
 class SpeechProvider(Protocol):
     """Synthesizes Vietnamese text into an audio file inside `work_dir`.
 
+    `terms` are the spans read in English (the glossary plus English detected for this job,
+    see `pronunciation/`); None means the shared glossary only. They never change the text.
+
     Implementations raise ProcessingError for expected failures and must not retry
     calls whose outcome is unknown.
     """
 
     name: str
 
-    def synthesize(self, text: str, voice: Voice, work_dir: Path) -> SpeechAudio: ...
+    def synthesize(
+        self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
+    ) -> SpeechAudio: ...
