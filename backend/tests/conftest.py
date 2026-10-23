@@ -17,6 +17,7 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 
+from app.audio.ffmpeg import AudioTools, locate_tools
 from app.config import Settings, to_sqlalchemy_url
 from app.main import create_app
 
@@ -27,7 +28,7 @@ VALID_JOB = {
     "transcript": "Spring Boot uses Dependency Injection to automatically manage objects.",
     "first_sentence_start": "00:00:10",
     "last_sentence_start": "00:06:10",
-    "voice": "HoaiMy",
+    "voice": "AndrewMultilingual",
 }
 
 
@@ -133,3 +134,15 @@ def wait_for_terminal(client: TestClient, job_id: str, timeout: float = 10.0) ->
             return body
         time.sleep(0.05)
     raise AssertionError(f"Job {job_id} did not reach a terminal state")
+
+
+@pytest.fixture(scope="session")
+def audio_tools() -> AudioTools:
+    """Real ffmpeg/ffprobe. CI must have them (a missing tool fails there instead of skipping)."""
+    tools = locate_tools()
+    if tools is None:
+        message = "ffmpeg and ffprobe are not installed"
+        if os.environ.get("CI"):
+            pytest.fail(message, pytrace=False)
+        pytest.skip(message)
+    return tools

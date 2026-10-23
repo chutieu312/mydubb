@@ -31,7 +31,7 @@ must send `X-CSRF-Token` with the token returned by `POST`/`GET /api/session`. I
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`, each `mock` or `azure`), `voices[] {id, provider_voice, description}`, `timestamp_format`, `result_ttl_seconds` |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` until Milestone 3C), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds` |
 
 ## Session (Private Beta access)
 
@@ -51,8 +51,13 @@ Requires session + CSRF. `204`, revokes the session server-side and clears the c
 
 ## Jobs
 
-Voices (API values): `HoaiMy` → `vi-VN-HoaiMyNeural`, `NamMinh` → `vi-VN-NamMinhNeural`.
-Any other value is rejected.
+Voices (API values): `AndrewMultilingual` ("Andrew Multilingual") →
+`en-US-AndrewMultilingualNeural` and `EmmaMultilingual` ("Emma Multilingual") →
+`en-US-EmmaMultilingualNeural`. `voice` is optional and defaults to `AndrewMultilingual`; any
+other value, including the former `HoaiMy` and `NamMinh`, is rejected with
+`422 validation_error` (field `voice`). A job created before this change keeps its stored voice
+name: `GET /api/jobs/{id}` and its result still work and return that name (e.g. `HoaiMy`) in
+`voice`, which clients must treat as an opaque string.
 
 ### `POST /api/jobs`
 Requires session + CSRF.
@@ -62,7 +67,7 @@ Requires session + CSRF.
   "transcript": "English text, with or without timestamps",
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
-  "voice": "HoaiMy"
+  "voice": "AndrewMultilingual"
 }
 ```
 
@@ -98,7 +103,7 @@ belongs to another session** (indistinguishable by design).
 {
   "id": "uuid",
   "status": "queued | translating | synthesizing | processing | completed | failed",
-  "voice": "HoaiMy",
+  "voice": "AndrewMultilingual",
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
   "target_duration_seconds": 360,
@@ -115,7 +120,10 @@ belongs to another session** (indistinguishable by design).
 Translator: `translation_auth_failed`, `translation_quota_exceeded`, `translation_timeout`,
 `translation_network_error`, `translation_service_error`, `translation_rejected`,
 `translation_invalid_response`, `translation_terms_not_preserved`,
-`translation_input_unsupported`. Messages are safe to show (no keys, transcript text or raw
+`translation_input_unsupported`; and for Azure Speech: `speech_auth_failed`,
+`speech_quota_exceeded`, `speech_timeout`, `speech_network_error`, `speech_service_error`,
+`speech_rejected`, `speech_invalid_audio`, `speech_audio_failed`, `speech_cancelled`,
+`speech_input_unsupported`, `speech_no_speakable_text`. Messages are safe to show (no keys, transcript text or raw
 provider output). Failed jobs are never retried automatically; submit again.
 
 ### `GET /api/jobs/{id}/result`
@@ -129,6 +137,7 @@ Requires session and ownership.
       "url": "/api/jobs/{id}/result/audio",
       "download_url": "/api/jobs/{id}/result/audio?download=1",
       "content_type": "audio/mpeg",
+      "provider": "mock-speech",
       "is_fixture": true,
       "duration_adjusted": false
     },
@@ -137,8 +146,10 @@ Requires session and ownership.
   }
   ```
   `translation.provider` is `azure-translator` (with `is_illustrative: false`) for a real
-  translation and `mock-translation` for the mock; `notices` states what is real and what is a
-  fixture.
+  translation and `mock-translation` for the mock; `audio.provider` is `azure-speech` (with
+  `is_fixture: false`) for real speech and `mock-speech` for the fixture. `duration_adjusted`
+  stays `false` until Milestone 3C. `notices` states what is real, what is a fixture and that the
+  audio length is not adjusted to the target.
 - `409 result_not_ready` (still running) or `409 job_failed` (with `job_error_code`).
 - `410 result_expired` — the job completed but its temporary result expired or was removed
   (TTL elapsed, cleanup, or restart on an ephemeral disk).

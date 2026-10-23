@@ -184,3 +184,26 @@ def test_default_glossary_contains_no_ambiguous_everyday_words():
 def test_default_glossary_does_not_touch_ordinary_sentences():
     text = "The class has a model, a cell and a key to the table. We go to the rest area."
     assert found(default_glossary(), text) == []
+
+
+def test_audition_terms_are_all_in_the_shared_glossary_as_whole_phrases():
+    text = (
+        "Một neural network dùng gradient descent cho loss function. Spring Boot dùng "
+        "Dependency Injection. Gọi REST API, nhận JSON, chạy pipeline CI/CD."
+    )
+    assert found(default_glossary(), text) == [
+        "neural network",
+        "gradient descent",
+        "loss function",
+        "Spring Boot",
+        "Dependency Injection",
+        "REST API",  # one term, not "REST" and "API" separately
+        "JSON",
+        "pipeline",
+        "CI/CD",
+    ]
+
+
+def test_rest_api_is_case_sensitive_but_api_alone_still_matches():
+    assert found(default_glossary(), "the rest api and Pipelines") == ["api", "Pipelines"]
+    assert found(default_glossary(), "A REST APIs call") == ["REST APIs"]

@@ -15,11 +15,11 @@ export async function signIn(page: Page): Promise<void> {
 
 export async function fillJobForm(
   page: Page,
-  { transcript, first = "00:00:10", last = "00:06:10", voice = "HoaiMy" }: {
+  { transcript, first = "00:00:10", last = "00:06:10", voice = "Andrew Multilingual" }: {
     transcript: string;
     first?: string;
     last?: string;
-    voice?: "HoaiMy" | "NamMinh";
+    voice?: "Andrew Multilingual" | "Emma Multilingual";
   },
 ): Promise<void> {
   await page.getByLabel("English Transcript").fill(transcript);

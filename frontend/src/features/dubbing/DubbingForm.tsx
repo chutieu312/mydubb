@@ -6,15 +6,15 @@ import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
 
 interface Props {
   voices: VoiceOption[];
-  // Submitting sends the transcript text to Azure for translation.
-  sendsToAzure: boolean;
+  // Says which text is sent to which Azure service on submit; null when nothing is.
+  disclosure: string | null;
   onJobCreated: (job: Job) => void;
   onSessionExpired: () => void;
 }
 
 type FieldErrors = Partial<Record<string, string>>;
 
-export function DubbingForm({ voices, sendsToAzure, onJobCreated, onSessionExpired }: Props) {
+export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired }: Props) {
   const [transcript, setTranscript] = useState("");
   const [firstStart, setFirstStart] = useState("");
   const [lastStart, setLastStart] = useState("");
@@ -92,7 +92,7 @@ export function DubbingForm({ voices, sendsToAzure, onJobCreated, onSessionExpir
       </p>
 
       <fieldset className="field">
-        <legend>Vietnamese voice</legend>
+        <legend>Voice</legend>
         <div className="row">
           {voices.map((v) => (
             <label key={v.id} className="choice">
@@ -103,7 +103,7 @@ export function DubbingForm({ voices, sendsToAzure, onJobCreated, onSessionExpir
                 checked={voice === v.id}
                 onChange={() => setVoice(v.id)}
               />
-              {v.id} <span className="muted">({v.description})</span>
+              {v.label} <span className="muted">({v.description})</span>
             </label>
           ))}
         </div>
@@ -115,16 +115,15 @@ export function DubbingForm({ voices, sendsToAzure, onJobCreated, onSessionExpir
           {formError}
         </p>
       )}
-      {sendsToAzure && (
+      {disclosure && (
         <p className="privacy-notice" id="azure-disclosure">
-          When you generate dubbing, the transcript text is sent to Microsoft Azure Translator
-          to be translated.
+          {disclosure}
         </p>
       )}
       <button
         type="submit"
         disabled={submitting}
-        aria-describedby={sendsToAzure ? "azure-disclosure" : undefined}
+        aria-describedby={disclosure ? "azure-disclosure" : undefined}
       >
         {submitting ? "Submitting…" : "Generate Dubbing"}
       </button>

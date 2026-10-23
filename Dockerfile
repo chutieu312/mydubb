@@ -18,6 +18,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
+# FFmpeg (with ffprobe) encodes the joined speech audio to MP3 and verifies it. Installed from
+# Debian without recommended packages to keep the image small.
+RUN apt-get update     && apt-get install -y --no-install-recommends ffmpeg     && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock backend/.python-version ./
 # uv is only needed at build time; it is mounted, not copied into the image.

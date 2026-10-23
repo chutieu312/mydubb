@@ -4,7 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ValidationInfo, field_validator
 
 from app.jobs.models import Job
-from app.speech.voices import Voice
+from app.speech.voices import DEFAULT_VOICE, Voice
 from app.transcript.cleaning import clean_transcript
 from app.transcript.timestamps import format_seconds, parse_timestamp, target_duration_seconds
 
@@ -13,7 +13,7 @@ class CreateJobRequest(BaseModel):
     transcript: str
     first_sentence_start: str
     last_sentence_start: str
-    voice: Voice
+    voice: Voice = DEFAULT_VOICE
 
     @field_validator("transcript")
     @classmethod
@@ -88,6 +88,8 @@ class AudioOut(BaseModel):
     url: str
     download_url: str
     content_type: str
+    # Speech provider that produced the audio (e.g. "mock-speech", "azure-speech").
+    provider: str
     is_fixture: bool
     duration_adjusted: bool
 

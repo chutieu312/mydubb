@@ -29,7 +29,8 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `access/` | Access Code check, server-side sessions, brute-force limiter, session router | db |
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
-| `speech/` | `SpeechProvider` protocol, approved `Voice`s + mock | `processing_errors` |
+| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter | `processing_errors`, `audio`, `translation.glossary` |
+| `audio/` | `AudioProcessor` protocol + mock, WAV validation/joining, FFmpeg MP3 encode/probe | `processing_errors` |
 | `audio/` | `AudioProcessor` protocol (fit to target duration) + mock; MP3 fixture | `processing_errors` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
 | `jobs/` | Job model, guarded status transitions, executor, pipeline, HTTP router | all of the above via protocols |
@@ -179,13 +180,18 @@ storage; that is intentionally out of scope.
 | Component | Mock behavior |
 |---|---|
 | Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice. `is_illustrative=true`. |
-| Speech | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime) regardless of text/voice. `is_fixture=true`. |
+| Speech (default; `SPEECH_PROVIDER=mock`) | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime) regardless of text/voice. `is_fixture=true`. |
 | Audio processing | Pass-through. `duration_adjusted=false`. **No tempo change, no duration guarantee.** |
 
 With `TRANSLATION_PROVIDER=azure` the translation row above is replaced by the real Azure
-Translator (see below) while speech and audio stay mock; the UI then labels each component
-separately. The UI shows a "Development mock mode" banner (all mock) or a per-component
-banner (Azure translation + mock audio) and per-result notices. The fixture is **not**
+Translator (see below) and with `SPEECH_PROVIDER=azure` the speech row by Azure Speech (see
+"Azure Speech"); the UI then labels each component separately. The supported modes are: all
+mock; Azure translation + mock speech; Azure translation + Azure speech (and, for development,
+mock translation + Azure speech). Audio processing is the pass-through mock until Milestone
+3C, so `PROVIDER_MODE=azure` stays refused and production keeps needing
+`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`. The UI shows a "Development mock mode" banner (all
+mock) or a per-component banner (real translation and/or speech, duration not adjusted) and
+per-result notices. The fixture is **not**
 generated from the transcript and does **not** demonstrate target-duration compliance.
 
 Failure scenarios are deterministic via `MOCK_FAIL_STAGE` (`translation`, `speech`, `audio`,
@@ -195,7 +201,7 @@ Failure scenarios are deterministic via `MOCK_FAIL_STAGE` (`translation`, `speec
 character Access Code and the `MOCK_FAIL_STAGE` ban still apply). `PROVIDER_MODE=azure` (real
 everything) fails at startup until speech and audio exist — there is no silent fallback to
 mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
-`TRANSLATION_PROVIDER=azure`.
+`TRANSLATION_PROVIDER=azure`, and `MOCK_FAIL_STAGE=speech` together with `SPEECH_PROVIDER=azure`.
 
 ## Roadmap and remaining work
 
@@ -205,7 +211,8 @@ mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
 | 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | Done |
 | 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
-| 3B / 3C | Azure Speech; FFmpeg duration processing | Later |
+| 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Implemented in a pull request; awaiting Product Owner acceptance (listening evaluation) |
+| 3C | FFmpeg duration processing | Later |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
@@ -281,6 +288,93 @@ and sizes only, never transcript text, translations, response bodies or the key.
 Translator. The UI says so next to the submit button. Nothing else about retention changes
 (see "Data retention").
 
+### Azure Speech (Milestone 3B)
+
+`AzureSpeechProvider` (`speech/azure.py`), selected with `SPEECH_PROVIDER=azure`. Checked
+against Microsoft Learn on 2026-10-22.
+
+**REST, not the Speech SDK.** The SDK is a native library (large wheel plus system packages)
+with streaming/event features this job does not need ("SSML in, audio file out"); Microsoft
+itself describes REST as the option for cases where the SDK cannot or need not be used. REST is
+one HTTPS `POST {region}.tts.speech.microsoft.com/cognitiveservices/v1`, reuses the `httpx`
+client already shipped, and runs unchanged in the slim Linux image on Render. Authentication is
+the Speech resource's own key (`Ocp-Apim-Subscription-Key`); the Translator key is never used.
+The region is validated (`[a-z0-9]{2,30}`) because it becomes part of the host name; redirects
+are not followed, so the key cannot be sent anywhere else.
+
+**Limits that apply to this REST path** (and only to it): Free F0 allows 20 transactions per
+60 seconds for the whole resource (not adjustable; Standard S0 30 TPS); a request produces at
+most 10 minutes of audio, and longer audio is **silently truncated** with a normal `200`; the
+"64 KB SSML per turn" limit belongs to WebSocket and is not applied. Microsoft also states that
+many `429`s come from backend capacity for a voice rather than from the quota.
+
+**Voices and SSML.** After listening to real audio the Product Owner replaced the two Vietnamese
+Standard voices (`HoaiMy`, `NamMinh`) with `AndrewMultilingual` (default) ->
+`en-US-AndrewMultilingualNeural` and `EmmaMultilingual` -> `en-US-EmmaMultilingualNeural`.
+Both are multilingual voices, so one speaker reads Vietnamese and English. The SSML is the
+structure that was auditioned and accepted (`speech/ssml.py`):
+
+```
+<speak ... xml:lang="en-US"><voice name="en-US-AndrewMultilingualNeural">
+  <lang xml:lang="vi-VN">Hôm nay chúng ta tìm hiểu cách một </lang>
+  <lang xml:lang="en-US">neural network</lang>
+  <lang xml:lang="vi-VN"> học từ dữ liệu. ...</lang> ...
+</voice></speak>
+```
+
+Exactly one `<voice>` per request (never a second speaker), default speaking rate, no `phoneme`,
+style or other markup. The English spans come from the **shared glossary** (the same
+`translation/data/glossary.txt` and matching rules used to protect terms in translation; there is
+no second list for speech): longest match wins, spelling and case are kept, and `REST API`,
+`pipeline` were added to it for this sample. The spans partition the text exactly, so
+concatenating them returns the chunk unchanged (same spelling, case, whitespace, order). The text
+is XML-escaped (characters invalid in XML are removed) and only ever appears as text content of
+a span, so it cannot add elements, attributes or audio URLs. **Limit:** an English term that is
+not in the glossary gets no English span; it is read inside the Vietnamese span and may be
+mispronounced. There is no LLM, phoneme dictionary or automatic term detection. Whether the
+result sounds right is a **listening** judgement made by the Product Owner
+(`scripts/azure_speech_smoke.py` creates the samples), not something HTTP success or a valid MP3
+proves. Jobs created with the former voices keep their stored name (the `jobs.voice` column is
+free text); it is only displayed and never mapped back to a voice.
+
+**Chunking** (`speech/chunker.py`): the translated text (spaces inside a line normalized, blank
+lines dropped, lines kept on separate lines as in the accepted audition) is packed greedily into chunks of whole lines and sentences up to
+`AZURE_SPEECH_MAX_CHUNK_CHARS` (default 2,000, i.e. a few minutes of speech, far below 10
+minutes). A sentence over the limit is cut at spaces, never inside a glossary term or a word; a
+run over the limit with no usable space fails with `speech_input_unsupported` instead of being
+cut. `" ".join(chunks).split() == text.split()` is tested, so nothing is lost, repeated or
+reordered. Text without any letter or digit has nothing to read and is not sent.
+
+**Requests** are sequential per job. A process-wide `RequestRateLimiter` (a sliding window of
+`AZURE_SPEECH_MAX_REQUESTS_PER_WINDOW` per `AZURE_SPEECH_RATE_WINDOW_SECONDS`, defaults 20 per
+60 s plus a 1 s margin) is shared by all jobs, because the quota belongs to the resource. A long
+transcript therefore takes about `chunks / 19` minutes on F0 and the job stays in
+`synthesizing`; the UI shows the stage, not a percentage. Shutdown closes the limiter so waiting
+jobs stop. There is no retry (a failed or timed-out request may still have consumed quota), no
+fallback to the mock, and one failed chunk fails the job; no partial audio is returned.
+
+**Audio.** Each chunk is requested as `riff-24khz-16bit-mono-pcm`, streamed to a temporary file
+with a size and total-time cap and validated: strict WAV header (declared length present, PCM,
+24 kHz mono 16-bit), not within 10 s of the 10 minute limit (it may be cut), and not
+implausibly short for its text (over 50 characters/second). Chunks are joined **as samples**
+(`audio/wav.py`), never by appending encoded bytes; then FFmpeg encodes one mono 96 kbit/s MP3
+with the Xing/Info header browsers use to seek, and ffprobe verifies one MP3 stream whose
+length matches the samples. Temporary files live in the job work directory and in a scratch
+directory removed in `finally`; partial `speech.wav`/`speech.mp3` are deleted on failure.
+`SpeechAudio.lossless_path` keeps the joined WAV in the work directory so Milestone 3C can change
+the tempo **before** encoding; nothing in 3B changes duration or the target.
+
+Errors: 401/403 -> `speech_auth_failed`, 429 -> `speech_quota_exceeded`, 408/504 and timeouts ->
+`speech_timeout`, connection problems -> `speech_network_error`, 5xx/unexpected ->
+`speech_service_error`, other 4xx -> `speech_rejected`, unusable audio ->
+`speech_invalid_audio`, assembly/FFmpeg problems -> `speech_audio_failed`, shutdown ->
+`speech_cancelled`. Logs contain status codes, request IDs, counts and audio seconds only: never
+the key, headers, SSML, text or response content.
+
+**Privacy**: with Azure speech the translated Vietnamese text (with mock translation, the mock
+text that still contains the transcript) is sent to Microsoft Azure Speech; the form says so
+before submit.
+
 ### Milestone 3 (real providers)
 
 Milestone 3A (translation) is described above; the remaining items below still apply to
@@ -290,22 +384,20 @@ Azure Speech and FFmpeg.
 quality evaluation with real course transcripts, and a decision whether to migrate to API
 `2026-06-06` or add an LLM-based provider if the quality of F0 NMT is not good enough.
 
-**Azure Speech (F0)**
-- `AzureSpeechProvider` for `vi-VN-HoaiMyNeural` / `vi-VN-NamMinhNeural`, SSML, chunking to
-  service limits, MP3/PCM output into the job work dir, quota/error mapping.
-- Evaluate mixed Vietnamese/English pronunciation of technical terms.
+**Azure Speech (F0)** - implemented in Milestone 3B (see "Azure Speech" above). Remaining:
+the Product Owner's listening evaluation of mixed Vietnamese/English pronunciation.
 
-**Audio processing (FFmpeg)**
-- `FfmpegAudioProcessor`: concatenate chunks, apply tempo to the **complete** audio so its
+**Audio processing (FFmpeg)** (FFmpeg is already in the runtime image since 3B)
+- `FfmpegAudioProcessor`: take the uncompressed speech audio (`SpeechAudio.lossless_path`, kept
+  by 3B before MP3 encoding), apply tempo to the **complete** audio so its
   length equals the target duration (`atempo` chaining for factors outside 0.5–2.0), encode
   MP3, measure the output duration and fail if it misses the agreed tolerance.
 - Define the precision tolerance with the Product Owner (MP3 frame granularity ≈ 26 ms at
   44.1 kHz) and add FFmpeg-based duration tests in CI. Report audio-quality risk for extreme
   tempo factors.
-- Add FFmpeg to the runtime image.
 
 **Production with real providers**
-- Disclosure that submitted text is processed by Azure: done for translation in 3A; extend
-  the wording when speech is added.
+- Disclosure that submitted text is processed by Azure: done for translation (3A) and speech
+  (3B); the wording follows the configured providers.
 - Production configuration with Azure credentials (`PROVIDER_MODE=azure`); missing
   credentials must fail startup, never fall back to mocks.

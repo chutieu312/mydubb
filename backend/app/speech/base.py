@@ -10,6 +10,9 @@ class SpeechAudio:
     path: Path
     # True when the audio is a bundled fixture, not speech generated from the text.
     is_fixture: bool
+    # Uncompressed audio the MP3 was encoded from, when the provider keeps it in `work_dir`
+    # (Milestone 3C can adjust the tempo before encoding instead of re-encoding an MP3).
+    lossless_path: Path | None = None
 
 
 class SpeechProvider(Protocol):

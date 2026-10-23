@@ -54,7 +54,7 @@ csrf=$(json '["csrf_token"]' < "$login_body")
 rm -f "$login_body"
 
 job_id=$(curl -fsS -b "$JAR" -X POST -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf" \
-  -d '{"transcript":"Smoke test transcript.","first_sentence_start":"00:00:10","last_sentence_start":"00:06:10","voice":"HoaiMy"}' \
+  -d '{"transcript":"Smoke test transcript.","first_sentence_start":"00:00:10","last_sentence_start":"00:06:10","voice":"AndrewMultilingual"}' \
   "$BASE_URL/api/jobs" | json '["id"]')
 
 i=0

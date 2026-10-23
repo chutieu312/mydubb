@@ -6,7 +6,7 @@ import { AccessGate } from "./features/access/AccessGate";
 import { DubbingForm } from "./features/dubbing/DubbingForm";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
-import { sendsTranscriptToAzure } from "./lib/providers";
+import { azureDisclosure } from "./lib/providers";
 
 type AuthState = "checking" | "anonymous" | "authenticated";
 
@@ -121,12 +121,17 @@ export function App() {
           <>
             <DubbingForm
               voices={meta.voices}
-              sendsToAzure={sendsTranscriptToAzure(meta.providers)}
+              disclosure={azureDisclosure(meta.providers)}
               onJobCreated={handleJobCreated}
               onSessionExpired={handleSessionExpired}
             />
             {jobId && (
-              <JobPanel key={jobId} jobId={jobId} onSessionExpired={handleSessionExpired} />
+              <JobPanel
+                key={jobId}
+                jobId={jobId}
+                voices={meta.voices}
+                onSessionExpired={handleSessionExpired}
+              />
             )}
           </>
         )}
