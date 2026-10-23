@@ -119,7 +119,7 @@ def new_job(services, runner_id: str | None = None) -> JobInput:
             audio_processor="mock-audio",
             runner_id=runner_id or services.instance_id,
         )
-    return JobInput(job.id, "A transcript.", Voice.HOAI_MY, 360)
+    return JobInput(job.id, "A transcript.", Voice.ANDREW, 360)
 
 
 def row(db_engine, job_id) -> tuple:

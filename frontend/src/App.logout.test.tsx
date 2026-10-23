@@ -8,11 +8,28 @@ const META = {
   provider_mode: "mock",
   mock_mode: true,
   providers: { translation: "mock", speech: "mock", audio: "mock" },
-  voices: [{ id: "HoaiMy", provider_voice: "vi-VN-HoaiMyNeural", description: "Female" }],
+  voices: [
+    {
+      id: "AndrewMultilingual",
+      label: "Andrew Multilingual",
+      provider_voice: "en-US-AndrewMultilingualNeural",
+      description: "Male",
+    },
+    {
+      id: "EmmaMultilingual",
+      label: "Emma Multilingual",
+      provider_voice: "en-US-EmmaMultilingualNeural",
+      description: "Female",
+    },
+  ],
   timestamp_format: "HH:MM:SS",
   result_ttl_seconds: 3600,
 };
-const SESSION = { authenticated: true, csrf_token: "csrf-1", expires_at: "2030-01-01T00:00:00Z" };
+const SESSION = {
+  authenticated: true,
+  csrf_token: "csrf-1",
+  expires_at: "2030-01-01T00:00:00Z",
+};
 
 type LogoutHandler = () => Promise<Response>;
 
@@ -20,7 +37,10 @@ let logoutHandlers: LogoutHandler[];
 let logoutRequests: RequestInit[];
 
 const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 const apiError = (status: number, code: string, message: string) =>
   json(status, { error: { code, message } });
 

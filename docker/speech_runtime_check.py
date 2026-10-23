@@ -45,7 +45,7 @@ served_seconds = []
 
 
 def fake_azure(request: httpx.Request) -> httpx.Response:
-    text = ET.fromstring(request.content).find("s:voice", NS).text
+    text = "".join(ET.fromstring(request.content).find("s:voice", NS).itertext())
     requests.append(text)
     seconds = len(text) / 15  # about the pace of speech, so the audio looks plausible
     served_seconds.append(seconds)
@@ -66,7 +66,7 @@ provider = AzureSpeechProvider(
 )
 text = " ".join(f"Câu số {i} nói về neural network và loss function." for i in range(12))
 with tempfile.TemporaryDirectory() as work:
-    audio = provider.synthesize(text, Voice.HOAI_MY, Path(work))
+    audio = provider.synthesize(text, Voice.EMMA, Path(work))
     duration = probe_mp3(tools, audio.path)
     head = audio.path.read_bytes()[:2048]
     assert len(requests) > 2, "expected several chunks"

@@ -1,25 +1,23 @@
 """The live smoke script, run against a fake Azure (it must write playable samples, no secrets)."""
 
 import sys
-import xml.etree.ElementTree as ET
 from functools import partial
 
 import httpx
 
 from app.audio.ffmpeg import probe_mp3
 from scripts import azure_speech_smoke
-from tests.audio_helpers import make_wav
+from tests.audio_helpers import make_wav, ssml_text, ssml_voice
 
 KEY = "smoke-test-key-0123456789"
-NS = {"s": "http://www.w3.org/2001/10/synthesis"}
 
 
 def run_script(monkeypatch, tmp_path, *args, handler=None):
     requests = []
 
     def fake_azure(request: httpx.Request) -> httpx.Response:
-        text = ET.fromstring(request.content).find("s:voice", NS).text
-        requests.append((request.url.host, text))
+        text = ssml_text(request.content)
+        requests.append((request.url.host, text, ssml_voice(request.content).get("name")))
         if handler:
             return handler(request)
         return httpx.Response(200, content=make_wav(len(text) / 15))
@@ -51,13 +49,18 @@ def test_it_writes_valid_mp3_samples_for_both_voices(monkeypatch, tmp_path, caps
     assert status == 0
     assert len(requests) == 2  # one short request per voice
     files = sorted(p.name for p in (tmp_path / "out").iterdir())
-    assert files == ["speech-HoaiMy.mp3", "speech-NamMinh.mp3"]
+    assert files == ["speech-AndrewMultilingual.mp3", "speech-EmmaMultilingual.mp3"]
     for path in (tmp_path / "out").iterdir():
         assert probe_mp3(audio_tools, path) > 5
     output = capsys.readouterr().out
     assert "LISTEN" in output  # it never claims the pronunciation is good
     assert KEY not in output
-    assert all("neural network" in text for _, text in requests)
+    # Only the synthetic transcript the Product Owner accepted, once per voice.
+    assert [(text, voice) for _, text, voice in requests] == [
+        (azure_speech_smoke.SAMPLE, "en-US-AndrewMultilingualNeural"),
+        (azure_speech_smoke.SAMPLE, "en-US-EmmaMultilingualNeural"),
+    ]
+    assert {host for host, _, _ in requests} == {"westus2.tts.speech.microsoft.com"}
 
 
 def test_multi_chunk_mode_exercises_joining(monkeypatch, tmp_path, capsys, audio_tools):
@@ -69,12 +72,16 @@ def test_multi_chunk_mode_exercises_joining(monkeypatch, tmp_path, capsys, audio
     assert len(requests) == 2 + 2 * 4  # 4 small chunks per voice besides the 1 normal request
     names = sorted(p.name for p in (tmp_path / "out").iterdir())
     assert names == [
-        "speech-HoaiMy.mp3",
-        "speech-NamMinh.mp3",
-        "speech-multi-chunk-HoaiMy.mp3",
-        "speech-multi-chunk-NamMinh.mp3",
+        "speech-AndrewMultilingual.mp3",
+        "speech-EmmaMultilingual.mp3",
+        "speech-multi-chunk-AndrewMultilingual.mp3",
+        "speech-multi-chunk-EmmaMultilingual.mp3",
     ]
     assert len(requests) <= 20  # fits one minute of the Free (F0) quota
+    # The four small requests of a voice are the accepted transcript line by line, in order.
+    chunks = [text for _, text, voice in requests[1:5]]
+    assert [voice for _, _, voice in requests[1:5]] == ["en-US-AndrewMultilingualNeural"] * 4
+    assert "\n".join(chunks) == azure_speech_smoke.SAMPLE
     capsys.readouterr()
 
 

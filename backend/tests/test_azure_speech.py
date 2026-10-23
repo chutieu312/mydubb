@@ -17,7 +17,8 @@ from app.speech.chunker import split_for_speech
 from app.speech.rate_limit import RequestRateLimiter
 from app.speech.voices import Voice
 from app.translation.glossary import default_glossary
-from tests.audio_helpers import make_wav, wav_samples
+from tests.audio_helpers import make_wav, ssml_spans, ssml_voice, wav_samples
+from tests.audio_helpers import ssml_text as ssml_content_text
 
 KEY = "speech-test-key-0123456789abcdef"
 NS = {"s": "http://www.w3.org/2001/10/synthesis"}
@@ -29,7 +30,7 @@ CHUNK_LIMIT = 200
 
 
 def ssml_text(request: httpx.Request) -> str:
-    return ET.fromstring(request.content).find("s:voice", NS).text
+    return ssml_content_text(request.content)
 
 
 def speaking(request: httpx.Request) -> httpx.Response:
@@ -86,7 +87,7 @@ def make_provider(audio_tools: AudioTools):
 
 def failing_with(code: str, provider: AzureSpeechProvider, work_dir: Path, text: str = TEXT):
     with pytest.raises(ProcessingError) as error:
-        provider.synthesize(text, Voice.HOAI_MY, work_dir)
+        provider.synthesize(text, Voice.ANDREW, work_dir)
     assert error.value.code == code
     assert KEY not in error.value.user_message
     assert list(work_dir.iterdir()) == []  # no partial audio, no leftover temporary files
@@ -98,7 +99,7 @@ def failing_with(code: str, provider: AzureSpeechProvider, work_dir: Path, text:
 
 def test_request_url_headers_and_voice(make_provider, work_dir):
     provider, calls = make_provider()
-    provider.synthesize("Xin chào neural network.", Voice.NAM_MINH, work_dir)
+    provider.synthesize("Xin chào neural network.", Voice.EMMA, work_dir)
 
     (request,) = calls
     assert request.method == "POST"
@@ -108,24 +109,30 @@ def test_request_url_headers_and_voice(make_provider, work_dir):
     assert request.headers["X-Microsoft-OutputFormat"] == "riff-24khz-16bit-mono-pcm"
     assert request.headers["User-Agent"] == "MyDubb"
     assert "Authorization" not in request.headers
-    voice = ET.fromstring(request.content).find("s:voice", NS)
-    assert voice.get("name") == "vi-VN-NamMinhNeural"
-    assert voice.text == "Xin chào neural network."
+    assert ssml_voice(request.content).get("name") == "en-US-EmmaMultilingualNeural"
+    # One voice; Vietnamese and the glossary term are language spans inside it.
+    assert ssml_spans(request.content) == [
+        ("vi-VN", "Xin chào "),
+        ("en-US", "neural network"),
+        ("vi-VN", "."),
+    ]
 
 
 def test_the_other_voice_uses_its_own_name(make_provider, work_dir):
     provider, calls = make_provider()
-    provider.synthesize("Xin chào.", Voice.HOAI_MY, work_dir)
-    assert ET.fromstring(calls[0].content).find("s:voice", NS).get("name") == "vi-VN-HoaiMyNeural"
+    provider.synthesize("Xin chào.", Voice.ANDREW, work_dir)
+    voice = ssml_voice(calls[0].content)
+    assert voice.get("name") == "en-US-AndrewMultilingualNeural"
 
 
 def test_text_is_escaped_and_cannot_add_markup(make_provider, work_dir):
     hostile = '</voice><audio src="https://evil.example/a.mp3"/> a & b < c neural network'
     provider, calls = make_provider()
-    provider.synthesize(hostile, Voice.HOAI_MY, work_dir)
+    provider.synthesize(hostile, Voice.ANDREW, work_dir)
     root = ET.fromstring(calls[0].content)
     assert [child.tag.split("}")[1] for child in root] == ["voice"]
-    assert root.find("s:voice", NS).text == hostile
+    assert ssml_text(calls[0]) == hostile
+    assert all(language in ("vi-VN", "en-US") for language, _ in ssml_spans(calls[0].content))
 
 
 def test_redirects_are_not_followed_so_the_key_never_goes_elsewhere(make_provider, work_dir):
@@ -151,7 +158,7 @@ def test_long_text_is_sent_in_ordered_chunks_without_losing_or_repeating_text(
 
     limiter = CountingLimiter()
     provider, calls = make_provider(handler, limiter=limiter)
-    audio = provider.synthesize(TEXT, Voice.HOAI_MY, work_dir)
+    audio = provider.synthesize(TEXT, Voice.ANDREW, work_dir)
 
     sent = [ssml_text(c) for c in calls]
     assert len(sent) > 3
@@ -174,7 +181,7 @@ def test_the_result_is_a_valid_mp3_and_only_the_final_files_remain(
     make_provider, work_dir, audio_tools
 ):
     provider, calls = make_provider()
-    audio = provider.synthesize(TEXT, Voice.NAM_MINH, work_dir)
+    audio = provider.synthesize(TEXT, Voice.EMMA, work_dir)
 
     assert audio.is_fixture is False
     assert audio.path == work_dir / "speech.mp3"
@@ -333,8 +340,8 @@ def test_two_jobs_share_one_rate_limit(make_provider, work_dir, tmp_path):
     other_dir.mkdir()
     first, first_calls = make_provider(limiter=limiter)
     second, second_calls = make_provider(limiter=limiter)
-    first.synthesize(TEXT, Voice.HOAI_MY, work_dir)
-    second.synthesize(TEXT, Voice.NAM_MINH, other_dir)
+    first.synthesize(TEXT, Voice.ANDREW, work_dir)
+    second.synthesize(TEXT, Voice.EMMA, other_dir)
 
     total = len(first_calls) + len(second_calls)
     assert total > 4
@@ -353,7 +360,7 @@ def test_logs_contain_no_key_ssml_text_or_content(make_provider, work_dir, caplo
 
     provider, _ = make_provider(handler)
     try:
-        provider.synthesize(secret_text, Voice.HOAI_MY, work_dir)
+        provider.synthesize(secret_text, Voice.ANDREW, work_dir)
     except ProcessingError:
         assert fail
     logged = caplog.text

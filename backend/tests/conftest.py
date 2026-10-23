@@ -28,7 +28,7 @@ VALID_JOB = {
     "transcript": "Spring Boot uses Dependency Injection to automatically manage objects.",
     "first_sentence_start": "00:00:10",
     "last_sentence_start": "00:06:10",
-    "voice": "HoaiMy",
+    "voice": "AndrewMultilingual",
 }
 
 

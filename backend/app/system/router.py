@@ -35,7 +35,12 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
         # Implementation behind each pipeline stage, so the UI labels every component.
         "providers": settings.component_providers,
         "voices": [
-            {"id": v.value, "provider_voice": v.azure_voice_name, "description": v.description}
+            {
+                "id": v.value,
+                "label": v.label,
+                "provider_voice": v.azure_voice_name,
+                "description": v.description,
+            }
             for v in Voice
         ],
         "timestamp_format": "HH:MM:SS",

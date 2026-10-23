@@ -126,7 +126,12 @@ export function App() {
               onSessionExpired={handleSessionExpired}
             />
             {jobId && (
-              <JobPanel key={jobId} jobId={jobId} onSessionExpired={handleSessionExpired} />
+              <JobPanel
+                key={jobId}
+                jobId={jobId}
+                voices={meta.voices}
+                onSessionExpired={handleSessionExpired}
+              />
             )}
           </>
         )}

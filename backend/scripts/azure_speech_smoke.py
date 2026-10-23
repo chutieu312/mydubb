@@ -6,11 +6,12 @@ ffmpeg and ffprobe on PATH) in your shell or in the git-ignored `backend/.env`:
     uv run python -m scripts.azure_speech_smoke                 # both voices, 2 requests
     uv run python -m scripts.azure_speech_smoke --multi-chunk   # also exercises joining
 
-It sends only the short synthetic Vietnamese sentences below (no user data) and writes
-`speech-HoaiMy.mp3` / `speech-NamMinh.mp3` (and `speech-multi-chunk-<voice>.mp3`) into
-`--output-dir` (default `speech-samples/`, git-ignored). Each voice costs about 300
-characters; `--multi-chunk` adds about 190 more per voice and 4 requests, using a tiny chunk
-limit (one request per sentence) so chunking and joining are tested without spending quota.
+It sends only the synthetic transcript below (no user data), once per voice, and writes
+`speech-AndrewMultilingual.mp3` / `speech-EmmaMultilingual.mp3` (and
+`speech-multi-chunk-<voice>.mp3`) into `--output-dir` (default `speech-samples/`,
+git-ignored). Each voice costs about 260 characters; `--multi-chunk` adds the same again per
+voice, in 4 requests (one per line) through a tiny chunk limit, to test chunking and joining
+without spending quota. That is 10 requests in all, under the Free (F0) limit of 20 per minute.
 
 Exit code 0 only means the requests succeeded and the MP3 files are structurally valid.
 It does NOT prove that the pronunciation is good: a person must listen to the files.
@@ -32,20 +33,17 @@ from app.speech.rate_limit import RequestRateLimiter
 from app.speech.voices import Voice
 from app.translation.glossary import default_glossary
 
-# Synthetic Vietnamese text with the terms the Product Owner asked to evaluate.
+# The synthetic transcript the Product Owner auditioned and accepted for both voices. It
+# contains the terms to evaluate: neural network, gradient descent, loss function, Spring Boot,
+# Dependency Injection, REST API, JSON, pipeline and CI/CD.
 SAMPLE = (
-    "Một neural network sử dụng gradient descent để giảm thiểu loss function. "
-    "Spring Boot dùng Dependency Injection để quản lý các đối tượng. "
-    "Ứng dụng gọi REST API và nhận dữ liệu JSON sau khi pipeline CI/CD chạy xong."
+    "Hôm nay chúng ta tìm hiểu cách một neural network học từ dữ liệu.\n"
+    "Mô hình sử dụng gradient descent để giảm thiểu loss function.\n"
+    "Spring Boot sử dụng Dependency Injection để quản lý các đối tượng.\n"
+    "Ứng dụng gọi REST API, nhận dữ liệu JSON và chạy pipeline CI/CD."
 )
-# Used with a tiny chunk limit: one chunk (request) per sentence.
-MULTI_CHUNK_SAMPLE = (
-    "Đây là câu thứ nhất, nói về neural network. "
-    "Đây là câu thứ hai, nói về gradient descent. "
-    "Đây là câu thứ ba, nói về loss function và JSON. "
-    "Đây là câu thứ tư, nói về Spring Boot và REST API."
-)
-MULTI_CHUNK_LIMIT = 80  # below the app's minimum on purpose: one chunk per sentence
+# The same text with a tiny chunk limit: one chunk (request) per line, to test joining.
+MULTI_CHUNK_LIMIT = 80  # below the app's minimum on purpose
 
 
 def main() -> int:
@@ -68,7 +66,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     jobs = [("speech", SAMPLE, 2000)]
     if args.multi_chunk:
-        jobs.append(("speech-multi-chunk", MULTI_CHUNK_SAMPLE, MULTI_CHUNK_LIMIT))
+        jobs.append(("speech-multi-chunk", SAMPLE, MULTI_CHUNK_LIMIT))
 
     for voice in Voice:
         for label, text, max_chars in jobs:

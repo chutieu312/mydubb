@@ -33,10 +33,21 @@ def test_readiness_fails_without_leaking_connection_details(make_settings):
 def test_meta_announces_mock_mode_and_voices(client):
     body = client.get("/api/meta").json()
     assert body["mock_mode"] is True
-    assert {v["id"]: v["provider_voice"] for v in body["voices"]} == {
-        "HoaiMy": "vi-VN-HoaiMyNeural",
-        "NamMinh": "vi-VN-NamMinhNeural",
-    }
+    # Order matters: the first voice is the default shown selected by the UI.
+    assert body["voices"] == [
+        {
+            "id": "AndrewMultilingual",
+            "label": "Andrew Multilingual",
+            "provider_voice": "en-US-AndrewMultilingualNeural",
+            "description": "Male",
+        },
+        {
+            "id": "EmmaMultilingual",
+            "label": "Emma Multilingual",
+            "provider_voice": "en-US-EmmaMultilingualNeural",
+            "description": "Female",
+        },
+    ]
 
 
 def test_api_responses_carry_security_headers(client):

@@ -48,7 +48,7 @@ test("completes a mock job: stages, text-only result, playback, download", async
     "10:30 is our meeting time.",
     "16:30 is the aspect ratio.",
   ].join("\n");
-  await fillJobForm(page, { transcript, voice: "NamMinh" });
+  await fillJobForm(page, { transcript, voice: "Emma Multilingual" });
   await expect(page.getByText("00:06:00 (360 s)")).toBeVisible();
 
   const created = page.waitForResponse(

@@ -4,7 +4,6 @@ import glob
 import json
 import tempfile
 import uuid
-import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
 
 import httpx
@@ -16,7 +15,7 @@ from app.audio.ffmpeg import AudioTools, probe_mp3
 from app.config import ConfigurationError, Settings, load_settings
 from app.main import create_app
 from app.services import build_services
-from tests.audio_helpers import make_wav
+from tests.audio_helpers import make_wav, ssml_spans, ssml_text, ssml_voice
 from tests.conftest import VALID_JOB, create_job, login, wait_for_terminal
 
 TRANSLATOR_KEY = "translator-key-0123456789abcdef"
@@ -31,7 +30,6 @@ AZURE_BOTH = {
     "translation_provider": "azure",
     "azure_translator_key": TRANSLATOR_KEY,
 }
-NS = {"s": "http://www.w3.org/2001/10/synthesis"}
 
 
 def vietnamese(request: httpx.Request) -> httpx.Response:
@@ -43,7 +41,7 @@ def vietnamese(request: httpx.Request) -> httpx.Response:
 
 
 def speaking(request: httpx.Request) -> httpx.Response:
-    text = ET.fromstring(request.content).find("s:voice", NS).text
+    text = ssml_text(request.content)
     return httpx.Response(200, content=make_wav(len(text) / 15))
 
 
@@ -219,7 +217,7 @@ def test_job_completes_with_real_translation_and_real_speech(speech_client, audi
     client, calls = speech_client()
     csrf = login(client)
 
-    response = create_job(client, csrf, voice="NamMinh")
+    response = create_job(client, csrf, voice="EmmaMultilingual")
     assert response.status_code == 202
     job = wait_for_terminal(client, response.json()["id"], timeout=30)
     assert job["status"] == "completed", job
@@ -237,9 +235,10 @@ def test_job_completes_with_real_translation_and_real_speech(speech_client, audi
     # The speech request carries the translated text (not the English transcript) and the
     # voice the user chose.
     (speech_request,) = calls["speech"]
-    voice = ET.fromstring(speech_request.content).find("s:voice", NS)
-    assert voice.get("name") == "vi-VN-NamMinhNeural"
-    assert voice.text == "Dịch: " + VALID_JOB["transcript"]
+    assert ssml_voice(speech_request.content).get("name") == "en-US-EmmaMultilingualNeural"
+    assert ssml_text(speech_request.content) == "Dịch: " + VALID_JOB["transcript"]
+    languages = {language for language, _ in ssml_spans(speech_request.content)}
+    assert languages == {"vi-VN", "en-US"}  # Spring Boot / Dependency Injection are English spans
 
     audio = client.get(result["audio"]["url"])
     assert audio.status_code == 200

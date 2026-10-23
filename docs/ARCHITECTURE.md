@@ -211,7 +211,7 @@ mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
 | 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | Done |
 | 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
-| 3B | Azure Speech (real Vietnamese voices, chunking, MP3 assembly; duration not adjusted) | Implemented in a pull request; awaiting Product Owner acceptance (listening evaluation) |
+| 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Implemented in a pull request; awaiting Product Owner acceptance (listening evaluation) |
 | 3C | FFmpeg duration processing | Later |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
@@ -308,17 +308,37 @@ most 10 minutes of audio, and longer audio is **silently truncated** with a norm
 "64 KB SSML per turn" limit belongs to WebSocket and is not applied. Microsoft also states that
 many `429`s come from backend capacity for a voice rather than from the quota.
 
-**Voices and SSML.** `HoaiMy` -> `vi-VN-HoaiMyNeural`, `NamMinh` -> `vi-VN-NamMinhNeural`. Both
-are listed as Standard voices without styles, roles or multilingual/secondary locales, so no
-`lang`, `phoneme`, `mstts` or style markup is used. The request is a fixed skeleton
-(`<speak><voice name=...>`) around the text, which is XML-escaped (characters invalid in XML
-are removed); user text can only ever be text content. English terms are therefore read with the
-default behavior of the two voices, and whether that is intelligible is a **listening**
-judgement made by the Product Owner (`scripts/azure_speech_smoke.py` creates the samples), not
-something HTTP success or a valid MP3 proves.
+**Voices and SSML.** After listening to real audio the Product Owner replaced the two Vietnamese
+Standard voices (`HoaiMy`, `NamMinh`) with `AndrewMultilingual` (default) ->
+`en-US-AndrewMultilingualNeural` and `EmmaMultilingual` -> `en-US-EmmaMultilingualNeural`.
+Both are multilingual voices, so one speaker reads Vietnamese and English. The SSML is the
+structure that was auditioned and accepted (`speech/ssml.py`):
 
-**Chunking** (`speech/chunker.py`): the translated text (whitespace normalized, nothing else
-changed) is packed greedily into chunks of whole lines and sentences up to
+```
+<speak ... xml:lang="en-US"><voice name="en-US-AndrewMultilingualNeural">
+  <lang xml:lang="vi-VN">Hôm nay chúng ta tìm hiểu cách một </lang>
+  <lang xml:lang="en-US">neural network</lang>
+  <lang xml:lang="vi-VN"> học từ dữ liệu. ...</lang> ...
+</voice></speak>
+```
+
+Exactly one `<voice>` per request (never a second speaker), default speaking rate, no `phoneme`,
+style or other markup. The English spans come from the **shared glossary** (the same
+`translation/data/glossary.txt` and matching rules used to protect terms in translation; there is
+no second list for speech): longest match wins, spelling and case are kept, and `REST API`,
+`pipeline` were added to it for this sample. The spans partition the text exactly, so
+concatenating them returns the chunk unchanged (same spelling, case, whitespace, order). The text
+is XML-escaped (characters invalid in XML are removed) and only ever appears as text content of
+a span, so it cannot add elements, attributes or audio URLs. **Limit:** an English term that is
+not in the glossary gets no English span; it is read inside the Vietnamese span and may be
+mispronounced. There is no LLM, phoneme dictionary or automatic term detection. Whether the
+result sounds right is a **listening** judgement made by the Product Owner
+(`scripts/azure_speech_smoke.py` creates the samples), not something HTTP success or a valid MP3
+proves. Jobs created with the former voices keep their stored name (the `jobs.voice` column is
+free text); it is only displayed and never mapped back to a voice.
+
+**Chunking** (`speech/chunker.py`): the translated text (spaces inside a line normalized, blank
+lines dropped, lines kept on separate lines as in the accepted audition) is packed greedily into chunks of whole lines and sentences up to
 `AZURE_SPEECH_MAX_CHUNK_CHARS` (default 2,000, i.e. a few minutes of speech, far below 10
 minutes). A sentence over the limit is cut at spaces, never inside a glossary term or a word; a
 run over the limit with no usable space fails with `speech_input_unsupported` instead of being

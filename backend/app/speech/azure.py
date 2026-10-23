@@ -15,6 +15,9 @@ REST rather than the Speech SDK, checked against Microsoft Learn on 2026-10-22:
   silently TRUNCATED to 10 minutes, with a normal 200 response. Chunks are therefore far
   below that, and a result near 10 minutes is rejected instead of being accepted as complete.
   The 64 KB SSML limit in the same table is for WebSocket and is not applied here.
+* Voices are `en-US-AndrewMultilingualNeural` / `en-US-EmmaMultilingualNeural`. One `<voice>`
+  per request holds `<lang xml:lang="vi-VN">` spans for Vietnamese and `<lang xml:lang="en-US">`
+  spans for glossary terms (see `ssml.py`); the same speaker reads both.
 * `riff-24khz-16bit-mono-pcm` is requested so chunks can be joined as samples and encoded once
   to MP3 (see `app/audio`); MP3/WAV files are never concatenated byte for byte.
 
@@ -175,7 +178,7 @@ class AzureSpeechProvider:
                 except RateLimiterClosed:
                     raise _failure("speech_cancelled") from None
                 target = scratch / f"chunk-{index:05d}.wav"
-                self._synthesize_chunk(client, build_ssml(chunk, voice), target)
+                self._synthesize_chunk(client, build_ssml(chunk, voice, self._glossary), target)
                 self._validate_chunk(target, len(chunk))
                 files.append(target)
         return files

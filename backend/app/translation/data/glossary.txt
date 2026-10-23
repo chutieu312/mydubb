@@ -29,6 +29,7 @@
 # --- Software ---------------------------------------------------------------------------
 API
 =REST
+=REST API
 JSON
 YAML
 HTTP
@@ -49,6 +50,7 @@ Python
 Spring Boot
 Dependency Injection
 microservice
+pipeline
 pull request
 unit test
 load balancer

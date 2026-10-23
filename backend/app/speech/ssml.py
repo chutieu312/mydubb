@@ -1,17 +1,33 @@
 """SSML for one synthesis request, built only from escaped plain text.
 
-The text is always element content of a single `<voice>`: it can never add elements,
-attributes or directives. Only the voice name (from the approved `Voice` enum) and the fixed
-document skeleton are written by the application. No pronunciation, language or
-multilingual markup is used: the two voices read English terms with their default behavior.
+Structure (the one auditioned and accepted by the Product Owner): a single `<voice>` for
+the whole request, so one speaker reads everything, containing consecutive
+`<lang xml:lang="vi-VN">` spans for the Vietnamese text and `<lang xml:lang="en-US">` spans
+for the English terms the shared glossary recognizes. Both approved voices are multilingual
+voices, the case Microsoft documents for `<lang>`. Speaking rate and everything else keep
+their defaults.
+
+The spans partition the text exactly: spelling, case, whitespace and order are unchanged, so
+concatenating the span texts gives the input back. The text is XML-escaped (and characters XML
+cannot carry are removed), so it can only ever be text content of a span: it can never add
+elements, attributes or audio URLs. Only the fixed skeleton, the voice name from the `Voice`
+enum and the two language tags are written by the application.
+
+Limit: only glossary terms get an English span. An English term that is not in the glossary
+stays inside a Vietnamese span and the voice may mispronounce it; there is no automatic
+detection of other terms.
 """
 
 import re
 from xml.sax.saxutils import escape
 
 from app.speech.voices import Voice
+from app.translation.glossary import Glossary
 
-LOCALE = "vi-VN"
+VIETNAMESE = "vi-VN"
+ENGLISH = "en-US"
+# The skeleton's own language, as in the accepted sample.
+ROOT_LANGUAGE = "en-US"
 # Characters that XML 1.0 cannot represent (control characters, lone surrogates, U+FFFE/F).
 _XML_INVALID = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff￾￿]")
 
@@ -20,8 +36,26 @@ def escape_text(text: str) -> str:
     return escape(_XML_INVALID.sub("", text))
 
 
-def build_ssml(text: str, voice: Voice) -> str:
+def language_spans(text: str, glossary: Glossary) -> list[tuple[str, str]]:
+    """(language, text) pieces covering `text` exactly: English for glossary terms."""
+    spans: list[tuple[str, str]] = []
+    position = 0
+    for match in glossary.find_matches(text):
+        if match.start > position:
+            spans.append((VIETNAMESE, text[position : match.start]))
+        spans.append((ENGLISH, text[match.start : match.end]))
+        position = match.end
+    if position < len(text):
+        spans.append((VIETNAMESE, text[position:]))
+    return spans
+
+
+def build_ssml(text: str, voice: Voice, glossary: Glossary) -> str:
+    body = "".join(
+        f'<lang xml:lang="{language}">{escape_text(piece)}</lang>'
+        for language, piece in language_spans(text, glossary)
+    )
     return (
-        f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{LOCALE}">'
-        f'<voice name="{voice.azure_voice_name}">{escape_text(text)}</voice></speak>'
+        f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+        f'xml:lang="{ROOT_LANGUAGE}"><voice name="{voice.azure_voice_name}">{body}</voice></speak>'
     )

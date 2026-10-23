@@ -261,7 +261,8 @@ Standard (S0) or change billing without a decision.
 1. Open https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices (create a
    "Speech" single-service resource).
 2. **Resource group**: the same as the Translator, e.g. `mydubb`. **Region**: a region that
-   offers the Vietnamese voices, e.g. **West US 2** (`westus2`); note it, it is
+   offers `en-US-AndrewMultilingualNeural` and `en-US-EmmaMultilingualNeural`, e.g. **West US 2**
+   (`westus2`); note it, it is
    `AZURE_SPEECH_REGION`. **Name**: e.g. `mydubb-speech`.
 3. **Pricing tier**: **Free F0**. It allows 20 transactions per 60 seconds, not adjustable, and a
    monthly allowance listed on the
@@ -283,18 +284,20 @@ AZURE_SPEECH_REGION=westus2
 
 ```bash
 cd backend
-uv run python -m scripts.azure_speech_smoke                # both voices, 2 requests (~600 characters)
-uv run python -m scripts.azure_speech_smoke --multi-chunk  # also 8 small requests to test joining
+uv run python -m scripts.azure_speech_smoke                # both voices, 2 requests (~520 characters)
+uv run python -m scripts.azure_speech_smoke --multi-chunk  # also 8 small requests (the same text line by line) to test joining
 ```
 
-It sends only short synthetic Vietnamese sentences that contain `neural network`,
-`gradient descent`, `loss function`, `Spring Boot`, `Dependency Injection`, `REST API`, `JSON` and
-`CI/CD`, and writes `speech-samples/speech-HoaiMy.mp3`, `speech-NamMinh.mp3` (and
-`speech-multi-chunk-*.mp3`, which uses an 80 character chunk limit, so each of its four sentences is
-its own request). Exit code 0 only means the requests worked and the MP3s are structurally valid.
+It sends only the synthetic four-line Vietnamese transcript auditioned by the Product Owner
+(`neural network`, `gradient descent`, `loss function`, `Spring Boot`, `Dependency Injection`,
+`REST API`, `JSON`, `pipeline`, `CI/CD`) and writes
+`speech-samples/speech-AndrewMultilingual.mp3`, `speech-EmmaMultilingual.mp3` (and
+`speech-multi-chunk-*.mp3`, which uses an 80 character chunk limit, so each line is its own
+request). Exit code 0 only means the requests worked and the MP3s are structurally valid.
 **Listen to them** and judge: clear Vietnamese, recognizable English terms, no lost or repeated
-sentence, sensible pauses (including where chunks were joined). As of this pull request the live
-test has **not** been run (no Speech resource yet).
+sentence, sensible pauses (including where chunks were joined). The script ran live on
+2026-10-22 with the F0 resource (see the pull request for the result); passing it still says
+nothing about pronunciation quality.
 
 ### 3. Enable on Render (after acceptance only)
 

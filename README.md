@@ -10,10 +10,10 @@ English-to-Vietnamese translation by Azure Translator and a glossary that keeps 
 terms in English (`TRANSLATION_PROVIDER=azure`; off by default, so local and CI runs stay
 all-mock). Speech and audio processing are still mock on production (on top of Milestones 1, 2A
 and 2B: application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon).
-Real Vietnamese speech by Azure Speech (`SPEECH_PROVIDER=azure`, Milestone 3B) is implemented
-behind configuration and awaits acceptance, so production still serves the mock fixture; FFmpeg
-duration processing (Milestone 3C) is not implemented, so no exact-duration dubbing exists yet.
-See
+Real speech by Azure Speech (`SPEECH_PROVIDER=azure`, Milestone 3B; voices Andrew Multilingual,
+the default, and Emma Multilingual) is implemented behind configuration and awaits acceptance, so
+production still serves the mock fixture; FFmpeg duration processing (Milestone 3C) is not
+implemented, so no exact-duration dubbing exists yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
 branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
@@ -104,8 +104,10 @@ English; add a term by adding a line to that file in a pull request.
 
 ### Azure speech (Milestone 3B)
 
-`SPEECH_PROVIDER=azure` makes the speech stage generate real Vietnamese speech from the
-translated text with Azure Speech (REST API). It works with either translation provider
+`SPEECH_PROVIDER=azure` makes the speech stage generate real speech from the translated text
+with Azure Speech (REST API), using one multilingual voice per audio (`AndrewMultilingual`,
+the default, or `EmmaMultilingual`) with the Vietnamese text and the glossary's English terms
+marked by language. Terms outside the glossary are not marked and may be mispronounced. It works with either translation provider
 (`mock | azure`) and keeps `PROVIDER_MODE=mock`: audio processing is still a pass-through, so the
 audio length is **not** adjusted to the target. Required: `AZURE_SPEECH_KEY` and
 `AZURE_SPEECH_REGION` (the Speech resource's own key; the Translator key is never reused), plus

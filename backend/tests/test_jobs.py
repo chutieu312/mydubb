@@ -36,7 +36,7 @@ def test_empty_transcripts_are_rejected(client, transcript):
     assert "transcript" in errors
 
 
-@pytest.mark.parametrize("voice", ["HoaiMy", "NamMinh"])
+@pytest.mark.parametrize("voice", ["AndrewMultilingual", "EmmaMultilingual"])
 def test_approved_voices_are_accepted(client, voice):
     csrf = login(client)
     response = create_job(client, csrf, voice=voice)
@@ -44,10 +44,49 @@ def test_approved_voices_are_accepted(client, voice):
     assert response.json()["voice"] == voice
 
 
-@pytest.mark.parametrize("voice", ["hoaimy", "vi-VN-HoaiMyNeural", "en-US-JennyNeural", ""])
+@pytest.mark.parametrize(
+    "voice",
+    [
+        "HoaiMy",  # voices replaced in Milestone 3B are no longer accepted for new jobs
+        "NamMinh",
+        "hoaimy",
+        "andrewmultilingual",
+        "Andrew",
+        "en-US-AndrewMultilingualNeural",
+        "vi-VN-HoaiMyNeural",
+        "en-US-JennyNeural",
+        "",
+    ],
+)
 def test_other_voices_are_rejected(client, voice):
     csrf = login(client)
     assert "voice" in field_errors(create_job(client, csrf, voice=voice))
+
+
+def test_andrew_is_the_default_voice_when_none_is_sent(client):
+    csrf = login(client)
+    body = {
+        "transcript": "Spring Boot uses Dependency Injection.",
+        "first_sentence_start": "00:00:10",
+        "last_sentence_start": "00:06:10",
+    }
+    response = client.post("/api/jobs", json=body, headers={"X-CSRF-Token": csrf})
+    assert response.status_code == 202
+    assert response.json()["voice"] == "AndrewMultilingual"
+
+
+def test_jobs_created_with_a_replaced_voice_are_still_readable(client, db_engine):
+    """A job (and result) stored with HoaiMy/NamMinh must not break reading or display."""
+    csrf = login(client)
+    job = wait_for_terminal(client, create_job(client, csrf).json()["id"])
+    assert job["status"] == "completed"
+    with db_engine.begin() as conn:
+        conn.execute(text("UPDATE jobs SET voice = 'HoaiMy' WHERE id = :id"), {"id": job["id"]})
+
+    assert client.get(f"/api/jobs/{job['id']}").json()["voice"] == "HoaiMy"
+    result = client.get(f"/api/jobs/{job['id']}/result")
+    assert result.status_code == 200
+    assert client.get(result.json()["audio"]["url"]).status_code == 200
 
 
 def test_backend_calculates_target_duration(client):

@@ -1,6 +1,7 @@
 import pytest
 
 from app.speech.chunker import SpeechTextTooLongError, split_for_speech
+from app.speech.ssml import language_spans
 from app.translation.glossary import Glossary, default_glossary
 
 GLOSSARY = Glossary.from_text("neural network\nDependency Injection\nSpring Boot\nJSON")
@@ -16,9 +17,49 @@ def test_short_text_is_one_chunk_and_blank_text_is_none():
     assert split_for_speech(" \n \r\n ", GLOSSARY, 200) == []
 
 
-def test_lines_are_packed_in_order_and_whitespace_is_normalized():
+def test_lines_are_packed_in_order_keeping_one_line_break_between_them():
     text = "Dòng một.\n\n  Dòng   hai.\r\nDòng ba."
-    assert split_for_speech(text, GLOSSARY, 200) == ["Dòng một. Dòng hai. Dòng ba."]
+    # As in the accepted audition: lines stay on separate lines inside a chunk; spaces inside
+    # a line are normalized and blank lines dropped.
+    assert split_for_speech(text, GLOSSARY, 200) == ["Dòng một.\nDòng hai.\nDòng ba."]
+
+
+ACCEPTED = (
+    "Hôm nay chúng ta tìm hiểu cách một neural network học từ dữ liệu.\n"
+    "Mô hình sử dụng gradient descent để giảm thiểu loss function.\n"
+    "Spring Boot sử dụng Dependency Injection để quản lý các đối tượng.\n"
+    "Ứng dụng gọi REST API, nhận dữ liệu JSON và chạy pipeline CI/CD."
+)
+ACCEPTED_TERMS = [
+    "neural network",
+    "gradient descent",
+    "loss function",
+    "Spring Boot",
+    "Dependency Injection",
+    "REST API",
+    "JSON",
+    "pipeline",
+    "CI/CD",
+]
+
+
+def test_the_accepted_transcript_is_one_chunk_identical_to_the_audition():
+    assert split_for_speech(ACCEPTED, default_glossary(), 2000) == [ACCEPTED]
+
+
+@pytest.mark.parametrize("limit", [70, 80, 100, 130, 200, 300])
+def test_chunking_the_accepted_transcript_keeps_content_order_and_whole_english_spans(limit):
+    glossary = default_glossary()
+    chunks = split_for_speech(ACCEPTED, glossary, limit)
+    assert all(len(chunk) <= limit for chunk in chunks)
+    assert words(" ".join(chunks)) == words(ACCEPTED)
+    english = [
+        span
+        for chunk in chunks
+        for language, span in language_spans(chunk, glossary)
+        if language == "en-US"
+    ]
+    assert english == ACCEPTED_TERMS  # every term once, whole, in order
 
 
 def test_chunks_respect_the_limit_and_keep_every_word_in_order():

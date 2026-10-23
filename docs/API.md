@@ -31,7 +31,7 @@ must send `X-CSRF-Token` with the token returned by `POST`/`GET /api/session`. I
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` until Milestone 3C), `voices[] {id, provider_voice, description}`, `timestamp_format`, `result_ttl_seconds` |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` until Milestone 3C), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds` |
 
 ## Session (Private Beta access)
 
@@ -51,8 +51,13 @@ Requires session + CSRF. `204`, revokes the session server-side and clears the c
 
 ## Jobs
 
-Voices (API values): `HoaiMy` → `vi-VN-HoaiMyNeural`, `NamMinh` → `vi-VN-NamMinhNeural`.
-Any other value is rejected.
+Voices (API values): `AndrewMultilingual` ("Andrew Multilingual") →
+`en-US-AndrewMultilingualNeural` and `EmmaMultilingual` ("Emma Multilingual") →
+`en-US-EmmaMultilingualNeural`. `voice` is optional and defaults to `AndrewMultilingual`; any
+other value, including the former `HoaiMy` and `NamMinh`, is rejected with
+`422 validation_error` (field `voice`). A job created before this change keeps its stored voice
+name: `GET /api/jobs/{id}` and its result still work and return that name (e.g. `HoaiMy`) in
+`voice`, which clients must treat as an opaque string.
 
 ### `POST /api/jobs`
 Requires session + CSRF.
@@ -62,7 +67,7 @@ Requires session + CSRF.
   "transcript": "English text, with or without timestamps",
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
-  "voice": "HoaiMy"
+  "voice": "AndrewMultilingual"
 }
 ```
 
@@ -98,7 +103,7 @@ belongs to another session** (indistinguishable by design).
 {
   "id": "uuid",
   "status": "queued | translating | synthesizing | processing | completed | failed",
-  "voice": "HoaiMy",
+  "voice": "AndrewMultilingual",
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
   "target_duration_seconds": 360,

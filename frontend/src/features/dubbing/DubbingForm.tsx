@@ -92,7 +92,7 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
       </p>
 
       <fieldset className="field">
-        <legend>Vietnamese voice</legend>
+        <legend>Voice</legend>
         <div className="row">
           {voices.map((v) => (
             <label key={v.id} className="choice">
@@ -103,7 +103,7 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
                 checked={voice === v.id}
                 onChange={() => setVoice(v.id)}
               />
-              {v.id} <span className="muted">({v.description})</span>
+              {v.label} <span className="muted">({v.description})</span>
             </label>
           ))}
         </div>

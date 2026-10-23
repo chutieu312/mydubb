@@ -7,14 +7,34 @@ import { ResultView } from "./features/jobs/ResultView";
 const BASE_META = {
   provider_mode: "mock",
   mock_mode: true,
-  voices: [{ id: "HoaiMy", provider_voice: "vi-VN-HoaiMyNeural", description: "Female" }],
+  voices: [
+    {
+      id: "AndrewMultilingual",
+      label: "Andrew Multilingual",
+      provider_voice: "en-US-AndrewMultilingualNeural",
+      description: "Male",
+    },
+    {
+      id: "EmmaMultilingual",
+      label: "Emma Multilingual",
+      provider_voice: "en-US-EmmaMultilingualNeural",
+      description: "Female",
+    },
+  ],
   timestamp_format: "HH:MM:SS",
   result_ttl_seconds: 3600,
 };
-const SESSION = { authenticated: true, csrf_token: "csrf-1", expires_at: "2030-01-01T00:00:00Z" };
+const SESSION = {
+  authenticated: true,
+  csrf_token: "csrf-1",
+  expires_at: "2030-01-01T00:00:00Z",
+};
 
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 
 function stubApi(providers: Record<string, string>, result?: unknown) {
   vi.stubGlobal(
@@ -82,7 +102,11 @@ describe("App provider labels", () => {
 
 const RESULT = {
   job_id: "j1",
-  translation: { text: "Một <b>neural network</b> & loss function", is_illustrative: false, provider: "azure-translator" },
+  translation: {
+    text: "Một <b>neural network</b> & loss function",
+    is_illustrative: false,
+    provider: "azure-translator",
+  },
   audio: {
     url: "/a",
     download_url: "/a?download=1",
@@ -125,7 +149,12 @@ describe("ResultView labels", () => {
   it("a duration-adjusted result does not carry the not-adjusted badge", async () => {
     const adjusted = {
       ...RESULT,
-      audio: { ...RESULT.audio, provider: "azure-speech", is_fixture: false, duration_adjusted: true },
+      audio: {
+        ...RESULT.audio,
+        provider: "azure-speech",
+        is_fixture: false,
+        duration_adjusted: true,
+      },
     };
     stubApi({ translation: "azure", speech: "azure", audio: "ffmpeg" }, adjusted);
     render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
@@ -147,7 +176,11 @@ describe("ResultView labels", () => {
   it("keeps the illustrative badge for mock translations", async () => {
     const mock = {
       ...RESULT,
-      translation: { text: "(VI mock) x", is_illustrative: true, provider: "mock-translation" },
+      translation: {
+        text: "(VI mock) x",
+        is_illustrative: true,
+        provider: "mock-translation",
+      },
     };
     stubApi({ translation: "mock", speech: "mock", audio: "mock" }, mock);
     render(<ResultView jobId="j1" onSessionExpired={() => {}} />);

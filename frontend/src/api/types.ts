@@ -10,6 +10,8 @@ export const TERMINAL_STATUSES: readonly JobStatus[] = ["completed", "failed"];
 
 export interface VoiceOption {
   id: string;
+  // Name shown to the user, e.g. "Andrew Multilingual".
+  label: string;
   provider_voice: string;
   description: string;
 }
