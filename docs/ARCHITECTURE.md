@@ -30,6 +30,8 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
 | `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter | `processing_errors`, `audio`, `translation.glossary` |
+| `pronunciation/` | English left in a translation (pure functions): Vietnamese-syllable check, detection of English words/phrases/code against the source, the per-job `SpeechTerms` matcher, candidate keys | `translation.glossary` |
+| `glossary_candidates/` | Candidate table, counting per job, review/export/promote operations (used by `scripts/glossary_candidates.py`) | db, `jobs.models`, `pronunciation` |
 | `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
 | `jobs/` | Job model, guarded status transitions, executor, pipeline, HTTP router | all of the above via protocols |
@@ -113,6 +115,7 @@ JSON, roughly a million and a half words) to protect a small instance's memory.
 | Translation text + MP3 | Local disk `RESULT_STORAGE_DIR/<job_id>/` | `RESULT_TTL_SECONDS` after completion (default 1 h) |
 | Per-job working files | OS temp dir | Deleted when the pipeline ends |
 | Sessions | PostgreSQL `access_sessions` | Deleted by cleanup once expired or revoked; their jobs keep metadata with `session_id = NULL` |
+| Glossary candidates (term, key, kind, job count, first/last seen, review status) | PostgreSQL `glossary_candidates` | No automatic deletion and no retention of its own; independent of results, jobs and sessions (no foreign key). No transcript, translation, excerpt, job or session is stored with a term |
 
 Cleanup runs at startup and every `CLEANUP_INTERVAL_SECONDS` (in a thread): removes expired
 or unreadable result directories, abandoned `.staging-*` directories and stale sessions.
@@ -255,7 +258,9 @@ Pipeline inside `translate(text)`:
    case-sensitive; whole words only, optional plural `s` ("APIs"); the longest match wins when
    terms overlap. Provider-independent text matching. It protects **known** terms only: new
    terms in any field are not detected automatically, and the glossary UI and LLM-based
-   detection are out of scope. Ambiguous everyday words (class, model, cell, key, ...) are
+   detection are out of scope. (Speech does read English that the translation kept with
+   `en-US`, and collects it as glossary candidates for review; that never protects a term in
+   translation. See "English left in the translation".) Ambiguous everyday words (class, model, cell, key, ...) are
    deliberately not listed: the glossary policy is to add specific phrases ("loss function"),
    because keeping a common word in English in every context would damage ordinary sentences.
 2. **Markup** (`notranslate_markup.py`): the transcript is untrusted plain text. It is
@@ -329,16 +334,17 @@ structure that was auditioned and accepted (`speech/ssml.py`):
 ```
 
 Exactly one `<voice>` per request (never a second speaker), default speaking rate, no `phoneme`,
-style or other markup. The English spans come from the **shared glossary** (the same
+style or other markup. The English spans come first from the **shared glossary** (the same
 `translation/data/glossary.txt` and matching rules used to protect terms in translation; there is
 no second list for speech): longest match wins, spelling and case are kept, and `REST API`,
-`pipeline` were added to it for this sample. The spans partition the text exactly, so
+`pipeline` were added to it for this sample. Since the English-detection change, the English the
+translation kept for a job is added after the glossary (see "English left in the translation"
+below). The spans partition the text exactly, so
 concatenating them returns the chunk unchanged (same spelling, case, whitespace, order). The text
 is XML-escaped (characters invalid in XML are removed) and only ever appears as text content of
-a span, so it cannot add elements, attributes or audio URLs. **Limit:** an English term that is
-not in the glossary gets no English span; it is read inside the Vietnamese span and may be
-mispronounced. There is no LLM, phoneme dictionary or automatic term detection. Whether the
-result sounds right is a **listening** judgement made by the Product Owner
+a span, so it cannot add elements, attributes or audio URLs. **Limit (before the English-detection change):** an English
+term that was not in the glossary got no English span and was read inside the Vietnamese span.
+Whether the result sounds right is a **listening** judgement made by the Product Owner
 (`scripts/azure_speech_smoke.py` creates the samples), not something HTTP success or a valid MP3
 proves. Jobs created with the former voices keep their stored name (the `jobs.voice` column is
 free text); it is only displayed and never mapped back to a voice.
@@ -559,6 +565,101 @@ more than the target, as before. Extreme speeds relative to the natural speech (
 audio that was already much shorter than the baseline) mean large tempo factors, and quality drops
 well beyond roughly 0.5-2x overall, as described under "Duration fitting". At 0.5x the filter's
 window rounding can add up to about 85 ms of silence at the end (reported as `padded_samples`).
+
+### English left in the translation, and glossary candidates
+
+Two layers, never mixed:
+
+| | Official glossary | Candidate store |
+|---|---|---|
+| Where | `translation/data/glossary.txt` in Git | PostgreSQL `glossary_candidates` |
+| Used at runtime for | Protecting terms in translation **and** `en-US` spans in speech | Nothing: it only collects terms for review |
+| Changed by | A reviewed pull request, merged by the Product Owner | Jobs (counting) and the local review tool (status) |
+
+A job never edits the glossary, opens a pull request or approves a candidate.
+
+**Detection** (`pronunciation/detector.py`, pure, no network or model; runs after a real
+translation, never on mock text). It compares the cleaned English source with the Vietnamese
+translation and never changes either:
+
+1. Glossary terms are matched first, exactly as before; their words are not looked at again.
+2. **Code** copied verbatim from the source: URLs, e-mail addresses, paths (`/proc`, `~/x`,
+   `./run.sh`, `C:\x`), `--flags`, dotted/snake_case identifiers (`os.path`, `max_len`), calls
+   (`main()`). Read with `en-US` because it certainly is not Vietnamese; **how a voice reads `/`,
+   `.` or `_` is not promised** (a listening question). Never stored (it can contain user names,
+   hosts or tokens). Code the translation changed (`/Proc` for `/proc`) is left alone.
+3. A Latin word (ASCII letters/digits, inner `'` or `-`) is **English** only when (a) it cannot
+   be a Vietnamese syllable, written with or without diacritics (`pronunciation/vietnamese.py`:
+   initial consonant + vowel group + final consonant; Vietnamese writes every syllable
+   separately, so `runtime`, `kernel`, `Linux`, `trenchcoat` cannot be Vietnamese while `an`,
+   `to`, `con`, `run`, `Nguyen`, `trong` can) **and** (b) it occurs in the source. An all-caps word
+   copied with its exact case (`CEO`, `AI`) counts as an acronym. Otherwise it is **ambiguous**
+   (may be Vietnamese) or **unmatched** (not in the source) and stays `vi-VN`; both are only
+   counted. Neither "no diacritics" nor "also in the source" is enough on its own.
+4. Adjacent English words form one span; ambiguous words between two English words join only if
+   the whole sequence occurs contiguously in the source.
+5. A span with an English function word (`is`, `in`, `the`, ...) or more than three words is a
+   clause the translation left in English: read `en-US`, not stored. Every other span is a
+   **candidate**: `word`, `phrase`, `proper_name` (capitalized inside a sentence, or CamelCase) or
+   `acronym`. At most 200 per job (the rest is counted in the log).
+
+Speech gets a per-job `SpeechTerms` matcher (glossary first, then code, then detected English,
+each only where nothing earlier matched; a code token that contains a glossary term replaces it).
+The chunker uses the same matcher, so no protected or detected span is cut, and the SSML
+structure is unchanged: one voice (Andrew or Emma), `vi-VN` and `en-US` spans that partition the
+text exactly, all text XML-escaped. Detection that raises (a bug) logs the error type and speech
+uses the glossary only, as before. Duration fitting and speed are not involved.
+
+| Sample (Product Owner, real Azure translation of 2026-10-23) | Class | Read as | Stored |
+|---|---|---|---|
+| `container runtime`, `Docker`, `linux`, `linux kernel` | glossary | en-US | no |
+| `Container`, `container`, `containers`, `Kernel` | term (word) | en-US | pending candidates `container`, `containers`, `kernel` |
+| `trenchcoat` | term (word) | en-US | pending candidate; nothing promotes it, the reviewer decides |
+| `/proc` | code | en-US (reading of `/` unverified) | no |
+| `VMs` | translated to "máy ảo" by Azure | - | - |
+
+`Linux`, `Linux kernel` and `container runtime` were added to the glossary; `container`,
+`kernel` and `runtime` alone were not, because they have everyday meanings (glossary policy). The
+detection examples above are therefore all words that are **not** in the glossary. This table is
+proven by tests (`tests/test_pronunciation.py`); how it **sounds** is only known from listening
+(`scripts/pronunciation_smoke.py --speak`).
+
+**Known limits.** English words shaped like a Vietnamese syllable (`run`, `map`, `Go`) stay
+`vi-VN` unless the glossary lists them. Loanwords spelled like English (`video`, `internet`) are
+read `en-US`. The detection cannot tell a technical term from an ordinary word the translation
+failed to translate (`trenchcoat`), nor fix the translation. Accented Latin words (`café`) are not
+treated as English. An unknown term inside a clause left in English is read `en-US` but not
+collected.
+
+**Candidate keys** (`pronunciation/keys.py`): display form = NFC, typographic apostrophes as
+`'`, whitespace collapsed (spelling kept for review). Key = NFKC of that, lowercased **only** when
+every word's only capital is its first letter (`Kernel` = `kernel`, `Docker` = `docker`); any
+other capital is significant (`REST` != `rest`, `VMs` != `vms`, `GitHub` != `Github`), which is
+compatible with the glossary's ordinary vs `=EXACT` lines. Plurals are not merged; the export
+check reports a candidate already covered by a term with the plural rule. Up to five distinct
+spellings are kept per candidate.
+
+**Counting** (`glossary_candidates/store.py`), after the job is `completed`, in its own
+transaction: `UPDATE jobs SET glossary_candidates_recorded_at = now() WHERE id = :job AND
+glossary_candidates_recorded_at IS NULL` (no row: already counted, nothing else happens), then one
+`INSERT ... ON CONFLICT (term_key) DO UPDATE SET job_count = job_count + 1, last_seen_at = ...` for
+the job's distinct terms, in key order (no deadlock between concurrent jobs; the row lock
+serializes increments, so no lost count or duplicate row). Status and review fields are never
+touched by counting: a rejected term stays rejected. The "counted" marker lives on the job row
+instead of a job-term table that would have to be kept forever; if job metadata is ever cleaned
+up, the marker goes with the job, which can then no longer be recorded anyway. `statement_timeout`
+and `lock_timeout` are 5 s. Any error rolls the batch back; the completed job and its result are
+unaffected, and the log says `glossary candidates were not recorded (<ErrorType>)` with no term,
+text or database message. Azure is never called again for this: counting uses the detection
+already done. Only completed jobs with a real translation are counted.
+
+**Review in batches** (`scripts/glossary_candidates.py`, run locally; no API): `list` (pending,
+most jobs then most recent first), `approve ID --term ... --case insensitive|exact` (the canonical
+term must match, by glossary rules, a spelling actually seen), `reject`, `reopen`, `export`
+(glossary lines for approved candidates with duplicate/case/coverage/everyday-word checks;
+changes nothing) and `promote --ref origin/main` (approved -> promoted only for lines present in
+the glossary file of a commit merged into `origin/main`). Frequency only orders the review. See
+DEPLOYMENT.md, "Glossary candidates".
 
 ### Milestone 3 (real providers)
 

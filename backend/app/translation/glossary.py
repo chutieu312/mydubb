@@ -9,6 +9,7 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Protocol
 
 DEFAULT_GLOSSARY_PATH = Path(__file__).parent / "data" / "glossary.txt"
 
@@ -27,9 +28,16 @@ class TermMatch:
     text: str  # exactly as written in the input
 
 
+class TermMatcher(Protocol):
+    """Finds the terms that speech reads in English (the glossary, or more for one job)."""
+
+    def find_matches(self, text: str) -> list[TermMatch]: ...
+
+
 @dataclass(frozen=True)
 class _Term:
     text: str
+    case_sensitive: bool
     pattern: re.Pattern[str]
 
 
@@ -37,11 +45,16 @@ class Glossary:
     def __init__(self, terms: list[tuple[str, bool]]) -> None:
         """`terms` is a list of (term, case_sensitive)."""
         self._terms = [
-            _Term(term, _compile(term, case_sensitive)) for term, case_sensitive in terms
+            _Term(term, case_sensitive, _compile(term, case_sensitive))
+            for term, case_sensitive in terms
         ]
 
     def __len__(self) -> int:
         return len(self._terms)
+
+    def terms(self) -> list[tuple[str, bool]]:
+        """(term, case_sensitive) in file order."""
+        return [(term.text, term.case_sensitive) for term in self._terms]
 
     @classmethod
     def from_text(cls, content: str) -> "Glossary":
