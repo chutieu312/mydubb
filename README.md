@@ -5,7 +5,7 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 3C done**: the online Private Beta runs at https://mydubb.com with real
+**Status: Milestone 3C and audio speed done** (audio speed: 0.5x-2x, the file lasts baseline / speed; PR #18): the online Private Beta runs at https://mydubb.com with real
 English-to-Vietnamese translation by Azure Translator and a glossary that keeps technical
 terms in English (`TRANSLATION_PROVIDER=azure`), and real speech by Azure Speech
 (`SPEECH_PROVIDER=azure`; voices Andrew Multilingual, the default, and Emma Multilingual). Both

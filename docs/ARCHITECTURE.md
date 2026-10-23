@@ -218,7 +218,7 @@ silent fallback to mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected t
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
 | 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Done: live on https://mydubb.com since 2026-10-22 (PR #11) |
 | 3C | FFmpeg duration processing (tempo change of the whole audio to exactly the target) | Done: live on https://mydubb.com since 2026-10-23 (PR #13) |
-| - | Audio speed choice (seven speeds; output = baseline / speed) | In review (pull request); not accepted or deployed |
+| - | Audio speed choice (seven speeds; output = baseline / speed) | Done: live on https://mydubb.com since 2026-10-23 (PR #18) |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
