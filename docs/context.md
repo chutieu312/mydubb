@@ -1,6 +1,6 @@
 # MyDubb — Context và handoff hiện tại
 
-Cập nhật: **2026-10-23**. Mốc hoàn tất gần nhất: **Milestone 3C** (FFmpeg chỉnh tempo toàn bộ audio về đúng target duration; mọi thành phần production đã là thật), sau 3B, 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
+Cập nhật: **2026-10-23**. Mốc hoàn tất gần nhất: **Audio speed** (người dùng chọn 0.5x-2x, file audio dài baseline / speed; PR #18), sau 3C, 3B, 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
 
 ## 1. Cách đọc và duy trì context
 
@@ -30,10 +30,11 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 ### Duration và nội dung
 
 - Hai input là **First Sentence Start** và **Last Sentence Start**; input thứ hai là lúc câu cuối bắt đầu, không phải lúc kết thúc.
-- `target_duration = last_sentence_start - first_sentence_start`. Ví dụ `00:00:10` đến `00:06:10` cho target **360 giây**. Backend tính và validate; frontend chỉ preview.
+- `baseline = last_sentence_start - first_sentence_start` (trong API vẫn tên `target_duration_seconds`). Ví dụ `00:00:10` đến `00:06:10` cho baseline **360 giây**. Backend tính và validate; frontend chỉ preview.
+- Audio speed (từ PR #18): người dùng chọn một trong `0.5, 0.75, 1, 1.25, 1.5, 1.75, 2` (mặc định 1x). Output = baseline / speed: `target_samples = round_half_up(baseline × sample_rate / speed)`, tính bằng số nguyên. **1x là fit về baseline**, không phải tốc độ tự nhiên Azure trả về; speed khác cố ý tạo file ngắn/dài hơn baseline (mở rộng yêu cầu có chủ đích). Speed đổi **file** được tạo và download; player luôn phát `playbackRate = 1`. Request thiếu speed = 1x; job/result cũ đọc là 1x.
 - Đọc đầy đủ transcript, kể cả câu cuối. Không cộng thêm thời gian cho câu cuối, không cắt nội dung để khớp target.
 - Khi có real audio processing, điều chỉnh tempo của **toàn bộ audio** để khớp target, không căn từng câu. Ví dụ TTS dài 370 giây cho target 360 giây thì phải fit về 360 giây.
-- Mong muốn sản phẩm là output bằng target, không tùy ý dài/ngắn hơn. Từ 3C, `AUDIO_PROCESSOR=ffmpeg` đạt đúng target (PCM và MP3 decode lệch tối đa 1 sample, không dùng dung sai ±50 ms); mock audio (`AUDIO_PROCESSOR=mock`) vẫn không có duration guarantee.
+- Mong muốn sản phẩm là output bằng target (baseline / speed), không tùy ý dài/ngắn hơn. Từ 3C, `AUDIO_PROCESSOR=ffmpeg` đạt đúng target (PCM và MP3 decode lệch tối đa 1 sample, không dùng dung sai ±50 ms); mock audio (`AUDIO_PROCESSOR=mock`) vẫn không có duration guarantee.
 - Timestamps theo API `HH:MM:SS`, giờ ít nhất hai chữ số; last phải lớn hơn first.
 - Transcript cleaning phải giữ nội dung mơ hồ như `10:30 is our meeting time.`; quy tắc format chi tiết nằm trong API docs.
 
@@ -48,7 +49,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 - Ưu tiên free tiers; không tự mua/nâng tier, chuyển paid provider hay fallback âm thầm. Provider quota hết phải báo rõ.
 - Transcript xử lý tạm; metadata tối thiểu trong DB; translation/audio trong temporary result store. Không lưu audio binary vào DB.
 
-## 4. Hệ thống hiện có (sau 3C)
+## 4. Hệ thống hiện có (sau Audio speed)
 
 | Thành phần | Hiện trạng |
 |---|---|
@@ -72,7 +73,7 @@ Các invariants vận hành:
 - Mỗi process có instance ID; heartbeat chỉ cho job queued/running còn được quản lý trong RAM. Mặc định heartbeat 15 giây, stale 90 giây; shutdown drain 20 giây. Job mất worker sẽ `failed/interrupted`; không tự chạy lại provider khi kết quả gọi trước chưa rõ.
 - Result store publish bằng rename, cleanup bỏ qua active staging. Result mất/hết hạn trả `410 result_expired`. Logout chỉ coi thành công khi server trả `204` hoặc session đã hết hạn `401`.
 - Defaults đã chạy: result TTL 1 giờ; session TTL 12 giờ; job metadata chưa tự cleanup. Không nhầm với retention đề xuất ở mục 6.
-- Migrations chạy ở container startup và phải backward compatible. Expand-only **không đủ** để bảo đảm rollback: target image phải biết Alembic revision hiện tại. Mốc 2B là `0002`. Chi tiết và rehearsal nằm trong DEPLOYMENT.md.
+- Migrations chạy ở container startup và phải backward compatible. Expand-only **không đủ** để bảo đảm rollback: target image phải biết Alembic revision hiện tại. Mốc 2B là `0002`; từ PR #18 là `0003` (`jobs.audio_speed_percent`), nên mọi deploy cũ hơn PR #18 không còn là Render rollback target hợp lệ. Chi tiết và rehearsal nằm trong DEPLOYMENT.md.
 - Azure translation (3A): chọn Azure mà thiếu `AZURE_TRANSLATOR_KEY` thì app không khởi động. Không tự retry, không fallback về mock; một chunk lỗi thì job lỗi, không có bản dịch một phần. Log chỉ có kích thước và mã lỗi, không có transcript, bản dịch hay key.
 - Azure Speech (3B): `SPEECH_PROVIDER=mock|azure` (mặc định mock). Chọn Azure thì cần `AZURE_SPEECH_KEY` (key riêng, không dùng key Translator), `AZURE_SPEECH_REGION` và `ffmpeg`/`ffprobe` trong PATH, thiếu thì app không khởi động. Không retry, không fallback mock, một chunk lỗi thì job lỗi và không có audio một phần. Rate limiter dùng chung cho mọi job trong process (mặc định 20 request/60 giây, giới hạn F0, cộng 1 giây đệm). Log chỉ có status, request id, số lượng và độ dài audio, không có key, SSML hay text.
 - Duration fitting (3C): `AUDIO_PROCESSOR=mock|ffmpeg` (mặc định mock); `ffmpeg` cần `SPEECH_PROVIDER=azure` (cần audio lossless) và FFmpeg có `atempo` + `libmp3lame`, thiếu thì app không khởi động; không fallback pass-through. `PROVIDER_MODE=azure` nghĩa là mọi thành phần thật và chỉ được chấp nhận khi `TRANSLATION_PROVIDER=azure`, `SPEECH_PROVIDER=azure`, `AUDIO_PROCESSOR=ffmpeg`; `PROVIDER_MODE=mock` cho phép trộn và production vẫn cần `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`. `/api/meta` báo `provider_mode` theo thực tế đang chạy. FFmpeg chạy bằng argument list, timeout hữu hạn, kill khi timeout/shutdown, dọn file tạm; lỗi có mã `audio_*` an toàn, log chỉ có số đếm.
@@ -90,6 +91,7 @@ Các invariants vận hành:
 | M3A | Azure Translator thật + glossary backend (PR #9); speech/audio còn mock | Hoàn tất: đã merge, deploy, Product Owner xác nhận trên production (2026-10-22) |
 | M3B | Azure Speech thật (REST), voice Andrew/Emma Multilingual, chunking, ghép audio và MP3 bằng FFmpeg; chưa chỉnh duration (PR #11) | Hoàn tất: đã merge, deploy, Product Owner nghe và chấp nhận trên production (2026-10-22) |
 | M3C | FFmpeg duration processing: tempo toàn bộ audio về đúng target, giữ pitch, xác minh bằng sample count (PR #13) | Hoàn tất: đã merge, deploy, Product Owner test và xác nhận trên production (2026-10-23) |
+| Audio speed | Bảy tốc độ audio, output = baseline / speed, fit một bước từ WAV gốc; migration `0003` (PR #18) | Hoàn tất: đã merge, deploy qua CD, Product Owner test mọi speed trên production (2026-10-23) |
 
 Bằng chứng cuối của 2B (không phải kiểm tra live tự động mỗi khi đọc file):
 
@@ -134,6 +136,16 @@ Kết quả và bằng chứng của 3C:
 - Kiểm tra từ bên ngoài sau khi bật (2026-10-23): health và ready 200; `/api/meta` báo `translation=azure, speech=azure, audio=ffmpeg`, `mock_mode=false`, `provider_mode=azure`. Claude không có Access Code nên không tự chạy job trên production.
 - Nghiệm thu: Product Owner thêm `AUDIO_PROCESSOR=ffmpeg` trên Render, deploy, rồi tự test trên https://mydubb.com và báo trong chat rằng "tất cả đều ok". Xác nhận này là chung; Product Owner không liệt kê từng ca (voice nào, speech dài hơn hay ngắn hơn target, giá trị duration report), nên các chi tiết đó không được ghi ở đây như đã kiểm chứng riêng.
 - Giới hạn còn lại: MP3 chính xác với decoder hiểu gapless (đã kiểm chứng FFmpeg và Chromium); player bỏ qua metadata sẽ phát dài hơn khoảng 50-70 ms do encoder delay/padding, và `format.duration` của ffprobe tùy phiên bản (FFmpeg 9.0 in đúng target, 6.1/7.1 cộng 48-64 ms) nên chỉ được ghi nhận, không dùng để chấp nhận file. Safari/iPhone, Firefox và player khác chưa được kiểm chứng; không khẳng định hỗ trợ mọi player. Chưa đánh giá chất lượng ở tempo cực đoan; chưa đo thời gian xử lý trên Render Free cho audio dài; chưa thử transcript dài thật nhiều chunk.
+
+Kết quả và bằng chứng của Audio speed:
+
+- Đã có: field `speed` (đúng bảy số JSON; bool, null, string, số khác, số quá lớn như `10**400` đều `422 validation_error`). `audio/speed.py` tính target bằng số nguyên, làm tròn half-up thống nhất. `FfmpegAudioProcessor` fit WAV lossless gốc thẳng tới target mới (tempo = source / target), không fit về baseline rồi stretch lần hai, MP3 encode một lần, giữ nguyên kiểm tra PCM/decoded/gapless header. Migration `0003` expand-only: `jobs.audio_speed_percent smallint NOT NULL DEFAULT 100` + CHECK bảy giá trị; rollback rehearsal trên DB throwaway ghi trong DEPLOYMENT.md. API: `target_duration_seconds` giữ nghĩa baseline; thêm `baseline_duration_seconds`, `speed`, `output_duration_seconds` ở job và result; `audio.duration` thêm `baseline_seconds`, `speed`, `mp3_padding_adjusted_samples`, còn `target_seconds` là output target (số thực). UI: radio group "Audio speed" dưới hai timestamp, preview tức thời, job hiện snapshot từ server, result hiện baseline/speed/target/actual. Mock mode ghi nhận speed nhưng nói rõ fixture không được chỉnh.
+- Phát hiện khi làm target phân số: muxer MP3 của FFmpeg (6.1 và 7.1.5) ghi end padding tối đa 1105 sample, nên target dư 1-46 sample so với bội số 576 (khoảng 8% target phân số, không bao giờ với số giây nguyên) có header dài hơn tới 46 sample. Chỉ đúng dấu hiệu này mới được sửa header (padding + CRC LAME tag), dựa trên số PCM thực đã đưa vào encoder, và chỉ khi các sample dư decode ra im lặng; mọi lệch khác để verification cũ quyết định (tối đa 1 sample) và job fail. Review PR #18 đã siết hai điểm này và lỗi `OverflowError` của validator.
+- [PR #18](https://github.com/chutieu312/mydubb/pull/18): reviewed HEAD `6b76bbf1dc0d8ee29aa800a9de95835d1ce65402` ([CI PR](https://github.com/chutieu312/mydubb/actions/runs/39921671095) pass: 658 backend test với FFmpeg thật, 62 frontend test, 14 E2E desktop/mobile, Docker runtime check); merge SHA `fe9988a7ca84a4ff0662eefabaecaeb7e42fb916`.
+- [CI trên merge commit main](https://github.com/chutieu312/mydubb/actions/runs/39922254169) pass đủ job và CI success; **Deploy to Render** tạo `dep-dbdhgcbrjlhs73dajp8g` cho đúng `fe9988a`, live sau 76 giây; **Production smoke check** pass. Deploy live nghĩa là bước `alembic upgrade head` lúc startup đã chạy; revision `0003` trên Neon chưa được đối chiếu trực tiếp bằng SQL.
+- Mẫu nghe trước nghiệm thu dùng lại WAV Azure gốc của 3C (không gọi Azure mới), baseline 20 s: 40, 26.666667, 20, 16, 13.333333, 11.428583, 10 s cho bảy speed, PCM/MP3 decode/MP3 header lệch 0 sample với cả Andrew và Emma.
+- Nghiệm thu: Product Owner merge PR #18, test trên https://mydubb.com và báo trong chat rằng "tất cả đều tốt, tính năng speed chạy ok cho tất cả các speed". Xác nhận này là chung; giá trị duration report của từng job production không được ghi ở đây như đã kiểm chứng riêng.
+- Giới hạn còn lại: như 3C về player bỏ qua gapless metadata (dài hơn khoảng 50-70 ms); audio to đến đúng sample cuối mà rơi vào trường hợp padding cap sẽ fail an toàn thay vì được sửa (audio Azure kết thúc bằng khoảng 300 ms im lặng nên chưa gặp); speed cực đoan so với giọng tự nhiên làm tempo lớn và chất lượng giảm; ở 0.5x có thể thêm tới khoảng 85 ms silence cuối (`padded_samples`).
 
 ## 6. Quyết định còn mở
 
