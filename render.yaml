@@ -1,4 +1,4 @@
-# Render Blueprint: MyDubb online Private Beta with MOCK providers (Milestone 2B).
+# Render Blueprint: MyDubb online Private Beta (real providers since Milestone 3C).
 # Setup steps: docs/DEPLOYMENT.md. No secrets are stored in this file.
 services:
   - type: web
@@ -20,11 +20,11 @@ services:
     envVars:
       - key: APP_ENV
         value: production
-      # Online mock beta: explicit opt-in; all other production rules still apply.
+      # Every component is real: the service refuses to start unless TRANSLATION_PROVIDER=azure,
+      # SPEECH_PROVIDER=azure and AUDIO_PROCESSOR=ffmpeg (with their keys, entered in the Render
+      # dashboard) are all set, so a mock can never run in production by accident.
       - key: PROVIDER_MODE
-        value: mock
-      - key: ALLOW_MOCK_PROVIDERS_IN_PRODUCTION
-        value: "true"
+        value: azure
       - key: COOKIE_SECURE
         value: "true"
       # Neon direct (non-pooler) connection string, entered in the Render dashboard.
