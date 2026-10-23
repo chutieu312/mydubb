@@ -403,9 +403,20 @@ database migration).
 
 ### Deploying
 
-- Merge a pull request into `main`. CI runs on the merge commit; Render deploys it **only after
-  the GitHub checks pass** (`autoDeployTrigger: checksPass`). Follow progress under the
-  service's **Events**.
+- **Until the CD cutover** (the mechanism in place today): merge a pull request into `main`. CI
+  runs on the merge commit; Render deploys it **only after the GitHub checks pass**
+  (`autoDeployTrigger: checksPass` on the service). Follow progress under the service's **Events**.
+- **After the CD cutover** ([WORKFLOW.md, "Continuous deployment"](WORKFLOW.md#continuous-deployment-cd)):
+  Render never deploys by itself (`autoDeployTrigger: "off"`). The same GitHub Actions run that
+  ran CI then calls the Render API to deploy exactly the commit that passed, waits until that
+  deployment is `live`, and runs a read-only smoke check of https://mydubb.com. The Render
+  **Events** page shows one deployment per run, triggered by the API. Secrets and variables, the
+  cutover order, failure messages and the way back to Render auto-deploy are in WORKFLOW.md.
+  Do not deploy from the dashboard while a run is active: the run refuses to start next to a
+  running deployment, and Render's workspace policy decides whether a second deployment waits or
+  cancels the first.
+- Which of the two is active is visible in the Render service: **Settings -> Build & Deploy ->
+  Auto-Deploy** is *After CI Checks Pass* before the cutover and *Off* after it.
 - Zero-downtime deploy: the new instance starts and receives traffic once `/api/health`
   responds; the old instance gets SIGTERM about a minute later, finishes running jobs for up to
   `JOB_SHUTDOWN_GRACE_SECONDS` (20 s), then exits within Render's default 30 s shutdown delay
@@ -414,6 +425,12 @@ database migration).
   by the old instance become "result expired".
 - Changes to `render.yaml` on `main` are synced to the service by Render (Blueprint sync).
   Values marked `sync: false` or generated are not overwritten.
+- `render.yaml` declares `autoDeployTrigger: "off"` (quoted: an unquoted `off` is a YAML boolean).
+  It is applied by the Blueprint sync when the CD pull request reaches `main` (the cutover
+  procedure checks it in the dashboard right after). Because the file now says `off`, a later
+  sync cannot switch auto-deploy back on. To go back to Render auto-deploy, change the dashboard
+  **and** this line to `checksPass` (WORKFLOW.md, "Rolling back to Render auto-deploy"). The
+  Blueprint's `branch: main` does not matter for API deployments: they name the commit.
 
 ### Database migrations
 
@@ -457,7 +474,11 @@ migration (`0003`) is deployed, older deploys stop being supported targets.
 1. Render → service → **Deploys** → the target deploy → **Rollback** → confirm. The rollback
    reuses the target deploy's build, environment variables and start command.
 2. A dashboard rollback **disables auto-deploy**. After fixing the problem on `main` (via a
-   pull request), re-enable auto-deploy in **Settings**.
+   pull request), re-enable auto-deploy in **Settings** (before the CD cutover). After the
+   cutover auto-deploy is meant to stay **Off**: do not re-enable it; the next push to `main`
+   is deployed by the workflow, which sees the rolled-back commit as live and deploys the newer
+   commit over it. If you want the rolled-back version to stay, set `CD_ENABLED` to `false` first
+   (a green push run with CD off deploys nothing).
 
 **Unsupported target: roll forward instead (default)**
 
@@ -517,4 +538,4 @@ Never rehearse against production.
 | Site shows a Render error page after idling | Cold start of the free instance; wait and reload. |
 | "Result expired" right after a deploy | Expected: results are kept on the instance's ephemeral disk. Generate again. |
 | Custom domain stays unverified | DNS not propagated yet, leftover AAAA/forwarding records, or wrong CNAME target. |
-| A commit on `main` is not deployed | Its CI failed (Render waits for checks), or auto-deploy was disabled by a rollback. |
+| A commit on `main` is not deployed | Before the cutover: its CI failed (Render waits for checks), or auto-deploy was disabled by a rollback. After it: its CI failed, `CD_ENABLED` is not `true`, the deploy job was replaced by a newer commit while queued ("cancelled"), or the run was skipped as stale/already live. See WORKFLOW.md, "Troubleshooting CD". |

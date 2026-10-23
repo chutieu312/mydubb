@@ -4,16 +4,23 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Manual run, for the commit at the head of the chosen branch. It runs the full CI first.
+  # Deployment still happens only for refs/heads/main and only for github.sha, the commit this
+  # run just verified: there is no input to pick a ref or a SHA.
+  workflow_dispatch:
 
-# Least privilege: CI only reads the repository. No deployment, no secrets.
+# Least privilege: the token only reads the repository. CI jobs have no secrets. Only the
+# "Deploy to Render" job uses a secret, and that job never runs for pull requests.
 # Actions are pinned to full commit SHAs verified against the upstream release tags.
 # Triggered by pull_request (never pull_request_target), so fork code runs without secrets.
 permissions:
   contents: read
 
-# Superseded PR runs are cancelled; every commit pushed to main keeps a complete run.
+# Superseded PR runs are cancelled. Every push to main gets its own group, so each commit keeps
+# a complete CI run (the group is the run id, nothing waits for or replaces another run). The
+# production deployment is serialized separately, by the concurrency of the deploy job.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -251,12 +258,28 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+  cd-scripts:
+    name: CD scripts (shellcheck, fake Render tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # shellcheck, jq, curl and python3 are preinstalled on the runner. The tests talk only to a
+      # fake Render/GitHub/MyDubb server on 127.0.0.1: nothing is deployed, no secret is used.
+      - name: ShellCheck
+        run: shellcheck -x .github/scripts/*.sh .github/scripts/tests/*.sh
+      - name: Deploy and smoke scripts against fake responses
+        run: bash .github/scripts/tests/run-tests.sh
+
   # Single required status check for branch protection. Always runs; succeeds only if
-  # every mandatory job succeeded (skipped or cancelled jobs count as failure).
+  # every mandatory CI job succeeded (skipped or cancelled jobs count as failure). It summarizes
+  # CI only: the deploy and smoke jobs below depend on it, never the other way round.
   ci-success:
     name: CI success
     if: always()
-    needs: [frontend, backend, docker, e2e]
+    needs: [frontend, backend, docker, e2e, cd-scripts]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -265,4 +288,75 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$NEEDS" | jq -e 'length == 4 and (to_entries | all(.value.result == "success"))' > /dev/null
+          echo "$NEEDS" | jq -e 'length == 5 and (to_entries | all(.value.result == "success"))' > /dev/null
+
+  # ---- Continuous deployment: runs only on main, only after "CI success" -------------------
+  # Off until the repository variable CD_ENABLED is "true" (docs/WORKFLOW.md, "Cutover"). The
+  # job still appears and says "CD not enabled"; it never pretends to have deployed.
+  deploy:
+    name: Deploy to Render
+    needs: [ci-success]
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.ci-success.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    # One production deployment at a time, and a running one is never cancelled. GitHub keeps at
+    # most ONE pending job per group: if several runs queue behind a running deployment, only
+    # the newest stays pending and the older ones are cancelled, so not every commit gets its own
+    # deployment. The newest commit includes the older ones, and each deployment deploys its own
+    # exact SHA. Runs that do not deploy get a unique group so they cannot replace a pending one.
+    concurrency:
+      group: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.ci-success.result == 'success' && vars.CD_ENABLED == 'true') && 'production-deploy' || format('deploy-not-applicable-{0}', github.run_id) }}
+      cancel-in-progress: false
+    outputs:
+      deployed: ${{ steps.deploy.outputs.deployed }}
+    steps:
+      - name: Check that CD is enabled
+        id: gate
+        env:
+          CD_ENABLED: ${{ vars.CD_ENABLED }}
+        run: |
+          if [ "$CD_ENABLED" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=CD not enabled::Nothing was deployed. Set the repository variable CD_ENABLED=true after the cutover steps in docs/WORKFLOW.md."
+          {
+            echo "### CD not enabled"
+            echo
+            echo "CI passed for \`${GITHUB_SHA}\`, but continuous deployment is switched off (repository variable \`CD_ENABLED\` is not \`true\`). **Nothing was deployed** and no production check ran."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+      - name: Deploy this exact commit to Render and wait until it is live
+        id: deploy
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+          DEPLOY_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/render-deploy.sh
+
+  smoke:
+    name: Production smoke check
+    needs: [deploy]
+    # Only after a deployment of this run was verified live (not when CD is off or the run was stale).
+    if: ${{ needs.deploy.outputs.deployed == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Read-only GET requests: no login, no Access Code, no Azure call, no job, no secret.
+      - name: Smoke check (home, health, ready, meta)
+        env:
+          BASE_URL: ${{ vars.PRODUCTION_URL }}
+        run: bash .github/scripts/production-smoke.sh

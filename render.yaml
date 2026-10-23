@@ -10,8 +10,11 @@ services:
     branch: main
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    # Deploy a new commit on main only after its GitHub checks pass.
-    autoDeployTrigger: checksPass
+    # Render never deploys on its own. The "Deploy to Render" job of .github/workflows/ci.yml
+    # (after "CI success" on main) is the only automatic trigger, so a Blueprint sync must not turn
+    # auto-deploy back on: `checksPass` would wait for that very job while the job waits for Render.
+    # Render applies this value when the file reaches main. Rollback: docs/WORKFLOW.md, "Cutover".
+    autoDeployTrigger: "off"
     # Liveness only: a slow Neon wake-up must not make Render restart the service.
     healthCheckPath: /api/health
     # Render adds www.mydubb.com automatically and redirects it to the root domain.
