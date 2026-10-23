@@ -139,6 +139,22 @@ def test_english_detected_for_the_job_gets_english_spans_after_the_glossary(
     ]
 
 
+def test_a_long_english_span_cut_into_requests_stays_english_in_each(make_provider, work_dir):
+    clause = " ".join(["widget registry"] * 30)  # 479 characters, longer than a chunk
+    text = f"Một\t{clause} ở đây."
+    terms = SpeechTerms(default_glossary(), english=[clause, "widget registry"])
+    provider, calls = make_provider(max_chunk_chars=200)
+    provider.synthesize(text, Voice.ANDREW, work_dir, terms)
+
+    assert len(calls) >= 3
+    spans = [span for request in calls for span in ssml_spans(request.content)]
+    assert all(len(ssml_text(request)) <= 200 for request in calls)
+    assert " ".join(ssml_text(r) for r in calls).split() == text.split()
+    assert spans[0] == ("vi-VN", "Một ")
+    assert spans[-1] == ("vi-VN", " ở đây.")
+    assert all(language == "en-US" for language, _ in spans[1:-1])
+
+
 def test_the_other_voice_uses_its_own_name(make_provider, work_dir):
     provider, calls = make_provider()
     provider.synthesize("Xin chào.", Voice.ANDREW, work_dir)

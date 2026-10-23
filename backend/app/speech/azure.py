@@ -42,9 +42,9 @@ from app.audio.ffmpeg import AudioToolError, AudioTools, encode_mp3, probe_mp3
 from app.audio.wav import InvalidAudioError, PcmFormat, concat_wavs, read_wav_info
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio
-from app.speech.chunker import SpeechTextTooLongError, split_for_speech
+from app.speech.chunker import SpeechTextTooLongError, speech_text, split_for_speech
 from app.speech.rate_limit import RateLimiterClosed, RequestRateLimiter
-from app.speech.ssml import build_ssml
+from app.speech.ssml import build_ssml_from_spans, chunk_language_spans
 from app.speech.voices import Voice
 from app.translation.glossary import Glossary, TermMatcher
 
@@ -145,16 +145,23 @@ class AzureSpeechProvider:
             chunks = split_for_speech(text, terms, self._max_chunk_chars)
         except SpeechTextTooLongError:
             raise _failure("speech_input_unsupported") from None
+        # Languages are decided on the whole text, so a span cut by a chunk keeps its language.
+        spans = chunk_language_spans(speech_text(text), chunks, terms)
         # Text with no letter or digit (e.g. only punctuation) has nothing to read aloud.
-        chunks = [chunk for chunk in chunks if any(char.isalnum() for char in chunk)]
-        if not chunks:
+        speakable = [
+            (chunk, chunk_spans)
+            for chunk, chunk_spans in zip(chunks, spans, strict=True)
+            if any(char.isalnum() for char in chunk)
+        ]
+        if not speakable:
             raise _failure("speech_no_speakable_text")
+        chunks = [chunk for chunk, _ in speakable]
 
         wav = work_dir / "speech.wav"
         mp3 = work_dir / "speech.mp3"
         scratch = Path(tempfile.mkdtemp(prefix="speech-", dir=work_dir))
         try:
-            chunk_files = self._synthesize_chunks(chunks, voice, terms, scratch)
+            chunk_files = self._synthesize_chunks(speakable, voice, scratch)
             duration = self._join_and_encode(chunk_files, wav, mp3)
         except BaseException:
             # Never leave partial audio behind, whatever the failure was.
@@ -173,18 +180,18 @@ class AzureSpeechProvider:
         return SpeechAudio(path=mp3, is_fixture=False, lossless_path=wav)
 
     def _synthesize_chunks(
-        self, chunks: list[str], voice: Voice, terms: TermMatcher, scratch: Path
+        self, chunks: list[tuple[str, list[tuple[str, str]]]], voice: Voice, scratch: Path
     ) -> list[Path]:
         files = []
         timeout = httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
         with httpx.Client(timeout=timeout, transport=self._transport) as client:
-            for index, chunk in enumerate(chunks):
+            for index, (chunk, spans) in enumerate(chunks):
                 try:
                     self._limiter.acquire()
                 except RateLimiterClosed:
                     raise _failure("speech_cancelled") from None
                 target = scratch / f"chunk-{index:05d}.wav"
-                self._synthesize_chunk(client, build_ssml(chunk, voice, terms), target)
+                self._synthesize_chunk(client, build_ssml_from_spans(spans, voice), target)
                 self._validate_chunk(target, len(chunk))
                 files.append(target)
         return files

@@ -605,7 +605,12 @@ translation and never changes either:
 
 Speech gets a per-job `SpeechTerms` matcher (glossary first, then code, then detected English,
 each only where nothing earlier matched; a code token that contains a glossary term replaces it).
-The chunker uses the same matcher, so no protected or detected span is cut, and the SSML
+Detected terms are stored with one space between words and matched with any whitespace, the
+same normalization the chunker applies. Reading a span in English and keeping it in one chunk are
+separate: the chunker never cuts glossary terms, code or detected spans of up to three words
+(`protected_matches`), while a longer English clause may be cut at word or sentence boundaries
+like any text; the languages are decided once on the whole normalized text and then sliced per
+chunk (`ssml.chunk_language_spans`), so every piece of such a clause stays `en-US`. The SSML
 structure is unchanged: one voice (Andrew or Emma), `vi-VN` and `en-US` spans that partition the
 text exactly, all text XML-escaped. Detection that raises (a bug) logs the error type and speech
 uses the glossary only, as before. Duration fitting and speed are not involved.

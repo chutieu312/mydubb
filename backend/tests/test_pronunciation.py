@@ -22,8 +22,13 @@ from app.pronunciation.detector import (
 )
 from app.pronunciation.keys import candidate_key, display_form
 from app.pronunciation.vietnamese import may_be_vietnamese
-from app.speech.chunker import split_for_speech
-from app.speech.ssml import build_ssml, language_spans
+from app.speech.chunker import SpeechTextTooLongError, speech_text, split_for_speech
+from app.speech.ssml import (
+    build_ssml,
+    build_ssml_from_spans,
+    chunk_language_spans,
+    language_spans,
+)
 from app.speech.voices import Voice
 from app.translation.glossary import Glossary, default_glossary
 from scripts.pronunciation_smoke import SAMPLE_EN, SAMPLE_VI
@@ -406,3 +411,96 @@ def test_speech_terms_without_detection_behave_like_the_glossary():
     text = "REST và rest với neural networks."
     assert terms.find_matches(text) == glossary.find_matches(text)
     assert [kind for _, kind in terms.classified_matches(text)] == [SpanKind.GLOSSARY] * 2
+
+
+# --- end to end: detection -> chunks -> SSML (review findings on PR #20) -------------------------
+
+
+def speech_pipeline(source: str, translation: str, max_chars: int):
+    """What Azure Speech does with a translation: detect, chunk, decide languages, build SSML."""
+    detection = detect_english(source, translation, GLOSSARY)
+    chunks = split_for_speech(translation, detection.speech_terms, max_chars)
+    spans = chunk_language_spans(speech_text(translation), chunks, detection.speech_terms)
+    for chunk, chunk_spans in zip(chunks, spans, strict=True):
+        assert len(chunk) <= max_chars
+        assert "".join(piece for _, piece in chunk_spans) == chunk  # nothing lost or added
+        raw = build_ssml_from_spans(chunk_spans, Voice.ANDREW).encode()
+        assert ssml_spans(raw) == chunk_spans  # escaped, one voice, same spans
+    # All chunks together are the whole text, in order, nothing repeated (chunk_language_spans
+    # also checked that they are consecutive pieces of the normalized text).
+    assert " ".join(chunks).split() == translation.split()
+    return detection, chunks, spans
+
+
+def no_letters(piece: str) -> bool:
+    return not any(char.isalpha() for char in piece)
+
+
+def test_a_long_english_span_is_cut_at_words_and_every_piece_stays_english():
+    text = " ".join(["widget registry"] * 160)  # 2559 characters, one English clause
+    assert len(split_for_speech(text, GLOSSARY, 2000)) == 2  # glossary only: fine before
+    detection, chunks, spans = speech_pipeline(text, text, 2000)
+    assert [(span.kind, len(span.text)) for span in detection.spans] == [
+        (SpanKind.UNTRANSLATED, 2559)
+    ]
+    assert len(chunks) == 2
+    assert all(language == "en-US" for chunk_spans in spans for language, _ in chunk_spans)
+    assert detection.candidates == ()  # a long clause is never a candidate
+
+
+def test_long_english_keeps_glossary_terms_and_short_phrases_whole():
+    clause = "widgets container image and neural network are fine with "
+    translation = "Dùng container image ở đây.\n" + (clause * 40).strip()
+    detection, chunks, spans = speech_pipeline(translation, translation, 60)
+    assert len(chunks) > 10
+    for chunk in chunks:
+        # Never cut inside the glossary term or the short phrase detected on line 1.
+        assert not chunk.endswith(("container", "neural"))
+        assert not chunk.startswith(("image", "network"))
+    long_line = [s for c, s in zip(chunks, spans, strict=True) if "Dùng" not in c]
+    for chunk_spans in long_line:
+        assert all(language == "en-US" or no_letters(piece) for language, piece in chunk_spans)
+        # The glossary term keeps its own span (glossary priority).
+        if "neural network" in "".join(piece for _, piece in chunk_spans):
+            assert ("en-US", "neural network") in chunk_spans
+    assert spans[0][:3] == [("vi-VN", "Dùng "), ("en-US", "container image"), ("vi-VN", " ở đây.")]
+    assert [(c.term, c.kind) for c in detection.candidates] == [
+        ("container image", CandidateKind.PHRASE)
+    ]
+
+
+def test_a_short_detected_phrase_longer_than_the_limit_is_still_not_cut():
+    terms = SpeechTerms(GLOSSARY, english=["widget registry"])
+    with pytest.raises(SpeechTextTooLongError):
+        split_for_speech("một widget registry", terms, 10)
+
+
+@pytest.mark.parametrize("gap", ["\t", "   ", " ", " \t "])
+def test_english_stays_english_whatever_the_whitespace(gap):
+    source = "We use widget registry."
+    translation = f"Một widget{gap}registry ở đây."
+    detection, chunks, spans = speech_pipeline(source, translation, 2000)
+    assert chunks == ["Một widget registry ở đây."]
+    assert spans == [[("vi-VN", "Một "), ("en-US", "widget registry"), ("vi-VN", " ở đây.")]]
+    assert [(c.term, c.kind) for c in detection.candidates] == [
+        ("widget registry", CandidateKind.PHRASE)
+    ]
+    # Spelling, order and the original whitespace of the translation are untouched.
+    assert [span.text for span in detection.spans] == [f"widget{gap}registry"]
+
+
+def test_whitespace_inside_a_long_span_and_across_lines():
+    translation = "Câu một.\nwidget  registry\tand   more widgets\nCâu hai."
+    _, _, spans = speech_pipeline(translation, translation, 2000)
+    assert spans == [
+        [
+            ("vi-VN", "Câu một.\n"),
+            ("en-US", "widget registry and more widgets"),
+            ("vi-VN", "\nCâu hai."),
+        ]
+    ]
+
+
+def test_chunk_language_spans_refuses_chunks_that_are_not_the_text():
+    with pytest.raises(ValueError, match="consecutive"):
+        chunk_language_spans("một hai", ["một", "ba"], GLOSSARY)

@@ -1,11 +1,14 @@
 """Splits Vietnamese text into speech requests that stay within `max_chars`.
 
 Chunks are whole lines and sentences whenever possible. A sentence longer than the limit is
-cut at spaces, never inside a protected term (a glossary term or English detected for the
-job, see `pronunciation/`) and never inside a word. Whitespace
+cut at spaces, never inside a protected term (`TermMatcher.protected_matches`: glossary terms,
+code and short English phrases detected for the job, see `pronunciation/`) and never inside a
+word. A long English span is not protected and may be cut like any sentence; its language is
+decided on the whole text (`ssml.chunk_language_spans`), not per chunk. Whitespace
 inside a line is normalized to single spaces, blank lines are dropped and lines stay separated
-by one line break (as in the audition the Product Owner accepted). Nothing else changes, so
-`" ".join(chunks).split()` equals `text.split()` and no text is lost, repeated or reordered.
+by one line break (as in the audition the Product Owner accepted): `speech_text`. Nothing else
+changes, so the chunks joined with their separators are exactly `speech_text(text)`, and no
+text is lost, repeated or reordered.
 """
 
 import re
@@ -24,11 +27,16 @@ class SpeechTextTooLongError(ValueError):
     """A run of text without usable spaces (or a protected term) exceeds the chunk limit."""
 
 
+def speech_text(text: str) -> str:
+    """The text speech reads: single spaces inside lines, no blank lines."""
+    lines = (" ".join(raw_line.split()) for raw_line in text.splitlines())
+    return _LINE_BREAK.join(line for line in lines if line)
+
+
 def split_for_speech(text: str, terms: TermMatcher, max_chars: int) -> list[str]:
     """Chunks of at most `max_chars` characters, in order. Blank text gives no chunks."""
     units: list[tuple[str, str]] = []  # (separator before, text)
-    for raw_line in text.splitlines():
-        line = " ".join(raw_line.split())
+    for line in speech_text(text).split(_LINE_BREAK):
         if line:
             for number, unit in enumerate(_line_units(line, terms, max_chars)):
                 units.append((_LINE_BREAK if number == 0 else _SPACE, unit))
@@ -40,7 +48,7 @@ def _line_units(line: str, terms: TermMatcher, max_chars: int) -> Iterator[str]:
     if len(line) <= max_chars:
         yield line
         return
-    for sentence in _sentences(_atoms(line, terms.find_matches(line))):
+    for sentence in _sentences(_atoms(line, terms.protected_matches(line))):
         joined = " ".join(sentence)
         if len(joined) <= max_chars:
             yield joined

@@ -55,10 +55,47 @@ def language_spans(text: str, terms: TermMatcher) -> list[tuple[str, str]]:
     return spans
 
 
+def chunk_language_spans(
+    full_text: str, chunks: list[str], terms: TermMatcher
+) -> list[list[tuple[str, str]]]:
+    """The language spans of each chunk, decided on the whole text.
+
+    `chunks` must be consecutive pieces of `full_text` separated by one character (the chunker's
+    output for `chunker.speech_text`). Deciding on the whole text means an English span that the
+    chunker had to cut (a long clause left in English) stays en-US in every piece, and a span is
+    never lost because a chunk boundary or whitespace differs from the detected text.
+    """
+    boundaries: list[tuple[int, int, str]] = []
+    position = 0
+    for language, piece in language_spans(full_text, terms):
+        boundaries.append((position, position + len(piece), language))
+        position += len(piece)
+    result: list[list[tuple[str, str]]] = []
+    found = 0
+    for number, chunk in enumerate(chunks):
+        if number:
+            found += 1  # the separator between two chunks
+        if full_text[found : found + len(chunk)] != chunk:
+            raise ValueError("chunks are not consecutive pieces of the text")
+        end = found + len(chunk)
+        spans = [
+            (language, full_text[max(found, a) : min(end, b)])
+            for a, b, language in boundaries
+            if a < end and found < b
+        ]
+        result.append(spans)
+        found = end
+    return result
+
+
 def build_ssml(text: str, voice: Voice, terms: TermMatcher) -> str:
+    return build_ssml_from_spans(language_spans(text, terms), voice)
+
+
+def build_ssml_from_spans(spans: list[tuple[str, str]], voice: Voice) -> str:
+    """SSML for (language, text) spans whose languages are ENGLISH or VIETNAMESE."""
     body = "".join(
-        f'<lang xml:lang="{language}">{escape_text(piece)}</lang>'
-        for language, piece in language_spans(text, terms)
+        f'<lang xml:lang="{language}">{escape_text(piece)}</lang>' for language, piece in spans
     )
     return (
         f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '

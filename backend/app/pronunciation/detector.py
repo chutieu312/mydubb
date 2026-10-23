@@ -153,21 +153,36 @@ class SpeechTerms:
 
     The shared glossary first; code tokens that contain glossary terms replace them; then the
     English detected for this job, only where nothing else matched. The detected strings are
-    matched exactly (case-sensitive, whole words, plural "s" as in the glossary) in every
-    chunk, which is safe because each of them contains a word that cannot be Vietnamese.
+    matched exactly (case-sensitive, whole words separated by any whitespace, plural "s" as in
+    the glossary), which is safe because each of them contains a word that cannot be
+    Vietnamese.
+
+    Reading a span in English and keeping it in one chunk are separate: `find_matches` gives
+    every en-US span, `protected_matches` only what the chunker must never cut (glossary terms,
+    code, and detected spans of at most MAX_TERM_WORDS words). A longer English span (a clause
+    the translation left in English) may be cut at word or sentence boundaries; its pieces stay
+    en-US because the language is decided on the whole text (`ssml.chunk_language_spans`).
     """
 
     def __init__(
         self, glossary: Glossary, *, code: Iterable[str] = (), english: Iterable[str] = ()
     ) -> None:
+        english = {" ".join(term.split()) for term in english}
         self._glossary = glossary
         self._code = _exact(code)
         self._english = _exact(english)
+        self._short_english = _exact(t for t in english if len(t.split()) <= MAX_TERM_WORDS)
 
     def find_matches(self, text: str) -> list[TermMatch]:
         return [match for match, _ in self.classified_matches(text)]
 
+    def protected_matches(self, text: str) -> list[TermMatch]:
+        return [match for match, _ in self._resolve(text, self._short_english)]
+
     def classified_matches(self, text: str) -> list[tuple[TermMatch, SpanKind]]:
+        return self._resolve(text, self._english)
+
+    def _resolve(self, text: str, detected: Glossary) -> list[tuple[TermMatch, SpanKind]]:
         known = self._glossary.find_matches(text)
         code = [
             c
@@ -177,7 +192,7 @@ class SpeechTerms:
         known = [k for k in known if not any(_inside(k, c) for c in code)]
         taken = [*known, *code]
         english = [
-            e for e in self._english.find_matches(text) if not any(_overlaps(e, t) for t in taken)
+            e for e in detected.find_matches(text) if not any(_overlaps(e, t) for t in taken)
         ]
         labelled = chain(
             ((m, SpanKind.GLOSSARY) for m in known),
@@ -385,7 +400,8 @@ def detect_english(source: str, translation: str, glossary: Glossary) -> Detecti
             in_spans: set[int] = set()
             for span in _english_spans(run, statuses, words):
                 in_spans.update(id(token) for token in span)
-                text = line[span[0].start : span[-1].end]
+                # One space between words: matched with any whitespace, as speech normalizes it.
+                text = " ".join(line[span[0].start : span[-1].end].split())
                 folded = [token.folded for token in span]
                 if len(span) > MAX_TERM_WORDS or any(word in STOPWORDS for word in folded):
                     english_kinds[text] = SpanKind.UNTRANSLATED
@@ -412,7 +428,7 @@ def detect_english(source: str, translation: str, glossary: Glossary) -> Detecti
     for line in translation.split("\n"):
         for match, kind in speech_terms.classified_matches(line):
             if kind is SpanKind.TERM:
-                kind = english_kinds.get(match.text, SpanKind.TERM)
+                kind = english_kinds.get(" ".join(match.text.split()), SpanKind.TERM)
             spans.append(Span(offset + match.start, offset + match.end, match.text, kind))
         offset += len(line) + 1
     return Detection(

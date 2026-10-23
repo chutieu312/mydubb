@@ -31,7 +31,13 @@ class TermMatch:
 class TermMatcher(Protocol):
     """Finds the terms that speech reads in English (the glossary, or more for one job)."""
 
-    def find_matches(self, text: str) -> list[TermMatch]: ...
+    def find_matches(self, text: str) -> list[TermMatch]:
+        """Every span to read in English."""
+        ...
+
+    def protected_matches(self, text: str) -> list[TermMatch]:
+        """The spans a speech chunk boundary must never cut."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,10 @@ class Glossary:
             starts.insert(index, candidate.start)
             ordered.insert(index, candidate)
         return ordered
+
+    def protected_matches(self, text: str) -> list[TermMatch]:
+        """Every glossary term is kept in one piece."""
+        return self.find_matches(text)
 
 
 def _compile(term: str, case_sensitive: bool) -> re.Pattern[str]:
