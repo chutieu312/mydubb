@@ -9,12 +9,14 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.access.rate_limit import FailedAttemptLimiter
-from app.audio.ffmpeg import locate_tools
+from app.audio.base import AudioProcessor
+from app.audio.ffmpeg import AudioToolError, check_capabilities, locate_tools
+from app.audio.fitter import FfmpegAudioProcessor
 from app.audio.mock import MockAudioProcessor
 from app.config import (
+    AudioProcessorChoice,
     ConfigurationError,
     MockFailStage,
-    ProviderMode,
     Settings,
     SpeechProviderChoice,
     TranslationProviderChoice,
@@ -44,6 +46,8 @@ class AppServices:
     result_store: ResultStore
     executor: JobExecutor
     pipeline: JobPipeline
+    # Stops FFmpeg processes of running jobs at shutdown.
+    audio: AudioProcessor
     # Request-rate limiter shared by all jobs when speech uses Azure; closed at shutdown.
     speech_limiter: RequestRateLimiter | None = None
 
@@ -105,6 +109,29 @@ def build_speech(
     )
 
 
+def build_audio(settings: Settings) -> AudioProcessor:
+    if settings.audio_processor is AudioProcessorChoice.FFMPEG:
+        # Never fall back to the pass-through mock: the audio would silently miss the target.
+        tools = locate_tools()
+        if tools is None:
+            raise ConfigurationError(
+                "Invalid configuration: AUDIO_PROCESSOR=ffmpeg needs the ffmpeg and ffprobe "
+                "programs on PATH (they are part of the Docker image)"
+            )
+        try:
+            check_capabilities(tools)
+        except AudioToolError:
+            raise ConfigurationError(
+                "Invalid configuration: AUDIO_PROCESSOR=ffmpeg needs an FFmpeg with the "
+                "atempo filter and the libmp3lame encoder"
+            ) from None
+        return FfmpegAudioProcessor(tools)
+    return MockAudioProcessor(
+        fail=settings.mock_fail_stage is MockFailStage.AUDIO,
+        delay=settings.mock_stage_delay_seconds,
+    )
+
+
 def build_services(
     settings: Settings,
     *,
@@ -116,11 +143,6 @@ def build_services(
     session_factory = create_session_factory(engine)
     result_store = LocalFileResultStore(settings.result_storage_dir)
 
-    if settings.provider_mode is not ProviderMode.MOCK:
-        # Settings validation already rejects this; never silently fall back to mocks.
-        raise RuntimeError(f"Unsupported provider mode: {settings.provider_mode}")
-    fail = settings.mock_fail_stage
-    delay = settings.mock_stage_delay_seconds
     speech_limiter = (
         RequestRateLimiter(
             settings.azure_speech_max_requests_per_window,
@@ -129,11 +151,12 @@ def build_services(
         if settings.speech_provider is SpeechProviderChoice.AZURE
         else None
     )
+    audio = build_audio(settings)
     pipeline = JobPipeline(
         session_factory=session_factory,
         translator=build_translator(settings, translation_transport),
         speech=build_speech(settings, speech_limiter, speech_transport),
-        audio=MockAudioProcessor(fail=fail is MockFailStage.AUDIO, delay=delay),
+        audio=audio,
         result_store=result_store,
         result_ttl_seconds=settings.result_ttl_seconds,
     )
@@ -154,5 +177,6 @@ def build_services(
             max_queued=settings.job_max_queued,
         ),
         pipeline=pipeline,
+        audio=audio,
         speech_limiter=speech_limiter,
     )

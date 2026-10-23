@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { JobResult } from "../../api/types";
+import { DurationDetails } from "./DurationDetails";
 
 type ResultState =
   | { kind: "loading" }
@@ -89,11 +90,16 @@ export function ResultView({ jobId, onSessionExpired }: Props) {
         {!result.audio.is_fixture && result.audio.provider === "azure-speech" && (
           <span className="badge">Azure Speech</span>
         )}
-        {!result.audio.duration_adjusted && <span className="badge">Duration not adjusted</span>}
+        {result.audio.duration_adjusted ? (
+          <span className="badge">Duration adjusted</span>
+        ) : (
+          <span className="badge">Duration not adjusted</span>
+        )}
       </h3>
       <audio controls preload="metadata" src={result.audio.url} className="player">
         Your browser does not support audio playback.
       </audio>
+      {result.audio.duration && <DurationDetails duration={result.audio.duration} />}
       <a className="button" href={result.audio.download_url} download>
         Download MP3
       </a>

@@ -7,9 +7,22 @@ import { ProviderBanner } from "./ProviderBanner";
 afterEach(cleanup);
 
 const ALL_MOCK = { translation: "mock", speech: "mock", audio: "mock" };
-const AZURE_TRANSLATION = { translation: "azure", speech: "mock", audio: "mock" };
+const AZURE_TRANSLATION = {
+  translation: "azure",
+  speech: "mock",
+  audio: "mock",
+};
 const AZURE_BOTH = { translation: "azure", speech: "azure", audio: "mock" };
-const MOCK_TRANSLATION_REAL_SPEECH = { translation: "mock", speech: "azure", audio: "mock" };
+const MOCK_TRANSLATION_REAL_SPEECH = {
+  translation: "mock",
+  speech: "azure",
+  audio: "mock",
+};
+const MOCK_TRANSLATION_ADJUSTED = {
+  translation: "mock",
+  speech: "azure",
+  audio: "ffmpeg",
+};
 
 describe("ProviderBanner", () => {
   it("labels everything as mock when no component is real", () => {
@@ -40,7 +53,9 @@ describe("ProviderBanner", () => {
   it("real translation and real speech: says so and that the duration is not adjusted", () => {
     render(<ProviderBanner providers={AZURE_BOTH} />);
     const banner = screen.getByRole("status");
-    expect(banner.textContent).toContain("Beta: real translation and speech, duration not adjusted.");
+    expect(banner.textContent).toContain(
+      "Beta: real translation and speech, duration not adjusted.",
+    );
     expect(banner.textContent).toContain("Translation: Azure Translator (real)");
     expect(banner.textContent).toContain("Speech: Azure Speech (real)");
     expect(banner.textContent).toContain("Audio processing: mock (pass-through");
@@ -57,6 +72,16 @@ describe("ProviderBanner", () => {
     expect(banner.textContent).toContain("Translation: mock (placeholder)");
     expect(banner.textContent).toContain("Speech: Azure Speech (real)");
     expect(banner.textContent).not.toContain("No Azure services are called");
+  });
+
+  it("mock translation with real, duration-adjusted audio no longer says it is not adjusted", () => {
+    render(<ProviderBanner providers={MOCK_TRANSLATION_ADJUSTED} />);
+    const banner = screen.getByRole("status");
+    expect(banner.textContent).toContain("Beta: mock translation, real speech, duration adjusted.");
+    expect(banner.textContent).toContain("Translation: mock (placeholder)");
+    expect(banner.textContent).toContain("Audio processing: FFmpeg (real)");
+    expect(banner.textContent).not.toContain("not adjusted");
+    expect(banner.textContent).not.toContain("pass-through");
   });
 
   it("shows nothing when every component is real", () => {

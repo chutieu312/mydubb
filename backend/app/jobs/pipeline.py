@@ -128,7 +128,7 @@ class JobPipeline:
         speech = self._speech.synthesize(translation.text, job.voice, work_dir)
 
         self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
-        processed = self._audio.fit_to_duration(speech.path, job.target_duration_seconds, work_dir)
+        processed = self._audio.fit_to_duration(speech, job.target_duration_seconds, work_dir)
 
         completed_at = datetime.now(UTC)
         expires_at = completed_at + self._result_ttl
@@ -140,6 +140,9 @@ class JobPipeline:
                 audio_file=processed.path,
                 audio_is_fixture=speech.is_fixture,
                 duration_adjusted=processed.duration_adjusted,
+                duration_report=(
+                    processed.duration_report.as_dict() if processed.duration_report else None
+                ),
             ),
             expires_at,
         )

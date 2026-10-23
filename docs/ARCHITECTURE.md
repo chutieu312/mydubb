@@ -30,8 +30,7 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
 | `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter | `processing_errors`, `audio`, `translation.glossary` |
-| `audio/` | `AudioProcessor` protocol + mock, WAV validation/joining, FFmpeg MP3 encode/probe | `processing_errors` |
-| `audio/` | `AudioProcessor` protocol (fit to target duration) + mock; MP3 fixture | `processing_errors` |
+| `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader, MP3 fixture | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
 | `jobs/` | Job model, guarded status transitions, executor, pipeline, HTTP router | all of the above via protocols |
 | `system/` | Health, readiness, public meta | db |
@@ -181,27 +180,33 @@ storage; that is intentionally out of scope.
 |---|---|
 | Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice. `is_illustrative=true`. |
 | Speech (default; `SPEECH_PROVIDER=mock`) | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime) regardless of text/voice. `is_fixture=true`. |
-| Audio processing | Pass-through. `duration_adjusted=false`. **No tempo change, no duration guarantee.** |
+| Audio processing (default; `AUDIO_PROCESSOR=mock`) | Pass-through. `duration_adjusted=false`. **No tempo change, no duration guarantee.** |
 
 With `TRANSLATION_PROVIDER=azure` the translation row above is replaced by the real Azure
 Translator (see below) and with `SPEECH_PROVIDER=azure` the speech row by Azure Speech (see
-"Azure Speech"); the UI then labels each component separately. The supported modes are: all
-mock; Azure translation + mock speech; Azure translation + Azure speech (and, for development,
-mock translation + Azure speech). Audio processing is the pass-through mock until Milestone
-3C, so `PROVIDER_MODE=azure` stays refused and production keeps needing
-`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`. The UI shows a "Development mock mode" banner (all
-mock) or a per-component banner (real translation and/or speech, duration not adjusted) and
-per-result notices. The fixture is **not**
-generated from the transcript and does **not** demonstrate target-duration compliance.
+"Azure Speech") and with `AUDIO_PROCESSOR=ffmpeg` the audio row by FFmpeg duration fitting
+(see "Duration fitting"); the UI then labels each component separately. The supported mixes
+are: all mock; Azure translation + mock speech; Azure translation + Azure speech (duration not
+adjusted); the same with `AUDIO_PROCESSOR=ffmpeg` (everything real); and, for development, mock
+translation + Azure speech (+ FFmpeg). `AUDIO_PROCESSOR=ffmpeg` needs `SPEECH_PROVIDER=azure`
+(it adjusts the lossless audio of real speech, not the fixture). `PROVIDER_MODE=azure` means
+"everything real" and is accepted only with `TRANSLATION_PROVIDER=azure`,
+`SPEECH_PROVIDER=azure` and `AUDIO_PROCESSOR=ffmpeg`; `PROVIDER_MODE=mock` allows any mix, and
+production then still needs `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`. `/api/meta` reports
+`provider_mode` by what is really running (`azure` only when no component is a mock). The UI
+shows a "Development mock mode" banner (all mock), a per-component banner while any component
+is a mock, and no banner when everything is real; each result carries notices. The fixture is
+**not** generated from the transcript and does **not** demonstrate target-duration compliance.
 
 Failure scenarios are deterministic via `MOCK_FAIL_STAGE` (`translation`, `speech`, `audio`,
 `unexpected`), which is rejected in production. `PROVIDER_MODE` must be set explicitly. With
 `APP_ENV=production`, mock mode is refused unless `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`
 (the online mock beta); that opt-in relaxes nothing else (Secure cookies, HSTS, a 16+
-character Access Code and the `MOCK_FAIL_STAGE` ban still apply). `PROVIDER_MODE=azure` (real
-everything) fails at startup until speech and audio exist — there is no silent fallback to
-mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
-`TRANSLATION_PROVIDER=azure`, and `MOCK_FAIL_STAGE=speech` together with `SPEECH_PROVIDER=azure`.
+character Access Code and the `MOCK_FAIL_STAGE` ban still apply). `PROVIDER_MODE=azure` with a
+mock component fails at startup, and missing credentials or FFmpeg stop it too — there is no
+silent fallback to mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
+`TRANSLATION_PROVIDER=azure`, `MOCK_FAIL_STAGE=speech` together with `SPEECH_PROVIDER=azure` and
+`MOCK_FAIL_STAGE=audio` together with `AUDIO_PROCESSOR=ffmpeg`.
 
 ## Roadmap and remaining work
 
@@ -212,7 +217,7 @@ mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
 | 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
 | 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Done: live on https://mydubb.com since 2026-10-22 (PR #11) |
-| 3C | FFmpeg duration processing | Later |
+| 3C | FFmpeg duration processing (tempo change of the whole audio to exactly the target) | Implemented in a pull request; awaiting the Product Owner's acceptance and deployment |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
@@ -362,7 +367,8 @@ with the Xing/Info header browsers use to seek, and ffprobe verifies one MP3 str
 length matches the samples. Temporary files live in the job work directory and in a scratch
 directory removed in `finally`; partial `speech.wav`/`speech.mp3` are deleted on failure.
 `SpeechAudio.lossless_path` keeps the joined WAV in the work directory so Milestone 3C can change
-the tempo **before** encoding; nothing in 3B changes duration or the target.
+the tempo **before** encoding; nothing in 3B changes duration or the target (3C does, see
+"Duration fitting").
 
 Errors: 401/403 -> `speech_auth_failed`, 429 -> `speech_quota_exceeded`, 408/504 and timeouts ->
 `speech_timeout`, connection problems -> `speech_network_error`, 5xx/unexpected ->
@@ -374,6 +380,103 @@ the key, headers, SSML, text or response content.
 **Privacy**: with Azure speech the translated Vietnamese text (with mock translation, the mock
 text that still contains the transcript) is sent to Microsoft Azure Speech; the form says so
 before submit.
+
+### Duration fitting (Milestone 3C)
+
+`AUDIO_PROCESSOR=ffmpeg` selects `FfmpegAudioProcessor` (`audio/fitter.py`). The contract is
+unchanged: the target is `last_sentence_start - first_sentence_start`, with no time added for
+reading the last sentence, no duration inferred from word counts, no per-sentence alignment.
+
+**What it does** (to the lossless WAV Azure Speech produced, `SpeechAudio.lossless_path`):
+
+1. Measure the natural length: `factor = source_samples / target_samples` (the same ratio as
+   source_duration / target_duration; at 24 kHz the target is a whole number of samples).
+2. Change the tempo of the **complete** audio with FFmpeg `atempo`, which keeps the pitch and
+   the voice. A factor outside one filter's range (0.5-2.0, valid on every FFmpeg version) is
+   split into a chain of in-range filters whose product is the factor (10 -> 2, 2, 2, 1.25);
+   nothing is clamped or skipped. Nothing is cut, skipped or repeated, and Azure, the
+   translation and the voice are not touched again.
+3. Measure the result. `atempo` works in overlapping 2048-sample windows, so its output length
+   is only approximately `source / factor` (tens to a few hundred samples, up to about two
+   windows when slowing down by a factor below 0.5). If it is more than one window
+   (`ROUNDING_LIMIT_FRAMES` = 2048 samples, 85 ms at 24 kHz) from the target, the factor is
+   corrected from the measurement and the **original** audio is processed again (never twice on
+   processed audio), up to 6 passes.
+4. Make the sample count exactly the target (`audio/duration.py: conform_wav`): a shorter result
+   gets **silence appended**; a longer one loses trailing samples **only if every one of them
+   is silent** (at most 32/32768, about -60 dBFS). Anything else is an error
+   (`audio_duration_not_reached`), never an `atrim` that hides a tempo that was not reached.
+   A speech already within one window of the target (and, if longer, with a silent end) gets
+   only this step and no tempo change. The amounts are reported (`padded_samples`,
+   `trimmed_samples`); in the measured runs below they are 4-1998 samples (0.2-83 ms), mostly
+   under 200.
+5. Encode the PCM to MP3 **once** (unchanged settings: libmp3lame, 96 kbit/s, mono, 24 kHz,
+   Xing/Info header), then **verify the real file**: decode it with FFmpeg and count samples,
+   and read the playable length from the MP3's own gapless header (frames x 576 - encoder
+   delay - padding, parsed without FFmpeg in `audio/mp3_header.py`). Both must be within one
+   sample of the target or the job fails with `audio_verification_failed`; no MP3 is returned.
+
+**What "the MP3 has the target duration" means.** An MP3 stores whole 576-sample frames, and the
+encoder adds a delay (1105 samples including the decoder delay) at the start and padding at the
+end. The Xing/Info header records them, so a gapless-aware decoder returns exactly the encoded
+PCM. Measured on the final files: FFmpeg's decoder output and the header formula equal the target
+sample for sample, and Chromium reports `HTMLAudioElement.duration` of exactly 8, 17, 26, 360 s
+for the files checked, with a Web Audio decode of 8 s giving 384,000 frames at 48 kHz.
+ffprobe's `format.duration` is **not** reliable for this: FFmpeg 9.0 reports the target, while
+6.1 and 7.1 report the target plus delay and padding (+48 to +64 ms). It is recorded as
+`mp3_container_seconds` but not used to accept or reject. **Limit:** a player that ignores the
+header (some old or embedded players) plays the full frames: up to about 50-70 ms more than the
+target, split between a silent start and the end. That is a property of MP3, not of the tempo
+step; making it exact everywhere would need another format (WAV, or AAC with edit lists), an
+API/format change that was not made (open decision).
+
+**Technical limits (no product quota).** Any positive factor is realised, but quality drops at
+extreme factors (WSOLA artefacts well beyond roughly 0.5-2x; a 600x slow-down is not pleasant).
+The intermediate PCM is a WAV, whose sizes are 32-bit: targets over about 11 hours at 24 kHz fail
+with `audio_duration_unsupported`. Work is bounded by timeouts (120 s + 0.5 s per audio second
+for tempo/decode, 120 s + 0.1 s per second for encoding).
+
+**Robustness.** FFmpeg/ffprobe run with an argument list (no shell), no stdin, a minimal
+environment, a timeout, and the exit status checked; output is never logged. Every run can be
+cancelled: `close()` at shutdown kills the process (`audio_cancelled`) and a timeout kills it
+too (`audio_timeout`). Scratch files live in a directory removed in `finally`, and `final.mp3`
+is deleted on any failure, so no partial result is stored. A missing FFmpeg, `atempo` filter or
+`libmp3lame` encoder stops the service at startup. Without lossless audio
+(`audio_source_missing`) there is no fallback to the pass-through. Logs contain counts only.
+
+**Errors** (`ProcessingError` codes, safe messages): `audio_source_missing`,
+`audio_input_invalid`, `audio_duration_unsupported`, `audio_duration_not_reached`,
+`audio_verification_failed`, `audio_timeout`, `audio_cancelled`, `audio_processing_failed`.
+
+**Result.** `audio.duration` (see [API.md](API.md)) reports, separately and unrounded, the
+target, the natural source length, the processed PCM, and the final MP3 (decoded, header,
+ffprobe container); the UI shows them next to the target and the actual duration.
+
+**Measured** with `uv run python -m scripts.duration_smoke` (synthetic speech: four tones with
+pauses; no credentials) on the production image's FFmpeg 7.1.5, in seconds:
+
+| Case | Target | Source | PCM | MP3 decoded | MP3 header | Tempo | Pad (samples) |
+|---|---|---|---|---|---|---|---|
+| longer than target | 8 | 10.2 | 8.000000 | 8.000000 | 8.000000 | 1.27500 | 5 |
+| shorter than target | 7 | 5.1 | 7.000000 | 7.000000 | 7.000000 | 0.72857 | 187 |
+| nearly the target | 5 | 5.1 | 5.000000 | 5.000000 | 5.000000 | 1.02000 | 13 |
+| equal to the target | 5 | 4.999833 | 5.000000 | 5.000000 | 5.000000 | none | 4 |
+| three filters, faster | 4 | 20.4 | 4.000000 | 4.000000 | 4.000000 | 5.10468 | 61 |
+| three filters, slower | 12 | 2.55 | 12.000000 | 12.000000 | 12.000000 | 0.21250 | 1998 |
+| 370 s speech | 360 | 369.999875 | 360.000000 | 360.000000 | 360.000000 | 1.02778 | 10 |
+| 350 s speech | 360 | 349.999792 | 360.000000 | 360.000000 | 360.000000 | 0.97222 | 70 |
+
+(`--azure` repeats this with Azure speech: one request per voice with the public four-line
+sample, 259 characters each, and writes before/after MP3s to listen to.) The same checks run in
+CI (backend tests with FFmpeg 6.1, `docker/audio_runtime_check.py` inside the image).
+
+**Content check.** The tests use a signal of four tones (a different pitch each) separated by
+pauses: after fitting, all four are present, in order, each at its own pitch (a spectrum scan, not
+zero crossings) and with the length expected from the factor within about one window, and the last
+one still runs to the end of the audio (the only thing after it is the reported padding). Pitch of
+a 440 Hz tone is unchanged at factors 0.1 to 10. On real Azure speech the last audible sample lands
+within 300 samples (12 ms) of where the factor predicts, so the last sentence is not cut. These
+checks cannot judge sound quality; the Product Owner listens.
 
 ### Milestone 3 (real providers)
 
@@ -387,14 +490,8 @@ quality evaluation with real course transcripts, and a decision whether to migra
 **Azure Speech (F0)** - implemented in Milestone 3B (see "Azure Speech" above). Remaining:
 the Product Owner's listening evaluation of mixed Vietnamese/English pronunciation.
 
-**Audio processing (FFmpeg)** (FFmpeg is already in the runtime image since 3B)
-- `FfmpegAudioProcessor`: take the uncompressed speech audio (`SpeechAudio.lossless_path`, kept
-  by 3B before MP3 encoding), apply tempo to the **complete** audio so its
-  length equals the target duration (`atempo` chaining for factors outside 0.5–2.0), encode
-  MP3, measure the output duration and fail if it misses the agreed tolerance.
-- Define the precision tolerance with the Product Owner (MP3 frame granularity ≈ 26 ms at
-  44.1 kHz) and add FFmpeg-based duration tests in CI. Report audio-quality risk for extreme
-  tempo factors.
+**Audio processing (FFmpeg)** - implemented in Milestone 3C (see "Duration fitting"). Remaining:
+the Product Owner's listening evaluation of the tempo-adjusted audio on production.
 
 **Production with real providers**
 - Disclosure that submitted text is processed by Azure: done for translation (3A) and speech

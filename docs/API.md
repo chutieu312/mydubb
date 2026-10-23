@@ -31,7 +31,7 @@ must send `X-CSRF-Token` with the token returned by `POST`/`GET /api/session`. I
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` until Milestone 3C), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds` |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds` |
 
 ## Session (Private Beta access)
 
@@ -123,7 +123,10 @@ Translator: `translation_auth_failed`, `translation_quota_exceeded`, `translatio
 `translation_input_unsupported`; and for Azure Speech: `speech_auth_failed`,
 `speech_quota_exceeded`, `speech_timeout`, `speech_network_error`, `speech_service_error`,
 `speech_rejected`, `speech_invalid_audio`, `speech_audio_failed`, `speech_cancelled`,
-`speech_input_unsupported`, `speech_no_speakable_text`. Messages are safe to show (no keys, transcript text or raw
+`speech_input_unsupported`, `speech_no_speakable_text`; and for FFmpeg audio processing:
+`audio_source_missing`, `audio_input_invalid`, `audio_duration_unsupported`,
+`audio_duration_not_reached`, `audio_verification_failed`, `audio_timeout`, `audio_cancelled`,
+`audio_processing_failed`. Messages are safe to show (no keys, transcript text or raw
 provider output). Failed jobs are never retried automatically; submit again.
 
 ### `GET /api/jobs/{id}/result`
@@ -139,7 +142,8 @@ Requires session and ownership.
       "content_type": "audio/mpeg",
       "provider": "mock-speech",
       "is_fixture": true,
-      "duration_adjusted": false
+      "duration_adjusted": false,
+      "duration": null
     },
     "expires_at": "…",
     "notices": ["…"]
@@ -148,8 +152,33 @@ Requires session and ownership.
   `translation.provider` is `azure-translator` (with `is_illustrative: false`) for a real
   translation and `mock-translation` for the mock; `audio.provider` is `azure-speech` (with
   `is_fixture: false`) for real speech and `mock-speech` for the fixture. `duration_adjusted`
-  stays `false` until Milestone 3C. `notices` states what is real, what is a fixture and that the
-  audio length is not adjusted to the target.
+  is `true` only when FFmpeg audio processing made the audio last exactly the target (then
+  `duration` is set, see below); with the mock processor it is `false` and `duration` is `null`.
+  `notices` states what is real, what is a fixture and whether the audio length is adjusted.
+
+  With `AUDIO_PROCESSOR=ffmpeg`, `audio.duration` holds what was **measured** on the real files
+  (nothing is rounded: seconds are `samples / sample_rate`):
+  ```json
+  "duration": {
+    "sample_rate": 24000,
+    "target_seconds": 360, "target_samples": 8640000,
+    "source_seconds": 370.123458, "source_samples": 8882963,
+    "processed_seconds": 360.0, "processed_samples": 8640000,
+    "mp3_decoded_seconds": 360.0, "mp3_decoded_samples": 8640000,
+    "mp3_header_seconds": 360.0, "mp3_header_samples": 8640000,
+    "mp3_container_seconds": 360.048,
+    "tempo_factor": 1.02812, "padded_samples": 70, "trimmed_samples": 0
+  }
+  ```
+  `target` is the job's `target_duration_seconds`; `source` the natural length of the speech;
+  `processed` the PCM after the tempo change (equal to the target); `mp3_decoded` the samples a
+  decoder yields for the final MP3 and `mp3_header` the length its own gapless header declares
+  (both within one sample of the target, or the job fails). `mp3_container_seconds` is
+  ffprobe's figure as is: depending on the FFmpeg version it is the target or the target plus
+  the encoder delay and padding (tens of milliseconds); it is not used to accept the file.
+  `tempo_factor` is above 1 when the speech was sped up and below 1 when it was slowed down
+  (`null`: it was already within one rounding window of the target); `padded_samples` /
+  `trimmed_samples` are silence added to or removed from the end (never audible audio).
 - `409 result_not_ready` (still running) or `409 job_failed` (with `job_error_code`).
 - `410 result_expired` — the job completed but its temporary result expired or was removed
   (TTL elapsed, cleanup, or restart on an ephemeral disk).

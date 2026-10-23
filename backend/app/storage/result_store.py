@@ -25,6 +25,8 @@ class ResultContent:
     audio_file: Path  # source file; moved into the store on save
     audio_is_fixture: bool
     duration_adjusted: bool
+    # Measured durations of the final audio (see DurationReport.as_dict); None if not adjusted.
+    duration_report: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ class StoredResult:
     audio_is_fixture: bool
     duration_adjusted: bool
     expires_at: datetime
+    duration_report: dict | None = None
 
 
 class ResultStore(Protocol):
@@ -104,6 +107,7 @@ class LocalFileResultStore:
             "translation_is_illustrative": content.translation_is_illustrative,
             "audio_is_fixture": content.audio_is_fixture,
             "duration_adjusted": content.duration_adjusted,
+            "duration_report": content.duration_report,
             "expires_at": expires_at.isoformat(),
         }
         # Metadata is written last; a directory without it is never treated as a result.
@@ -130,6 +134,7 @@ class LocalFileResultStore:
             audio_is_fixture=bool(meta["audio_is_fixture"]),
             duration_adjusted=bool(meta["duration_adjusted"]),
             expires_at=expires_at,
+            duration_report=meta.get("duration_report"),
         )
 
     def delete(self, job_id: uuid.UUID) -> None:

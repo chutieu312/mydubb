@@ -84,6 +84,31 @@ class TranslationOut(BaseModel):
     provider: str
 
 
+class DurationOut(BaseModel):
+    """Durations measured on the real audio. Seconds are samples / sample_rate, unrounded."""
+
+    sample_rate: int
+    target_seconds: int
+    target_samples: int
+    # Natural length of the speech before the tempo change.
+    source_seconds: float
+    source_samples: int
+    # PCM after the tempo change, before MP3 encoding.
+    processed_seconds: float
+    processed_samples: int
+    # Final MP3: what a decoder produces, the playable length its gapless header declares, and
+    # ffprobe's container duration (reported as is; may include encoder delay and padding).
+    mp3_decoded_seconds: float
+    mp3_decoded_samples: int
+    mp3_header_seconds: float
+    mp3_header_samples: int
+    mp3_container_seconds: float
+    # >1 faster, <1 slower; null when the speech was already within rounding of the target.
+    tempo_factor: float | None
+    padded_samples: int
+    trimmed_samples: int
+
+
 class AudioOut(BaseModel):
     url: str
     download_url: str
@@ -92,6 +117,8 @@ class AudioOut(BaseModel):
     provider: str
     is_fixture: bool
     duration_adjusted: bool
+    # Measured durations; null when the duration was not adjusted.
+    duration: DurationOut | None = None
 
 
 class JobResultResponse(BaseModel):

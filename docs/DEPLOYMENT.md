@@ -37,7 +37,7 @@ Set up on 2026-10-22 (Milestone 2B) and verified end to end.
 | Database | Neon project `mydubb`, Postgres 17, AWS US West 2 (Oregon), direct connection |
 | DNS (GoDaddy) | `A @ 216.24.57.1`, `CNAME www mydubb.onrender.com`; NS/SOA/`_domainconnect`/`_dmarc` unchanged |
 | TLS | Google Trust Services certificates for `mydubb.com` and `www.mydubb.com`, renewed by Render |
-| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: mock pass-through (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) |
+| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: mock pass-through (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) until Milestone 3C is accepted and `AUDIO_PROCESSOR=ffmpeg` is set (see "FFmpeg duration fitting") |
 | Client IP header | `cf-connecting-ip` confirmed present (no "configured but absent" warning in the logs) |
 
 Milestone 3A (enabled 2026-10-22): PR #9, merge SHA `5ade22201dd7c9d8b589a3d4d296cb94417be334`;
@@ -325,7 +325,8 @@ unchanged.
 
 ### Expected behavior and limits
 
-- The audio length is **not** adjusted to the target duration (Milestone 3C); the result says so.
+- Without `AUDIO_PROCESSOR=ffmpeg` the audio length is **not** adjusted to the target duration;
+  the result says so (see "FFmpeg duration fitting" below).
 - F0 allows 20 requests per minute for the whole resource, shared by all jobs: a 2,000-character
   chunk is one request, so a long transcript takes minutes in the `synthesizing` stage. Quota or
   rate errors fail the job with a clear message; nothing is retried automatically.
@@ -334,6 +335,55 @@ unchanged.
 - The image grows with FFmpeg (Debian `ffmpeg`: about 405 MB -> 1.04 GB). A static FFmpeg build
   would be smaller but is an unsigned third-party binary, which was not chosen.
 - Rotate the key in the Azure portal (Keys and Endpoint -> Regenerate) and update Render.
+
+## FFmpeg duration fitting (Milestone 3C)
+
+Implemented in a pull request; **not enabled in production** until the Product Owner has listened
+to the result and accepted it. No new Azure resource, key or cost is involved: FFmpeg is already
+in the image (3B) and runs on the instance.
+
+**Check locally first** (no credentials): `cd backend && uv run python -m scripts.duration_smoke`
+prints, for each case, the target, the natural source length, the processed PCM and the final MP3
+(decoded, gapless header, ffprobe) and exits non-zero on any mismatch of more than one sample.
+`--azure` is the live variant: it sends the public four-line sample transcript to Azure Speech once
+per voice (2 requests, 259 characters each, F0 quota only) and writes before/after MP3s to
+`backend/duration-samples/` to listen to; the key is read from `backend/.env` or the environment
+and is never printed.
+
+### Enable on Render
+
+Render -> service **mydubb** -> **Environment** -> add `AUDIO_PROCESSOR=ffmpeg`; leave every other
+variable as it is (`PROVIDER_MODE=mock` and `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` come from
+`render.yaml`, which this milestone does not change; with all three components real they are no
+longer needed but harmless). Save; Render redeploys the service. Then `/api/meta` reports
+`providers: {translation: azure, speech: azure, audio: ffmpeg}`, `mock_mode: false` and
+`provider_mode: azure` (the effective mode), the "mock" banner disappears, and a result shows
+"Duration adjusted" with the target and measured durations. The service refuses to start if
+`ffmpeg`/`ffprobe`, the `atempo` filter or the `libmp3lame` encoder is missing, never falling
+back to the pass-through.
+
+Optional cleanup after acceptance (a separate change, not part of this milestone): set
+`PROVIDER_MODE=azure` and remove `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION` in `render.yaml` and the
+dashboard, so the service would refuse to start with any mock component.
+
+### Roll back
+
+Remove the `AUDIO_PROCESSOR` variable (or set it to `mock`) and save: audio processing returns to
+the pass-through, exactly the configuration before 3C. If `PROVIDER_MODE` was changed to `azure`
+for the cleanup above, set it back to `mock` and restore `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`,
+otherwise the service refuses to start with a mock component. Code rollback follows the usual
+rules below (this milestone has no database migration).
+
+### Expected behavior and limits
+
+- Processing time is a few seconds per minute of audio on a normal CPU and the job stays in the
+  `processing` stage; Render Free has a small shared CPU, so allow longer for long audio. Each job
+  uses temporary disk of about 4-10x the WAV size (24 kHz mono 16-bit is 2.9 MB per minute),
+  removed when the job ends.
+- A result that cannot be brought to the exact target fails the job (see the error codes in
+  [API.md](API.md)); nothing is returned partially.
+- The MP3 is exact for gapless-aware players (browsers, FFmpeg). A player that ignores the MP3
+  header plays up to about 50-70 ms more; see [ARCHITECTURE.md](ARCHITECTURE.md#duration-fitting-milestone-3c).
 
 ## Operations
 

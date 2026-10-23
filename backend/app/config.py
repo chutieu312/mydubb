@@ -35,6 +35,11 @@ class SpeechProviderChoice(StrEnum):
     AZURE = "azure"
 
 
+class AudioProcessorChoice(StrEnum):
+    MOCK = "mock"
+    FFMPEG = "ffmpeg"
+
+
 DEFAULT_AZURE_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
 # Azure Translator limit per request is 50,000 characters (service-limits documentation).
 AZURE_TRANSLATOR_MAX_REQUEST_CHARS = 50_000
@@ -83,9 +88,11 @@ class Settings(BaseSettings):
     # (Milestone 3 in progress). PROVIDER_MODE=mock keeps meaning "mock everything" unless this
     # overrides the translation stage.
     translation_provider: TranslationProviderChoice = TranslationProviderChoice.MOCK
-    # Same for speech: SPEECH_PROVIDER=azure generates real Vietnamese speech while audio
-    # processing (duration fitting, Milestone 3C) is still a pass-through mock.
+    # Same for speech: SPEECH_PROVIDER=azure generates real Vietnamese speech.
     speech_provider: SpeechProviderChoice = SpeechProviderChoice.MOCK
+    # AUDIO_PROCESSOR=ffmpeg adjusts the duration of the real speech with FFmpeg; the mock
+    # passes the audio through unchanged. It needs the lossless audio of SPEECH_PROVIDER=azure.
+    audio_processor: AudioProcessorChoice = AudioProcessorChoice.MOCK
     mock_fail_stage: MockFailStage = MockFailStage.NONE
     # Artificial delay per mock stage so processing stages are observable in the UI.
     mock_stage_delay_seconds: float = Field(default=0.0, ge=0, le=30)
@@ -175,11 +182,21 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_environment_rules(self) -> "Settings":
         if self.provider_mode is ProviderMode.AZURE:
-            raise ValueError(
-                "PROVIDER_MODE=azure is not implemented yet (FFmpeg duration processing is "
-                "pending); use PROVIDER_MODE=mock, optionally with TRANSLATION_PROVIDER=azure "
-                "and SPEECH_PROVIDER=azure"
-            )
+            # Everything real, or it does not start: no component silently stays a mock.
+            missing = [
+                f"{name}={wanted}"
+                for name, actual, wanted in (
+                    ("TRANSLATION_PROVIDER", self.translation_provider.value, "azure"),
+                    ("SPEECH_PROVIDER", self.speech_provider.value, "azure"),
+                    ("AUDIO_PROCESSOR", self.audio_processor.value, "ffmpeg"),
+                )
+                if actual != wanted
+            ]
+            if missing:
+                raise ValueError(
+                    "PROVIDER_MODE=azure needs every component to be real; also set "
+                    + ", ".join(missing)
+                )
         if self.translation_provider is TranslationProviderChoice.AZURE:
             self._check_azure_translator()
             if self.mock_fail_stage in (MockFailStage.TRANSLATION, MockFailStage.UNEXPECTED):
@@ -193,6 +210,17 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "MOCK_FAIL_STAGE=speech only applies to the mock speech provider; "
                     "unset it or use SPEECH_PROVIDER=mock"
+                )
+        if self.audio_processor is AudioProcessorChoice.FFMPEG:
+            if self.speech_provider is not SpeechProviderChoice.AZURE:
+                raise ValueError(
+                    "AUDIO_PROCESSOR=ffmpeg needs SPEECH_PROVIDER=azure: it adjusts the "
+                    "duration of real speech audio, not of the mock speech fixture"
+                )
+            if self.mock_fail_stage is MockFailStage.AUDIO:
+                raise ValueError(
+                    "MOCK_FAIL_STAGE=audio only applies to the mock audio processor; "
+                    "unset it or use AUDIO_PROCESSOR=mock"
                 )
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
             raise ValueError(
@@ -257,8 +285,13 @@ class Settings(BaseSettings):
 
     @property
     def is_mock_mode(self) -> bool:
-        """True while any component is still a mock (audio processing always is, until 3C)."""
-        return self.provider_mode is ProviderMode.MOCK
+        """True while any pipeline component is a mock."""
+        return "mock" in self.component_providers.values()
+
+    @property
+    def effective_provider_mode(self) -> ProviderMode:
+        """What is really running: `azure` only when every component is real."""
+        return ProviderMode.MOCK if self.is_mock_mode else ProviderMode.AZURE
 
     @property
     def component_providers(self) -> dict[str, str]:
@@ -266,8 +299,7 @@ class Settings(BaseSettings):
         return {
             "translation": self.translation_provider.value,
             "speech": self.speech_provider.value,
-            # FFmpeg duration processing arrives in Milestone 3C.
-            "audio": "mock",
+            "audio": self.audio_processor.value,
         }
 
 

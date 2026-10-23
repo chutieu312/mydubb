@@ -13,7 +13,10 @@ Each test runs in two Playwright projects: `desktop` (Desktop Chrome) and `mobil
 | `workflow.spec.ts` | Wrong Access Code rejected; session cookie and code not readable by JavaScript; server-side validation errors (empty transcript, last <= first); full mock job: 202 response, 360 s target, intermediate stages observed, transcript/result rendered as text only (HTML payload inert), timestamp-like spoken content ("10:30 is our meeting time.") preserved in order, mock notices, audio metadata loads, MP3 download (`attachment`, `audio/mpeg`), polling stops after completion; no horizontal overflow at phone width |
 | `logout.spec.ts` | Successful logout ends the server session (reload stays signed out); network failure and HTTP 500 during logout keep the user signed in with an error, the real session stays valid, and a retry succeeds |
 
-Not covered: WebKit / iOS Safari, Firefox, real devices, Azure, exact-duration audio.
+Not covered: WebKit / iOS Safari, Firefox, real devices, Azure. The mock stack has no real audio
+processing, so exact-duration fitting is covered elsewhere: the backend tests and
+`docker/audio_runtime_check.py` run the real FFmpeg (see
+[docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#duration-fitting-milestone-3c)).
 
 ## Isolation and destructive scope
 

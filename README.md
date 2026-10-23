@@ -5,14 +5,15 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 3B done**: the online Private Beta runs at https://mydubb.com with real
+**Status: Milestone 3B done, 3C awaiting acceptance**: the online Private Beta runs at https://mydubb.com with real
 English-to-Vietnamese translation by Azure Translator and a glossary that keeps technical
 terms in English (`TRANSLATION_PROVIDER=azure`), and real speech by Azure Speech
 (`SPEECH_PROVIDER=azure`; voices Andrew Multilingual, the default, and Emma Multilingual). Both
 are off by default, so local and CI runs stay all-mock (on top of Milestones 1, 2A and 2B:
 application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon). Audio
-processing is still a pass-through and FFmpeg duration processing (Milestone 3C) is not
-implemented, so the audio length is not adjusted to the target yet. See
+processing is a pass-through on production until the Product Owner accepts Milestone 3C
+(`AUDIO_PROCESSOR=ffmpeg`, FFmpeg duration fitting, implemented and tested but not yet enabled
+there), so the production audio length is not adjusted to the target yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
 branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
@@ -49,8 +50,9 @@ docker-compose.yml  Local PostgreSQL (+ optional app container)
 - Docker (for PostgreSQL and image builds)
 - Python tooling: [uv](https://docs.astral.sh/uv/) 0.11+ (installs Python 3.12 if needed)
 - Node.js 22+
-- FFmpeg with `ffprobe` (only for the audio tests and `SPEECH_PROVIDER=azure` outside Docker; the
-  Docker image includes it). Audio tests are skipped locally when it is missing and fail in CI.
+- FFmpeg with `ffprobe`, including the `atempo` filter and the `libmp3lame` encoder (only for the
+  audio tests, `SPEECH_PROVIDER=azure` and `AUDIO_PROCESSOR=ffmpeg` outside Docker; the Docker
+  image includes it). Audio tests are skipped locally when it is missing and fail in CI.
 
 ## Local development
 
@@ -85,8 +87,9 @@ and restart the backend. This control is rejected when `APP_ENV=production`.
 All configuration comes from environment variables; [.env.example](.env.example) lists every
 variable with placeholders and comments. Required: `APP_ENV`, `DATABASE_URL` (PostgreSQL only),
 `ACCESS_CODE`, `PROVIDER_MODE`. Invalid or unsafe combinations stop the app at startup, e.g.
-a non-PostgreSQL URL, `PROVIDER_MODE=azure` (not implemented yet), or mock providers /
-`COOKIE_SECURE=false` with `APP_ENV=production`.
+a non-PostgreSQL URL, `PROVIDER_MODE=azure` while any component is a mock (it needs
+`TRANSLATION_PROVIDER=azure`, `SPEECH_PROVIDER=azure` and `AUDIO_PROCESSOR=ffmpeg`), or mock
+providers / `COOKIE_SECURE=false` with `APP_ENV=production`.
 
 ### Azure translation + mock audio
 
@@ -107,8 +110,8 @@ English; add a term by adding a line to that file in a pull request.
 with Azure Speech (REST API), using one multilingual voice per audio (`AndrewMultilingual`,
 the default, or `EmmaMultilingual`) with the Vietnamese text and the glossary's English terms
 marked by language. Terms outside the glossary are not marked and may be mispronounced. It works with either translation provider
-(`mock | azure`) and keeps `PROVIDER_MODE=mock`: audio processing is still a pass-through, so the
-audio length is **not** adjusted to the target. Required: `AZURE_SPEECH_KEY` and
+(`mock | azure`); without `AUDIO_PROCESSOR=ffmpeg` (below) audio processing is a pass-through and
+the audio length is **not** adjusted to the target. Required: `AZURE_SPEECH_KEY` and
 `AZURE_SPEECH_REGION` (the Speech resource's own key; the Translator key is never reused), plus
 `ffmpeg`/`ffprobe` on `PATH`. Startup fails if any is missing; there is no fallback to the mock.
 Optional: `AZURE_SPEECH_TIMEOUT_SECONDS`, `AZURE_SPEECH_MAX_CHUNK_CHARS` (default 2000),
@@ -116,6 +119,27 @@ Optional: `AZURE_SPEECH_TIMEOUT_SECONDS`, `AZURE_SPEECH_MAX_CHUNK_CHARS` (defaul
 the Free F0 limit shared by all jobs). Resource setup and the live smoke test that creates MP3
 samples to listen to (`uv run python -m scripts.azure_speech_smoke`) are in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#azure-speech-milestone-3b).
+
+### Duration fitting (Milestone 3C)
+
+`AUDIO_PROCESSOR=ffmpeg` (needs `SPEECH_PROVIDER=azure` and `ffmpeg`/`ffprobe` with `atempo` and
+`libmp3lame`; startup fails otherwise) speeds up or slows down the **whole** speech audio, pitch
+preserved, so it lasts exactly the target (`last_sentence_start - first_sentence_start`): the PCM
+has exactly the target number of samples and the MP3 decodes to the same number (one sample of
+rounding at most). Nothing is cut or repeated; a result that cannot be brought to the target is a
+job error, not a pass-through. `PROVIDER_MODE=azure` means every component is real
+(`TRANSLATION_PROVIDER=azure`, `SPEECH_PROVIDER=azure`, `AUDIO_PROCESSOR=ffmpeg`). Details,
+measurements and limits: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#duration-fitting-milestone-3c).
+
+Check the durations without credentials (synthetic speech, real FFmpeg) and listen to the
+before/after files in `backend/duration-samples/` (git-ignored):
+
+```bash
+cd backend
+uv run python -m scripts.duration_smoke                    # table of target / source / PCM / MP3
+uv run python -m scripts.duration_smoke --wav speech.wav --target-seconds 360   # a local WAV
+uv run python -m scripts.duration_smoke --azure            # LIVE: 2 Azure Speech requests
+```
 
 ## Tests and checks
 

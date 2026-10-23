@@ -80,6 +80,16 @@ describe("App provider labels", () => {
     expect(submit.getAttribute("aria-describedby")).toBe(disclosure.id);
   });
 
+  it("everything real, with FFmpeg: no mock banner", async () => {
+    stubApi({ translation: "azure", speech: "azure", audio: "ffmpeg" });
+    render(<App />);
+    await screen.findByLabelText("English Transcript");
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/not adjusted/i)).toBeNull();
+    expect(screen.getByText(/sent to Microsoft Azure Speech/)).toBeTruthy();
+  });
+
   it("Azure translation + mock audio: per-component banner and disclosure before submit", async () => {
     stubApi({ translation: "azure", speech: "mock", audio: "mock" });
     render(<App />);
@@ -114,6 +124,7 @@ const RESULT = {
     provider: "mock-speech",
     is_fixture: true,
     duration_adjusted: false,
+    duration: null,
   },
   expires_at: "2030-01-01T00:00:00Z",
   notices: ["Translated by Azure Translator.", "The audio is a fixed development fixture."],
@@ -146,7 +157,7 @@ describe("ResultView labels", () => {
     expect(screen.getByText("Azure Translator", { selector: ".badge" })).toBeTruthy();
   });
 
-  it("a duration-adjusted result does not carry the not-adjusted badge", async () => {
+  it("a duration-adjusted result shows target and actual durations, unrounded", async () => {
     const adjusted = {
       ...RESULT,
       audio: {
@@ -154,6 +165,23 @@ describe("ResultView labels", () => {
         provider: "azure-speech",
         is_fixture: false,
         duration_adjusted: true,
+        duration: {
+          sample_rate: 24000,
+          target_seconds: 360,
+          target_samples: 8640000,
+          source_seconds: 370.123458,
+          source_samples: 8882963,
+          processed_seconds: 360,
+          processed_samples: 8640000,
+          mp3_container_seconds: 360.056,
+          mp3_decoded_seconds: 360.000042,
+          mp3_decoded_samples: 8640001,
+          mp3_header_seconds: 360,
+          mp3_header_samples: 8640000,
+          tempo_factor: 1.02812,
+          padded_samples: 70,
+          trimmed_samples: 0,
+        },
       },
     };
     stubApi({ translation: "azure", speech: "azure", audio: "ffmpeg" }, adjusted);
@@ -161,6 +189,66 @@ describe("ResultView labels", () => {
 
     await screen.findByText("Vietnamese translation");
     expect(screen.queryByText("Duration not adjusted")).toBeNull();
+    expect(screen.getByText("Duration adjusted", { selector: ".badge" })).toBeTruthy();
+
+    const details = screen.getByLabelText("Audio duration");
+    const text = details.textContent ?? "";
+    expect(text).toContain("Target 360.000000 s");
+    expect(text).toContain("Actual 360.000042 s");
+    // A one-sample difference stays visible: nothing is rounded to hide it.
+    expect(text).toContain("8,640,001 samples");
+    expect(text).toContain("8,640,000 samples");
+    expect(text).toContain("370.123458 s");
+    expect(text).toContain("×1.02812 (faster, pitch preserved)");
+    expect(text).toContain("70 samples (2.92 ms) of silence added at the end");
+    // ffprobe's own figure is shown as is, with the reason it can be a little longer.
+    expect(text).toContain("360.056000 s");
+    expect(text).toContain("encoder delay and padding");
+  });
+
+  it("says when the speech needed no tempo change and nothing was added", async () => {
+    const exact = {
+      ...RESULT,
+      audio: {
+        ...RESULT.audio,
+        provider: "azure-speech",
+        is_fixture: false,
+        duration_adjusted: true,
+        duration: {
+          sample_rate: 24000,
+          target_seconds: 5,
+          target_samples: 120000,
+          source_seconds: 5,
+          source_samples: 120000,
+          processed_seconds: 5,
+          processed_samples: 120000,
+          mp3_container_seconds: 5,
+          mp3_decoded_seconds: 5,
+          mp3_decoded_samples: 120000,
+          mp3_header_seconds: 5,
+          mp3_header_samples: 120000,
+          tempo_factor: null,
+          padded_samples: 0,
+          trimmed_samples: 0,
+        },
+      },
+    };
+    stubApi({ translation: "azure", speech: "azure", audio: "ffmpeg" }, exact);
+    render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+
+    await screen.findByText("Vietnamese translation");
+    const text = screen.getByLabelText("Audio duration").textContent ?? "";
+    expect(text).toContain("Tempo change");
+    expect(text).toContain("none (the speech was already within the rounding of the target)");
+    expect(text).toContain("Silence adjustment");
+  });
+
+  it("a result that was not adjusted shows no duration details", async () => {
+    stubApi({ translation: "azure", speech: "azure", audio: "mock" }, RESULT);
+    render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+
+    await screen.findByText("Vietnamese translation");
+    expect(screen.queryByLabelText("Audio duration")).toBeNull();
   });
 
   it("shows provider text as plain text, never as HTML", async () => {

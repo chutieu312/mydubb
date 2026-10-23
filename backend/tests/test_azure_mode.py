@@ -101,8 +101,8 @@ def test_other_mock_failure_stages_still_work_with_azure_translation(make_settin
     assert make_settings(**AZURE, mock_fail_stage="speech").mock_fail_stage == "speech"
 
 
-def test_provider_mode_azure_is_still_refused_until_speech_and_audio_exist(make_settings):
-    with pytest.raises(ValidationError, match="not implemented"):
+def test_provider_mode_azure_is_refused_while_speech_and_audio_are_mock(make_settings):
+    with pytest.raises(ValidationError, match="SPEECH_PROVIDER=azure, AUDIO_PROCESSOR=ffmpeg"):
         make_settings(provider_mode="azure", **AZURE)
 
 

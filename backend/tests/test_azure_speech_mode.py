@@ -117,8 +117,8 @@ def test_other_mock_failure_stages_still_work_with_azure_speech(make_settings):
     )
 
 
-def test_full_azure_provider_mode_is_still_refused_without_duration_processing(make_settings):
-    with pytest.raises(ValidationError, match="not implemented"):
+def test_full_azure_provider_mode_is_refused_without_duration_processing(make_settings):
+    with pytest.raises(ValidationError, match="AUDIO_PROCESSOR=ffmpeg"):
         make_settings(provider_mode="azure", **AZURE_BOTH)
 
 

@@ -30,7 +30,7 @@ export function ProviderBanner({ providers }: Props) {
           Audio processing:{" "}
           {providers.audio === "mock"
             ? "mock (pass-through: duration not adjusted)"
-            : "FFmpeg (real)"}
+            : "FFmpeg (real): the audio is adjusted to the target duration"}
         </li>
       </ul>
     </div>
@@ -40,6 +40,17 @@ export function ProviderBanner({ providers }: Props) {
 function summary(providers: Props["providers"]) {
   const realTranslation = providers.translation !== "mock";
   const realSpeech = providers.speech !== "mock";
+  const adjusted = providers.audio !== "mock";
+  if (realSpeech && adjusted) {
+    // Audio processing needs real speech, so a mock component here can only be translation.
+    return (
+      <>
+        <strong>Beta: mock translation, real speech, duration adjusted.</strong> The Vietnamese text
+        is an illustrative placeholder, read aloud by Azure Speech and adjusted to the target
+        duration by FFmpeg.
+      </>
+    );
+  }
   if (realTranslation && realSpeech) {
     return (
       <>
