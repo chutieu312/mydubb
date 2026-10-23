@@ -18,9 +18,10 @@ export interface VoiceOption {
 
 export interface AppMeta {
   provider_mode: string;
-  // True while any pipeline component (speech, audio processing) is still a mock.
+  // True while any pipeline component is still a mock.
   mock_mode: boolean;
-  // Implementation behind each pipeline stage: "mock" or "azure" (audio: always "mock" for now).
+  // Implementation behind each pipeline stage: translation/speech "mock" | "azure", audio
+  // "mock" | "ffmpeg".
   providers: { translation: string; speech: string; audio: string };
   voices: VoiceOption[];
   timestamp_format: string;
@@ -55,6 +56,30 @@ export interface Job {
   error: { code: string; message: string } | null;
 }
 
+/** Durations measured on the real audio; seconds are samples / sample_rate, unrounded. */
+export interface AudioDuration {
+  sample_rate: number;
+  target_seconds: number;
+  target_samples: number;
+  // Natural length of the speech before the tempo change.
+  source_seconds: number;
+  source_samples: number;
+  // PCM after the tempo change, before MP3 encoding.
+  processed_seconds: number;
+  processed_samples: number;
+  // Final MP3: what a decoder produces, the playable length its gapless header declares, and
+  // ffprobe's container duration (reported as is; may include encoder delay and padding).
+  mp3_decoded_seconds: number;
+  mp3_decoded_samples: number;
+  mp3_header_seconds: number;
+  mp3_header_samples: number;
+  mp3_container_seconds: number;
+  // >1 faster, <1 slower; null when the speech was already within rounding of the target.
+  tempo_factor: number | null;
+  padded_samples: number;
+  trimmed_samples: number;
+}
+
 export interface JobResult {
   job_id: string;
   translation: { text: string; is_illustrative: boolean; provider: string };
@@ -66,6 +91,8 @@ export interface JobResult {
     provider: string;
     is_fixture: boolean;
     duration_adjusted: boolean;
+    // Null when the duration was not adjusted.
+    duration: AudioDuration | null;
   };
   expires_at: string;
   notices: string[];

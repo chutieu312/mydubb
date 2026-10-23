@@ -4,6 +4,7 @@ from pathlib import Path
 
 from app.audio.base import ProcessedAudio
 from app.processing_errors import ProcessingError
+from app.speech.base import SpeechAudio
 
 
 class MockAudioProcessor:
@@ -15,8 +16,11 @@ class MockAudioProcessor:
         self._fail = fail
         self._delay = delay
 
+    def close(self) -> None:
+        pass
+
     def fit_to_duration(
-        self, speech_audio: Path, target_seconds: int, work_dir: Path
+        self, speech: SpeechAudio, target_seconds: int, work_dir: Path
     ) -> ProcessedAudio:
         time.sleep(self._delay)
         if self._fail:
@@ -25,5 +29,5 @@ class MockAudioProcessor:
                 "Audio processing failed (development mock failure scenario).",
             )
         output = work_dir / "final.mp3"
-        shutil.copyfile(speech_audio, output)
-        return ProcessedAudio(path=output, duration_adjusted=False, duration_seconds=None)
+        shutil.copyfile(speech.path, output)
+        return ProcessedAudio(path=output, duration_adjusted=False)

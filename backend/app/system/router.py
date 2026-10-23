@@ -30,7 +30,7 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
     """Public, non-sensitive configuration the UI needs before login."""
     settings = services.settings
     return {
-        "provider_mode": settings.provider_mode.value,
+        "provider_mode": settings.effective_provider_mode.value,
         "mock_mode": settings.is_mock_mode,
         # Implementation behind each pipeline stage, so the UI labels every component.
         "providers": settings.component_providers,

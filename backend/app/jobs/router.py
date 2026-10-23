@@ -14,6 +14,7 @@ from app.jobs.pipeline import JobInput
 from app.jobs.schemas import (
     AudioOut,
     CreateJobRequest,
+    DurationOut,
     JobResponse,
     JobResultResponse,
     TranslationOut,
@@ -37,6 +38,10 @@ SPEECH_NOTICE = (
 DURATION_NOTICE = (
     "The audio length has not been adjusted to the target duration yet, so it can be longer "
     "or shorter than the target."
+)
+DURATION_ADJUSTED_NOTICE = (
+    "The audio was sped up or slowed down as a whole (pitch preserved) so that it lasts exactly "
+    "the target duration. Nothing was cut or repeated; the measured durations are listed below."
 )
 GLOSSARY_NOTICE = (
     "Translated by Azure Translator. Technical terms from the MyDubb glossary are kept in "
@@ -148,8 +153,7 @@ def get_result(
         notices.append(FIXTURE_NOTICE)
     else:
         notices.append(SPEECH_NOTICE)
-        if not stored.duration_adjusted:
-            notices.append(DURATION_NOTICE)
+        notices.append(DURATION_ADJUSTED_NOTICE if stored.duration_adjusted else DURATION_NOTICE)
     audio_url = f"/api/jobs/{job.id}/result/audio"
     return JobResultResponse(
         job_id=job.id,
@@ -165,6 +169,7 @@ def get_result(
             provider=job.speech_provider,
             is_fixture=stored.audio_is_fixture,
             duration_adjusted=stored.duration_adjusted,
+            duration=(DurationOut(**stored.duration_report) if stored.duration_report else None),
         ),
         expires_at=stored.expires_at,
         notices=notices,

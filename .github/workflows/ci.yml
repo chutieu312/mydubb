@@ -176,6 +176,10 @@ jobs:
       # and encoded to an MP3 that is then probed. No credentials, no network.
       - name: Speech audio runtime check (real FFmpeg in the image)
         run: docker exec -i mydubb python - < docker/speech_runtime_check.py
+      # Real FFmpeg in the runtime image fits synthetic speech to exact durations (faster and
+      # slower, several chained atempo filters) and measures each MP3 three ways.
+      - name: Audio duration runtime check (real FFmpeg in the image)
+        run: docker exec -i mydubb python - < docker/audio_runtime_check.py
       - name: Azure speech without a key refuses to start
         run: |
           set +e
@@ -184,6 +188,23 @@ jobs:
           echo "$out" | tail -5
           [ "$status" -ne 0 ] || { echo "container started without a speech key" >&2; exit 1; }
           echo "$out" | grep -q AZURE_SPEECH_KEY
+      # Every component real (PROVIDER_MODE=azure) with fake keys. Azure is never called (no job
+      # is created); startup proves the image's FFmpeg has atempo and libmp3lame.
+      - name: Start container with the full Azure configuration
+        run: |
+          docker run -d --name mydubb-full --network host             -e PORT=8086             -e APP_ENV=development             -e PROVIDER_MODE=azure             -e TRANSLATION_PROVIDER=azure             -e AZURE_TRANSLATOR_KEY=ci-only-fake-key             -e SPEECH_PROVIDER=azure             -e AZURE_SPEECH_KEY=ci-only-fake-speech-key             -e AZURE_SPEECH_REGION=westus2             -e AUDIO_PROCESSOR=ffmpeg             -e COOKIE_SECURE=false             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE             mydubb:ci
+      - name: Full Azure configuration check
+        env:
+          BASE_URL: http://127.0.0.1:8086
+        run: sh docker/azure-full-mode-check.sh
+      - name: Full Azure mode with a mock component refuses to start
+        run: |
+          set +e
+          out=$(docker run --rm --network host -e PORT=8087 -e APP_ENV=development             -e PROVIDER_MODE=azure -e TRANSLATION_PROVIDER=azure -e AZURE_TRANSLATOR_KEY=ci-only-fake-key             -e SPEECH_PROVIDER=azure -e AZURE_SPEECH_KEY=ci-only-fake-speech-key             -e AZURE_SPEECH_REGION=westus2 -e COOKIE_SECURE=false             -e DATABASE_URL=postgresql://mydubb:mydubb_ci@127.0.0.1:5432/mydubb             -e ACCESS_CODE mydubb:ci 2>&1)
+          status=$?
+          echo "$out" | tail -5
+          [ "$status" -ne 0 ] || { echo "container started with a mock audio processor" >&2; exit 1; }
+          echo "$out" | grep -q AUDIO_PROCESSOR=ffmpeg
       - name: Container logs
         if: always()
         run: |
@@ -191,6 +212,7 @@ jobs:
           docker logs mydubb-prod || true
           docker logs mydubb-azure || true
           docker logs mydubb-speech || true
+          docker logs mydubb-full || true
 
   e2e:
     name: Browser E2E (Playwright, mock providers)

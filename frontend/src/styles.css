@@ -283,6 +283,41 @@ button.secondary {
   width: 100%;
 }
 
+.duration {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.duration p {
+  margin: 0 0 8px;
+}
+
+.duration-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.duration-list dt {
+  color: var(--muted);
+}
+
+.duration-list dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .duration-list {
+    grid-template-columns: 1fr;
+  }
+}
+
 h3 {
   margin: 8px 0 0;
   font-size: 1.05rem;

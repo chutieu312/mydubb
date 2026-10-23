@@ -170,6 +170,8 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             if services.speech_limiter is not None:
                 # Jobs still waiting for a speech request slot stop instead of outliving us.
                 services.speech_limiter.close()
+            # Running FFmpeg processes are killed instead of outliving the server.
+            services.audio.close()
             liveness_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await liveness_task
