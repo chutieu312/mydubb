@@ -7,7 +7,9 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scripts="$here/.."
 work="$(mktemp -d)"
-trap 'kill "${server_pid:-0}" 2>/dev/null; rm -rf "$work"' EXIT
+server_pid=""
+# Never `kill 0`: that signals the whole process group, including this script.
+trap '[ -z "$server_pid" ] || [ "$server_pid" = 0 ] || kill "$server_pid" 2>/dev/null; rm -rf "$work"' EXIT
 
 FAKE_KEY="rnd_FAKEKEYFORTESTS0123456789"
 FAKE_TOKEN="ghs_FAKETOKENFORTESTS0123456789"
@@ -37,7 +39,7 @@ start_server() { # start_server <scenario>
   echo "fake server did not start" >&2
   exit 2
 }
-stop_server() { kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null; server_pid=0; }
+stop_server() { kill "$server_pid" 2>/dev/null; wait "$server_pid" 2>/dev/null; server_pid=""; }
 
 deploy_run() { # deploy_run <scenario> [VAR=value...] -> sets rc, OUT, GH_OUT, SUMMARY
   local scenario="$1"
@@ -163,8 +165,8 @@ expect "a branch name is not accepted as SHA" test "$rc" -ne 0 -a "$(posts)" -eq
 deploy_run happy RENDER_SERVICE_ID=../x
 expect "a malformed service id is rejected" test "$rc" -ne 0 -a "$(posts)" -eq 0
 start_server happy
-out="$(env -i PATH="$PATH" RENDER_API_KEY=k RENDER_SERVICE_ID=srv-testservice DEPLOY_SHA="$SHA" GITHUB_REPOSITORY=o/r GITHUB_TOKEN=t \
-  RENDER_API_BASE="http://127.0.0.1:$port/v1" bash "$scripts/render-deploy.sh" 2>&1)"
+env -i PATH="$PATH" RENDER_API_KEY=k RENDER_SERVICE_ID=srv-testservice DEPLOY_SHA="$SHA" GITHUB_REPOSITORY=o/r GITHUB_TOKEN=t \
+  RENDER_API_BASE="http://127.0.0.1:$port/v1" bash "$scripts/render-deploy.sh" > /dev/null 2>&1
 rc=$?
 stop_server
 expect "API base override is refused without the test flag" test "$rc" -ne 0
