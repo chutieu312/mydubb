@@ -37,7 +37,7 @@ Set up on 2026-10-22 (Milestone 2B) and verified end to end.
 | Database | Neon project `mydubb`, Postgres 17, AWS US West 2 (Oregon), direct connection |
 | DNS (GoDaddy) | `A @ 216.24.57.1`, `CNAME www mydubb.onrender.com`; NS/SOA/`_domainconnect`/`_dmarc` unchanged |
 | TLS | Google Trust Services certificates for `mydubb.com` and `www.mydubb.com`, renewed by Render |
-| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: **FFmpeg duration fitting** (`AUDIO_PROCESSOR=ffmpeg`, since 2026-10-23, see "FFmpeg duration fitting"); `PROVIDER_MODE=mock` and `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` from `render.yaml` are still set, though no component is a mock any more |
+| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: **FFmpeg duration fitting** (`AUDIO_PROCESSOR=ffmpeg`, since 2026-10-23, see "FFmpeg duration fitting"); `render.yaml` declares `PROVIDER_MODE=azure` (every component real; no mock opt-in) |
 | Client IP header | `cf-connecting-ip` confirmed present (no "configured but absent" warning in the logs) |
 
 Milestone 3A (enabled 2026-10-22): PR #9, merge SHA `5ade22201dd7c9d8b589a3d4d296cb94417be334`;
@@ -373,17 +373,20 @@ longer needed but harmless). Save; Render redeploys the service. Then `/api/meta
 `ffmpeg`/`ffprobe`, the `atempo` filter or the `libmp3lame` encoder is missing, never falling
 back to the pass-through.
 
-Optional cleanup after acceptance (a separate change, not part of this milestone): set
-`PROVIDER_MODE=azure` and remove `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION` in `render.yaml` and the
-dashboard, so the service would refuse to start with any mock component.
+Cleanup after acceptance (done in a separate change): `render.yaml` declares
+`PROVIDER_MODE=azure` and no longer `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION`, so the service refuses
+to start with any mock component. Render's Blueprint sync applies the changed value but does **not**
+delete a variable that was removed from the file: delete `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION` in
+the dashboard by hand (it is harmless meanwhile: it only matters for `PROVIDER_MODE=mock`).
 
 ### Roll back
 
 Remove the `AUDIO_PROCESSOR` variable (or set it to `mock`) and save: audio processing returns to
-the pass-through, exactly the configuration before 3C. If `PROVIDER_MODE` was changed to `azure`
-for the cleanup above, set it back to `mock` and restore `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`,
-otherwise the service refuses to start with a mock component. Code rollback follows the usual
-rules below (this milestone has no database migration).
+the pass-through, exactly the configuration before 3C. With `PROVIDER_MODE=azure` in
+`render.yaml` the service then refuses to start (a mock component), so also set `PROVIDER_MODE=mock`
+and `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true` in the dashboard (or revert the `render.yaml` change
+and let the Blueprint sync it). Code rollback follows the usual rules below (this milestone has no
+database migration).
 
 ### Expected behavior and limits
 
