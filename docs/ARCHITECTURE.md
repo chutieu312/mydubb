@@ -217,7 +217,7 @@ silent fallback to mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected t
 | 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
 | 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Done: live on https://mydubb.com since 2026-10-22 (PR #11) |
-| 3C | FFmpeg duration processing (tempo change of the whole audio to exactly the target) | Implemented in a pull request; awaiting the Product Owner's acceptance and deployment |
+| 3C | FFmpeg duration processing (tempo change of the whole audio to exactly the target) | Done: live on https://mydubb.com since 2026-10-23 (PR #13) |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
@@ -490,8 +490,8 @@ quality evaluation with real course transcripts, and a decision whether to migra
 **Azure Speech (F0)** - implemented in Milestone 3B (see "Azure Speech" above). Remaining:
 the Product Owner's listening evaluation of mixed Vietnamese/English pronunciation.
 
-**Audio processing (FFmpeg)** - implemented in Milestone 3C (see "Duration fitting"). Remaining:
-the Product Owner's listening evaluation of the tempo-adjusted audio on production.
+**Audio processing (FFmpeg)** - implemented in Milestone 3C (see "Duration fitting") and accepted
+by the Product Owner on production.
 
 **Production with real providers**
 - Disclosure that submitted text is processed by Azure: done for translation (3A) and speech
