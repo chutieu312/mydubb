@@ -67,9 +67,14 @@ Requires session + CSRF.
   "transcript": "English text, with or without timestamps",
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
-  "voice": "AndrewMultilingual"
+  "voice": "AndrewMultilingual",
+  "speed": 1.25
 }
 ```
+
+`speed` is optional and is the **audio speed**: the generated and downloaded file lasts
+`baseline / speed`, where the baseline is `last_sentence_start - first_sentence_start`. See
+[Audio speed](#audio-speed).
 
 Validation (backend is authoritative):
 - Timestamps: `HH:MM:SS`; hours ≥ 2 digits (may be more), minutes/seconds `00–59`.
@@ -85,7 +90,43 @@ Validation (backend is authoritative):
   - Preserved: unbracketed `M:SS`/`HH:MM` prefixes such as `10:30 is our meeting time.` or
     `16:30 is the aspect ratio.`, single or out-of-order timestamps, and numeric lines.
   See `backend/app/transcript/cleaning.py` for the authoritative rules.
-- Target duration = last start − first start (e.g. `00:00:10` → `00:06:10` = **360 s**).
+- Baseline duration = last start − first start (e.g. `00:00:10` → `00:06:10` = **360 s**).
+- `speed`: exactly one of the JSON numbers `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`
+  (`1` and `1.0` are the same). Omitted means `1`, which is the behaviour before the option
+  existed. `null`, booleans, strings (`"1.5"`), lists, other numbers (`1.1`, `1.2500001`, `0`,
+  `3`) and non-finite values are rejected with `422 validation_error` (field `speed`). The output
+  length is never taken from the client; a field such as `output_duration_seconds` is ignored.
+
+### Audio speed
+
+`speed` changes the audio **file** that is produced and downloaded; it is not a player setting.
+
+| Speed | Output for a 20 s baseline | Target samples at 24 kHz |
+|---|---|---|
+| 0.5 | 40 s | 960,000 |
+| 0.75 | 26.67 s | 640,000 |
+| 1 | 20 s | 480,000 |
+| 1.25 | 16 s | 384,000 |
+| 1.5 | 13.33 s | 320,000 |
+| 1.75 | 11.43 s | 274,286 |
+| 2 | 10 s | 240,000 |
+
+- `1` means "fitted to the baseline", the same as before; it is **not** the natural speed Azure
+  returned (that is shorter or longer than the baseline and is stretched to fit it).
+- Target length in samples: `round_half_up(baseline_seconds * sample_rate / speed)`, computed with
+  integers (each speed is an exact number of hundredths), so no float error accumulates. Half-up is
+  the one rounding rule everywhere (Python's `round` is not used). The actual length is
+  `target_samples / sample_rate`; the planned (unrounded) length and the actual one differ by half
+  a sample at most. Timestamps stay whole seconds; only the output length can be fractional.
+- The audio is fitted **directly** from Azure's original lossless audio to the target
+  (`tempo = source_samples / target_samples`); it is not fitted to the baseline first and sped up
+  again. Pitch, the single voice and every spoken word are preserved (see ARCHITECTURE.md).
+- The choice is stored with the job (`jobs.audio_speed_percent`) and repeated in the job and the
+  result, so reloading shows what the job was submitted with, whatever the form says now.
+- With the mock audio processor the choice is recorded and reported, but the fixture is **not**
+  adjusted (`duration_adjusted: false`, `audio.duration: null`), and a notice says so.
+- Players must keep `playbackRate = 1`: the file is already processed, so applying the speed
+  again would play it twice as fast/slow.
 
 Responses:
 - `202` + `Location: /api/jobs/{id}` + a Job body (status `queued`). Returned immediately; work
@@ -108,12 +149,22 @@ belongs to another session** (indistinguishable by design).
   "last_sentence_start": "00:06:10",
   "target_duration_seconds": 360,
   "target_duration": "00:06:00",
+  "baseline_duration_seconds": 360,
+  "speed": 1.25,
+  "output_duration_seconds": 288.0,
   "created_at": "…", "updated_at": "…",
   "completed_at": null,
   "result_expires_at": null,
   "error": null
 }
 ```
+
+`target_duration_seconds` / `target_duration` keep their original meaning, the **baseline**
+(last − first sentence start); they do not depend on `speed`, and `baseline_duration_seconds` is the
+same number under a clearer name. `speed` is the value submitted (`1` for jobs created before the
+option existed). `output_duration_seconds` is the planned length, `baseline / speed`, unrounded
+(a float, e.g. `26.666666666666668` for baseline 20 and speed 0.75); the sample-exact target and the
+verified length are in the result.
 
 `error` is `{"code","message"}` when failed. Codes: `translation_failed` (mock),
 `speech_failed`, `audio_processing_failed`, `internal_error`, `interrupted`, and for Azure
@@ -135,6 +186,9 @@ Requires session and ownership.
   ```json
   {
     "job_id": "uuid",
+    "baseline_duration_seconds": 360,
+    "speed": 1.25,
+    "output_duration_seconds": 288.0,
     "translation": { "text": "…", "is_illustrative": true, "provider": "mock-translation" },
     "audio": {
       "url": "/api/jobs/{id}/result/audio",
@@ -161,16 +215,20 @@ Requires session and ownership.
   ```json
   "duration": {
     "sample_rate": 24000,
-    "target_seconds": 360, "target_samples": 8640000,
+    "target_seconds": 360.0, "target_samples": 8640000,
+    "baseline_seconds": 360, "speed": 1.0,
     "source_seconds": 370.123458, "source_samples": 8882963,
     "processed_seconds": 360.0, "processed_samples": 8640000,
     "mp3_decoded_seconds": 360.0, "mp3_decoded_samples": 8640000,
     "mp3_header_seconds": 360.0, "mp3_header_samples": 8640000,
     "mp3_container_seconds": 360.048,
-    "tempo_factor": 1.02812, "padded_samples": 70, "trimmed_samples": 0
+    "tempo_factor": 1.02812, "padded_samples": 70, "trimmed_samples": 0,
+    "mp3_padding_adjusted_samples": 0
   }
   ```
-  `target` is the job's `target_duration_seconds`; `source` the natural length of the speech;
+  `target` is the **output target**, `baseline / speed` rounded to a whole sample
+  (`target_samples / sample_rate`; a float, equal to the baseline at speed 1, which is why the
+  example is 360.0); `baseline_seconds` and `speed` are the inputs it came from. `source` the natural length of the speech;
   `processed` the PCM after the tempo change (equal to the target); `mp3_decoded` the samples a
   decoder yields for the final MP3 and `mp3_header` the length its own gapless header declares
   (both within one sample of the target, or the job fails). `mp3_container_seconds` is
@@ -179,6 +237,11 @@ Requires session and ownership.
   `tempo_factor` is above 1 when the speech was sped up and below 1 when it was slowed down
   (`null`: it was already within one rounding window of the target); `padded_samples` /
   `trimmed_samples` are silence added to or removed from the end (never audible audio).
+  `mp3_padding_adjusted_samples` is non-zero when the MP3 header's end padding had to be corrected
+  (FFmpeg caps it at 1105 samples, which leaves the header up to 46 samples too long for some
+  fractional targets; see ARCHITECTURE.md); 0 means the encoder's header was already exact.
+  A stored result written before `speed` existed (no `speed` in its report) is returned with
+  `speed: 1` and `baseline_seconds` equal to its target.
 - `409 result_not_ready` (still running) or `409 job_failed` (with `job_error_code`).
 - `410 result_expired` — the job completed but its temporary result expired or was removed
   (TTL elapsed, cleanup, or restart on an ephemeral disk).

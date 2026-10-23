@@ -3,12 +3,13 @@ import time
 from pathlib import Path
 
 from app.audio.base import ProcessedAudio
+from app.audio.speed import DurationTarget
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio
 
 
 class MockAudioProcessor:
-    """Passes audio through unchanged. Does NOT adjust duration."""
+    """Passes audio through unchanged. Does NOT adjust duration, whatever speed was chosen."""
 
     name = "mock-audio"
 
@@ -20,7 +21,7 @@ class MockAudioProcessor:
         pass
 
     def fit_to_duration(
-        self, speech: SpeechAudio, target_seconds: int, work_dir: Path
+        self, speech: SpeechAudio, target: DurationTarget, work_dir: Path
     ) -> ProcessedAudio:
         time.sleep(self._delay)
         if self._fail:

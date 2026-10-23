@@ -2,7 +2,16 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    Uuid,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -39,6 +48,10 @@ class Job(Base):
             "last_sentence_start_seconds > first_sentence_start_seconds",
             name="timestamps_ordered",
         ),
+        CheckConstraint(
+            "audio_speed_percent IN (50, 75, 100, 125, 150, 175, 200)",
+            name="audio_speed_valid",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -55,7 +68,14 @@ class Job(Base):
     voice: Mapped[str] = mapped_column(String(20))
     first_sentence_start_seconds: Mapped[int] = mapped_column(Integer)
     last_sentence_start_seconds: Mapped[int] = mapped_column(Integer)
+    # Baseline duration: last - first sentence start (whole seconds). With a speed other than
+    # 1x the audio is NOT this long; the output length is baseline / speed (audio/speed.py).
     target_duration_seconds: Mapped[int] = mapped_column(Integer)
+    # Audio speed chosen at submission, in percent (100 = 1x). Rows from before the option
+    # existed read as 100 through the column default.
+    audio_speed_percent: Mapped[int] = mapped_column(
+        SmallInteger, server_default=text("100"), default=100
+    )
     transcript_char_count: Mapped[int] = mapped_column(Integer)
     translation_provider: Mapped[str] = mapped_column(String(50))
     speech_provider: Mapped[str] = mapped_column(String(50))

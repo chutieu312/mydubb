@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.audio.duration import DurationReport
+from app.audio.speed import DurationTarget
 from app.speech.base import SpeechAudio
 
 
@@ -18,14 +19,16 @@ class ProcessedAudio:
 class AudioProcessor(Protocol):
     """Turns synthesized speech into the final MP3 at the target duration.
 
-    The real implementation uses FFmpeg to change the tempo of the complete audio so that its
-    length equals the target duration, starting from the speech provider's lossless audio.
+    The target is the baseline from the timestamps divided by the chosen speed (a whole number
+    of samples, see audio/speed.py). The real implementation uses FFmpeg to change the tempo of
+    the complete audio so that its length equals the target, starting from the speech
+    provider's lossless audio.
     """
 
     name: str
 
     def fit_to_duration(
-        self, speech: SpeechAudio, target_seconds: int, work_dir: Path
+        self, speech: SpeechAudio, target: DurationTarget, work_dir: Path
     ) -> ProcessedAudio: ...
 
     def close(self) -> None:

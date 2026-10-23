@@ -1,4 +1,5 @@
 import type { JobStatus, VoiceOption } from "../../api/types";
+import { formatOutputDuration, speedLabel } from "../../lib/speed";
 import { ResultView } from "./ResultView";
 import { useJobPolling } from "./useJobPolling";
 
@@ -35,8 +36,10 @@ export function JobPanel({ jobId, voices, onSessionExpired }: Props) {
     <section className="card stack" aria-labelledby="job-title">
       <h2 id="job-title">Processing status</h2>
       <p className="muted">
-        Voice {voices.find((v) => v.id === job.voice)?.label ?? job.voice} · Target duration {job.target_duration} ({job.target_duration_seconds}{" "}
-        s, calculated by the server)
+        Voice {voices.find((v) => v.id === job.voice)?.label ?? job.voice} · Duration at 1x{" "}
+        {job.target_duration} ({job.baseline_duration_seconds} s) · Speed {speedLabel(job.speed)} ·
+        Planned audio length {formatOutputDuration(job.output_duration_seconds)} (all calculated by
+        the server)
       </p>
       <ol className="stages" aria-live="polite">
         {STAGES.map((stage, index) => {

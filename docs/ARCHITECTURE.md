@@ -30,7 +30,7 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
 | `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter | `processing_errors`, `audio`, `translation.glossary` |
-| `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader, MP3 fixture | `processing_errors`, `speech.base` |
+| `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
 | `jobs/` | Job model, guarded status transitions, executor, pipeline, HTTP router | all of the above via protocols |
 | `system/` | Health, readiness, public meta | db |
@@ -109,7 +109,7 @@ JSON, roughly a million and a half words) to protect a small instance's memory.
 | Data | Where | Lifetime |
 |---|---|---|
 | Transcript text | Worker memory only (`JobInput`) | Until the job finishes |
-| Job metadata (status, voice, timestamps, target duration, character count, provider names, error) | PostgreSQL `jobs` | Not deleted automatically in M1 (see open decisions) |
+| Job metadata (status, voice, timestamps, baseline duration, audio speed, character count, provider names, error) | PostgreSQL `jobs` | Not deleted automatically in M1 (see open decisions) |
 | Translation text + MP3 | Local disk `RESULT_STORAGE_DIR/<job_id>/` | `RESULT_TTL_SECONDS` after completion (default 1 h) |
 | Per-job working files | OS temp dir | Deleted when the pipeline ends |
 | Sessions | PostgreSQL `access_sessions` | Deleted by cleanup once expired or revoked; their jobs keep metadata with `session_id = NULL` |
@@ -218,6 +218,7 @@ silent fallback to mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected t
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
 | 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Done: live on https://mydubb.com since 2026-10-22 (PR #11) |
 | 3C | FFmpeg duration processing (tempo change of the whole audio to exactly the target) | Done: live on https://mydubb.com since 2026-10-23 (PR #13) |
+| - | Audio speed choice (seven speeds; output = baseline / speed) | In review (pull request); not accepted or deployed |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.
 
@@ -383,8 +384,9 @@ before submit.
 
 ### Duration fitting (Milestone 3C)
 
-`AUDIO_PROCESSOR=ffmpeg` selects `FfmpegAudioProcessor` (`audio/fitter.py`). The contract is
-unchanged: the target is `last_sentence_start - first_sentence_start`, with no time added for
+`AUDIO_PROCESSOR=ffmpeg` selects `FfmpegAudioProcessor` (`audio/fitter.py`). The contract: the
+target is `last_sentence_start - first_sentence_start` at speed 1x; the audio speed option (see
+"Audio speed" below) divides that baseline by the chosen speed. Either way, with no time added for
 reading the last sentence, no duration inferred from word counts, no per-sentence alignment.
 
 **What it does** (to the lossless WAV Azure Speech produced, `SpeechAudio.lossless_path`):
@@ -477,6 +479,74 @@ one still runs to the end of the audio (the only thing after it is the reported 
 a 440 Hz tone is unchanged at factors 0.1 to 10. On real Azure speech the last audible sample lands
 within 300 samples (12 ms) of where the factor predicts, so the last sentence is not cut. These
 checks cannot judge sound quality; the Product Owner listens.
+
+### Audio speed
+
+The user picks one of seven speeds (0.5, 0.75, 1, 1.25, 1.5, 1.75, 2; default 1) under the two
+timestamps. It changes the **file** that is generated and downloaded:
+
+```
+baseline_seconds = last_sentence_start - first_sentence_start      (whole seconds)
+target_samples   = round_half_up(baseline_seconds * sample_rate / speed)
+actual duration  = target_samples / sample_rate
+```
+
+`audio/speed.py` holds this arithmetic. Each speed is an exact number of hundredths (`AudioSpeed`
+values 50 ... 200), so the target is computed with integers only, and half-up is the one rounding
+rule (documented and tested; `round` is not used). Timestamps stay whole seconds; only the output
+can be fractional, and it is carried as samples through the pipeline (`DurationTarget` ->
+`FfmpegAudioProcessor` -> `DurationReport`), never rounded to whole seconds.
+
+Decisions:
+
+- **1x is the baseline, not Azure's natural speed.** 1x keeps matching the video's time span between
+  the two timestamps; other speeds make the audio shorter or longer than that span. This is an
+  intentional extension of the original requirement (the output no longer always equals the
+  baseline); the UI says so next to the preview.
+- **One fitting step.** The processor reads Azure's original WAV and fits it straight to the new
+  `target_samples` (`tempo = source_samples / target_samples`). The speed is never multiplied onto a
+  tempo that already fitted the baseline, so there is no double stretch and one MP3 encode. Pitch, one
+  voice and all words are kept, and the PCM, decoded-MP3 and gapless-header checks, the rule against
+  cutting speech and the absence of silent fallbacks are unchanged. The earlier FFmpeg test matrix is
+  not repeated; the tests add the seven-speed table, fractional targets and content checks.
+- **The server decides.** `speed` is validated server-side against exactly seven JSON numbers (no
+  booleans, strings, null or other numbers); a missing value is 1x. The output length is computed
+  from the stored timestamps and speed, never read from the request.
+- **Stored with the job.** `jobs.audio_speed_percent` (smallint, `NOT NULL DEFAULT 100`, CHECK in the
+  seven values; migration `0003`). The baseline stays in `jobs.target_duration_seconds` with its old
+  meaning (the API keeps `target_duration_seconds` as the baseline and adds
+  `baseline_duration_seconds`, `speed`, `output_duration_seconds`), so no existing field changed
+  meaning. The result's `audio.duration` additionally carries `baseline_seconds` and `speed`; its
+  `target_seconds` is the output target (a float, equal to the baseline at 1x). The UI shows the
+  server's snapshot for the job, so changing the form afterwards cannot relabel an old job.
+- **Compatibility.** Rows from older code read as 100 (1x) through the column default, which also
+  covers rows that older code inserts while a deploy overlaps or after an emergency rollback;
+  stored results without `speed` in their report are returned as 1x; old jobs remain readable.
+- **Player.** The file is already processed, so the player keeps `playbackRate` 1 (applying the
+  speed again would double it).
+- **Mock mode.** The speed is recorded and shown, but the fixture is not adjusted and the result says
+  so (`duration_adjusted: false`); no fixture claims a real duration.
+
+**MP3 end padding at fractional targets.** FFmpeg's MP3 muxer writes at most 1105 samples of end
+padding. At 24 kHz an MP3 frame is 576 samples, and when a target is 1-46 samples over a whole
+number of frames the encoder emits one frame more than the audio fills; the padding then exceeds
+the cap and the header (and every gapless decoder) plays up to 46 samples (1.9 ms) too many.
+Whole-second targets are always 0, 192 or 384 samples over, so this never showed before speeds
+existed; about 8% of fractional targets hit it (measured on FFmpeg 7.1.5, e.g. a 68,571-sample target
+decoded to 68,591). `set_exact_padding` (`audio/mp3_header.py`) fixes exactly that case after
+encoding: it rewrites the 12-bit padding field to `frames x 576 - delay - target` and recomputes the
+LAME tag CRC (CRC-16, reflected 0xA001, over the first 190 bytes with the CRC bytes zeroed, checked
+against files FFmpeg wrote). It refuses (the job fails with `audio_verification_failed`) when the
+stored CRC does not match what it computes, the true padding does not fit, or anything else is
+unexpected; audio frames are never touched, and the decoded and header lengths are then verified as
+before. The amount is reported as `mp3_padding_adjusted_samples`. The limit for players that ignore
+the header is unchanged (up to about 50-70 ms longer).
+
+**Limits that remain.** An MP3 or a player that ignores the gapless header plays up to about 50-70 ms
+more than the target, as before. Extreme speeds relative to the natural speech (for example 0.5x of
+audio that was already much shorter than the baseline) mean large tempo factors, and quality drops
+well beyond roughly 0.5-2x overall, as described under "Duration fitting". At 0.5x the filter's
+window rounding can add up to about 85 ms of silence at the end (reported as `padded_samples`).
 
 ### Milestone 3 (real providers)
 

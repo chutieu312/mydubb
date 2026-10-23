@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.access.models import AccessSession
+from app.audio.speed import AudioSpeed, DurationTarget
 from app.dependencies import get_db, get_services, require_csrf, require_session
 from app.errors import ApiError
 from app.jobs import service
@@ -43,6 +44,14 @@ DURATION_ADJUSTED_NOTICE = (
     "The audio was sped up or slowed down as a whole (pitch preserved) so that it lasts exactly "
     "the target duration. Nothing was cut or repeated; the measured durations are listed below."
 )
+SPEED_NOTICE = (
+    "Audio speed {speed}: the audio is the baseline duration (last - first sentence start) "
+    "divided by {speed}, so it is {relation} the video's time span between those two timestamps."
+)
+SPEED_NOT_APPLIED_NOTICE = (
+    "Audio speed {speed} was selected, but this audio processor does not adjust duration, so "
+    "the audio is neither the baseline length nor the length that speed would give."
+)
 GLOSSARY_NOTICE = (
     "Translated by Azure Translator. Technical terms from the MyDubb glossary are kept in "
     "English; terms that are not in the glossary may be translated."
@@ -75,6 +84,7 @@ def create_job(
             voice=body.voice.value,
             first_sentence_start_seconds=parse_timestamp(body.first_sentence_start),
             last_sentence_start_seconds=parse_timestamp(body.last_sentence_start),
+            audio_speed=body.speed,
             transcript_char_count=len(body.transcript),
             **services.pipeline.provider_names(),
             runner_id=services.instance_id,
@@ -89,7 +99,8 @@ def create_job(
         job_id=job.id,
         transcript=body.transcript,
         voice=body.voice,
-        target_duration_seconds=job.target_duration_seconds,
+        baseline_seconds=job.target_duration_seconds,
+        speed=body.speed,
     )
     services.pipeline.start(slot, job_input)
     response.headers["Location"] = f"/api/jobs/{job.id}"
@@ -144,6 +155,7 @@ def get_result(
 ) -> JobResultResponse:
     job = _owned_job_or_404(db, job_id, session)
     stored = _available_result(job, services)
+    speed = AudioSpeed(job.audio_speed_percent)
     notices = []
     if stored.translation_is_illustrative:
         notices.append(ILLUSTRATIVE_NOTICE)
@@ -154,9 +166,20 @@ def get_result(
     else:
         notices.append(SPEECH_NOTICE)
         notices.append(DURATION_ADJUSTED_NOTICE if stored.duration_adjusted else DURATION_NOTICE)
+    if speed is not AudioSpeed.X1:
+        if stored.duration_adjusted:
+            relation = "shorter than" if speed.value > 100 else "longer than"
+            notices.append(SPEED_NOTICE.format(speed=speed.label, relation=relation))
+        else:
+            notices.append(SPEED_NOT_APPLIED_NOTICE.format(speed=speed.label))
     audio_url = f"/api/jobs/{job.id}/result/audio"
     return JobResultResponse(
         job_id=job.id,
+        baseline_duration_seconds=job.target_duration_seconds,
+        speed=speed.number,
+        output_duration_seconds=float(
+            DurationTarget(job.target_duration_seconds, speed).output_seconds
+        ),
         translation=TranslationOut(
             text=stored.translation_text,
             is_illustrative=stored.translation_is_illustrative,

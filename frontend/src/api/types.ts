@@ -39,6 +39,9 @@ export interface CreateJobInput {
   first_sentence_start: string;
   last_sentence_start: string;
   voice: string;
+  // One of 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2. The server rejects anything else and computes the
+  // output length itself.
+  speed: number;
 }
 
 export interface Job {
@@ -47,8 +50,14 @@ export interface Job {
   voice: string;
   first_sentence_start: string;
   last_sentence_start: string;
+  // Baseline: last - first sentence start (the duration at 1x). Independent of the speed.
   target_duration_seconds: number;
   target_duration: string;
+  baseline_duration_seconds: number;
+  // Speed chosen when the job was submitted (1 for jobs from before the option existed).
+  speed: number;
+  // Planned output length: baseline / speed. The verified length is in the result.
+  output_duration_seconds: number;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -59,8 +68,11 @@ export interface Job {
 /** Durations measured on the real audio; seconds are samples / sample_rate, unrounded. */
 export interface AudioDuration {
   sample_rate: number;
+  // Output target: baseline / speed, rounded to a whole sample.
   target_seconds: number;
   target_samples: number;
+  baseline_seconds: number;
+  speed: number;
   // Natural length of the speech before the tempo change.
   source_seconds: number;
   source_samples: number;
@@ -78,10 +90,16 @@ export interface AudioDuration {
   tempo_factor: number | null;
   padded_samples: number;
   trimmed_samples: number;
+  // Samples by which the MP3 header's end padding was corrected; 0 when it was already exact.
+  mp3_padding_adjusted_samples: number;
 }
 
 export interface JobResult {
   job_id: string;
+  // What the job was submitted with, also when the audio was not adjusted (mock audio).
+  baseline_duration_seconds: number;
+  speed: number;
+  output_duration_seconds: number;
   translation: { text: string; is_illustrative: boolean; provider: string };
   audio: {
     url: string;

@@ -32,6 +32,26 @@ operations.
 generates a random code and saves it to `.env` (git-ignored); read it there to log in. On
 Windows, run the scripts from Git Bash with Docker Desktop started.
 
+## Using the app
+
+Paste the English transcript, give the **First Sentence Start Time** and the **Last Sentence Start
+Time** (`HH:MM:SS`), pick a voice and an **audio speed**, then **Generate Dubbing**.
+
+- The two timestamps give the *baseline*: `last - first`. At **1x** (the default) the audio lasts
+  exactly that long.
+- The other speeds (0.5x, 0.75x, 1.25x, 1.5x, 1.75x, 2x) change the audio file itself:
+  `length = baseline / speed`. For a baseline of 20 s, 2x gives 10 s and 0.5x gives 40 s. The audio
+  is then shorter or longer than the video's time span between the two timestamps; the form
+  previews the expected length and says so.
+- The speed is not a player setting: the downloaded MP3 has that length, the player plays it at
+  normal speed, and the result lists the baseline, the speed, the target and the length measured on
+  the finished file. See [docs/API.md](docs/API.md#audio-speed) and
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+To listen to a speed series from a local lossless WAV without calling Azure:
+`cd backend && uv run python -m scripts.duration_smoke --wav speech.wav --baseline-seconds 20 --speeds`
+(needs FFmpeg; files go to `duration-samples/`).
+
 ## Repository layout
 
 ```

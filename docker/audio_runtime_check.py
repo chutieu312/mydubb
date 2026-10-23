@@ -16,6 +16,7 @@ from pathlib import Path
 from app.audio.ffmpeg import locate_tools
 from app.audio.fitter import FfmpegAudioProcessor
 from app.audio.mp3_header import read_gapless_info
+from app.audio.speed import AudioSpeed, DurationTarget
 from app.speech.base import SpeechAudio
 
 RATE = 24000
@@ -44,7 +45,7 @@ for natural, target in CASES:
         wav = work / "speech.wav"
         write_tone(wav, natural)
         speech = SpeechAudio(path=work / "speech.mp3", is_fixture=False, lossless_path=wav)
-        result = processor.fit_to_duration(speech, target, work)
+        result = processor.fit_to_duration(speech, DurationTarget(target), work)
         report = result.duration_report
         expected = target * RATE
         pcm = work / "check.s16le"
@@ -62,5 +63,29 @@ for natural, target in CASES:
             f"{natural:5.1f} s -> {target:2d} s: tempo={report.tempo_factor} "
             f"PCM={report.processed_samples} decoded={decoded} header={header} "
             f"ffprobe_container={report.mp3_container_seconds:.6f}"
+        )
+# Audio speed: fractional targets (baseline / speed), including one that hits FFmpeg's MP3 end
+# padding cap (68,571 samples is 27 over a whole number of frames).
+for natural, baseline, speed in [(5.5, 5, AudioSpeed.X1_75), (20.4, 20, AudioSpeed.X0_75)]:
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        wav = work / "speech.wav"
+        write_tone(wav, natural)
+        speech = SpeechAudio(path=work / "speech.mp3", is_fixture=False, lossless_path=wav)
+        target = DurationTarget(baseline, speed)
+        result = processor.fit_to_duration(speech, target, work)
+        expected = target.samples(RATE)
+        pcm = work / "check.s16le"
+        subprocess.run(  # noqa: S603
+            [tools.ffmpeg, "-v", "error", "-y", "-i", str(result.path), "-f", "s16le", str(pcm)],
+            check=True,
+        )
+        decoded = pcm.stat().st_size // 2
+        header = read_gapless_info(result.path).playable_samples
+        assert abs(decoded - expected) <= 1, (baseline, speed, decoded, expected)
+        assert abs(header - expected) <= 1, (baseline, speed, header, expected)
+        print(
+            f"baseline {baseline} s at {speed.label}: target={expected} decoded={decoded} "
+            f"header={header} padding_adjusted={result.duration_report.mp3_padding_adjusted_samples}"
         )
 print("audio duration runtime OK: every MP3 has exactly the target number of samples")

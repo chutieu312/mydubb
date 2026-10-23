@@ -327,3 +327,101 @@ h3 {
   margin-top: 24px;
   text-align: center;
 }
+
+/* Audio speed: a radio group drawn as boxes. The native radio stays in the page (invisible but
+   focusable and clickable), so keyboard and screen readers behave as for any radio group. */
+.speed-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.speed-option {
+  position: relative;
+  display: block;
+  font-weight: 400;
+}
+
+.speed-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.speed-option span {
+  display: block;
+  min-height: 44px;
+  padding: 10px 8px;
+  box-sizing: border-box;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.speed-option input:checked + span {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-text);
+  font-weight: 700;
+}
+
+/* The selected box also carries a mark, so the choice is not shown by colour alone. */
+.speed-option input:checked + span::before {
+  content: "\2713\00a0";
+}
+
+.speed-option input:focus-visible + span {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.speed-option input:not(:checked):hover + span {
+  border-color: var(--primary);
+}
+
+.preview {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.preview-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.preview-list dt {
+  color: var(--muted);
+}
+
+.preview-list dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.warning-inline {
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--warning-bg);
+  border-left: 4px solid var(--warning-border);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 520px) {
+  .preview-list {
+    grid-template-columns: 1fr;
+  }
+}

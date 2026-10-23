@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,6 +46,9 @@ function job(voice: string) {
     last_sentence_start: "00:06:10",
     target_duration_seconds: 360,
     target_duration: "00:06:00",
+    baseline_duration_seconds: 360,
+    speed: 1,
+    output_duration_seconds: 360,
     created_at: "2030-01-01T00:00:00Z",
     updated_at: "2030-01-01T00:00:00Z",
     completed_at: null,
@@ -97,7 +100,8 @@ describe("voice selection", () => {
     render(<App />);
     await screen.findByLabelText("English Transcript");
 
-    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    const voiceGroup = screen.getByRole("group", { name: "Voice" });
+    const radios = within(voiceGroup).getAllByRole("radio") as HTMLInputElement[];
     expect(radios.map((r) => r.value)).toEqual(["AndrewMultilingual", "EmmaMultilingual"]);
     expect(radios.map((r) => r.checked)).toEqual([true, false]);
     expect(screen.getByLabelText(/Andrew Multilingual/)).toBeTruthy();

@@ -10,6 +10,11 @@ Run from `backend/` (ffmpeg and ffprobe must be on PATH; they are in the Docker 
     uv run python -m scripts.duration_smoke --wav speech.wav --target-seconds 360
         Fits a local 24 kHz 16-bit mono WAV (for example the lossless audio of a speech run).
 
+    uv run python -m scripts.duration_smoke --wav speech.wav --baseline-seconds 20 --speeds
+        Fits the local WAV once per audio speed (0.5x ... 2x) for a baseline (last - first
+        sentence start) of 20 s: each file is baseline / speed long, fitted directly from the
+        original audio. Add --transcript FILE to copy the spoken text next to the audio files.
+
     uv run python -m scripts.duration_smoke --azure
         LIVE: sends the short public sample transcript of azure_speech_smoke.py to Azure
         Speech once per voice (2 requests; AZURE_SPEECH_KEY / AZURE_SPEECH_REGION from the
@@ -41,6 +46,7 @@ from app.audio.duration import DurationReport
 from app.audio.ffmpeg import AudioTools, locate_tools
 from app.audio.fitter import FfmpegAudioProcessor
 from app.audio.mp3_header import read_gapless_info
+from app.audio.speed import AudioSpeed, DurationTarget
 from app.audio.wav import read_wav_info
 from app.processing_errors import ProcessingError
 from app.speech.azure import AzureSpeechProvider
@@ -99,13 +105,14 @@ def fit(
     processor: FfmpegAudioProcessor,
     tools: AudioTools,
     wav_path: Path,
-    target: int,
+    target: int | DurationTarget,
     work: Path,
     *,
     synthetic: bool = False,
 ) -> tuple[Path, Measured]:
     speech = SpeechAudio(path=work / "unused.mp3", is_fixture=False, lossless_path=wav_path)
-    result = processor.fit_to_duration(speech, target, work)
+    spec = target if isinstance(target, DurationTarget) else DurationTarget(target)
+    result = processor.fit_to_duration(speech, spec, work)
     report = result.duration_report
     # Measured again here, from the final file, not taken from the processor's own report.
     decoded = work / "decoded.wav"
@@ -187,6 +194,31 @@ def run_wav(processor, tools, wav: Path, targets: list[int], output_dir: Path) -
     return all_ok
 
 
+def run_wav_speeds(
+    processor, tools, wav: Path, baseline: int, output_dir: Path, transcript: Path | None
+) -> bool:
+    """One file per audio speed for a baseline, fitted from the same original audio."""
+    info = read_wav_info(wav)
+    print(
+        f"{wav.name}: {info.duration_seconds:.6f} s natural, {info.format.sample_rate} Hz; "
+        f"baseline {baseline} s"
+    )
+    print_header()
+    all_ok = True
+    (output_dir / f"{wav.stem}-before.wav").write_bytes(wav.read_bytes())
+    if transcript is not None:
+        (output_dir / "transcript.txt").write_bytes(transcript.read_bytes())
+    for speed in AudioSpeed:
+        with tempfile.TemporaryDirectory(prefix="mydubb-duration-") as directory:
+            work = Path(directory)
+            mp3, measured = fit(processor, tools, wav, DurationTarget(baseline, speed), work)
+            all_ok &= print_row(f"{wav.stem} {baseline} s at {speed.label}", measured)
+            (output_dir / f"{wav.stem}-baseline{baseline}s-speed-{speed.label}.mp3").write_bytes(
+                mp3.read_bytes()
+            )
+    return all_ok
+
+
 def run_azure(processor, tools, output_dir: Path, key: str, region: str) -> bool:
     """Live: one Azure Speech request per voice with the accepted public sample transcript."""
     print(f"LIVE: {len(Voice)} Azure Speech requests, {len(SAMPLE)} characters each (public).")
@@ -230,6 +262,9 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("duration-samples"))
     parser.add_argument("--wav", type=Path, help="fit this local 16-bit PCM WAV")
     parser.add_argument("--target-seconds", type=int, action="append", help="with --wav")
+    parser.add_argument("--baseline-seconds", type=int, help="with --wav --speeds")
+    parser.add_argument("--speeds", action="store_true", help="with --wav: one file per speed")
+    parser.add_argument("--transcript", type=Path, help="with --speeds: copied next to the audio")
     parser.add_argument("--azure", action="store_true", help="LIVE: 1 Azure request per voice")
     args = parser.parse_args()
 
@@ -248,6 +283,13 @@ def main() -> int:
     try:
         if args.azure:
             ok = run_azure(processor, tools, args.output_dir, key, region)
+        elif args.wav and args.speeds:
+            if not args.baseline_seconds or args.baseline_seconds < 1:
+                print("--speeds needs --baseline-seconds (a positive whole number)")
+                return 2
+            ok = run_wav_speeds(
+                processor, tools, args.wav, args.baseline_seconds, args.output_dir, args.transcript
+            )
         elif args.wav:
             if not args.target_seconds:
                 print("--wav needs at least one --target-seconds")

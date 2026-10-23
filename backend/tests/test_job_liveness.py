@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError
 
 from app import maintenance
 from app.audio.mock import MockAudioProcessor
+from app.audio.speed import AudioSpeed
 from app.db import session_scope
 from app.jobs import pipeline as pipeline_module
 from app.jobs import service
@@ -119,7 +120,7 @@ def new_job(services, runner_id: str | None = None) -> JobInput:
             audio_processor="mock-audio",
             runner_id=runner_id or services.instance_id,
         )
-    return JobInput(job.id, "A transcript.", Voice.ANDREW, 360)
+    return JobInput(job.id, "A transcript.", Voice.ANDREW, 360, AudioSpeed.X1)
 
 
 def row(db_engine, job_id) -> tuple:

@@ -2,6 +2,13 @@ import { useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { Job, VoiceOption } from "../../api/types";
+import {
+  AUDIO_SPEEDS,
+  DEFAULT_SPEED,
+  formatOutputDuration,
+  previewOutputSeconds,
+  speedLabel,
+} from "../../lib/speed";
 import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
 
 interface Props {
@@ -19,6 +26,7 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
   const [firstStart, setFirstStart] = useState("");
   const [lastStart, setLastStart] = useState("");
   const [voice, setVoice] = useState(voices[0]?.id ?? "");
+  const [speed, setSpeed] = useState<number>(DEFAULT_SPEED);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -36,6 +44,7 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
         first_sentence_start: firstStart,
         last_sentence_start: lastStart,
         voice,
+        speed,
       });
       onJobCreated(job);
     } catch (err) {
@@ -84,12 +93,55 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
         />
       </div>
 
-      <p className="muted">
-        Target duration (Last Start − First Start):{" "}
-        <strong>{preview === null ? "—" : `${formatSeconds(preview)} (${preview} s)`}</strong>
-        <br />
-        <small>Preview only; the server validates and calculates the final value.</small>
-      </p>
+      <fieldset className="field" aria-describedby="speed-help">
+        <legend>Audio speed</legend>
+        <div className="speed-group">
+          {AUDIO_SPEEDS.map((option) => (
+            <label key={option} className="speed-option">
+              <input
+                type="radio"
+                name="speed"
+                value={option}
+                checked={speed === option}
+                onChange={() => setSpeed(option)}
+              />
+              <span>{speedLabel(option)}</span>
+            </label>
+          ))}
+        </div>
+        <p className="muted" id="speed-help">
+          <small>
+            1x fits the audio to the time between the two timestamps. Other speeds make the audio
+            file shorter or longer than that time; the downloaded file itself changes.
+          </small>
+        </p>
+        <FieldMessage message={fieldErrors.speed} />
+      </fieldset>
+
+      <div className="preview" aria-live="polite" aria-label="Audio length preview">
+        <dl className="preview-list">
+          <dt>Duration at 1x (Last Start − First Start)</dt>
+          <dd>{preview === null ? "—" : `${formatSeconds(preview)} (${preview} s)`}</dd>
+          <dt>Selected speed</dt>
+          <dd>{speedLabel(speed)}</dd>
+          <dt>Expected audio length</dt>
+          <dd>
+            <strong>
+              {preview === null ? "—" : formatOutputDuration(previewOutputSeconds(preview, speed))}
+            </strong>
+          </dd>
+        </dl>
+        {preview !== null && speed !== DEFAULT_SPEED && (
+          <p className="warning-inline">
+            At {speedLabel(speed)} the audio will be {speed > DEFAULT_SPEED ? "shorter" : "longer"}{" "}
+            than the time between the two timestamps, so it will not match the video&apos;s length
+            for that stretch.
+          </p>
+        )}
+        <small className="muted">
+          Estimate only; the server validates the input and calculates the final length.
+        </small>
+      </div>
 
       <fieldset className="field">
         <legend>Voice</legend>

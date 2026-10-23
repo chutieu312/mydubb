@@ -1,4 +1,5 @@
 import type { AudioDuration } from "../../api/types";
+import { speedLabel } from "../../lib/speed";
 
 interface Props {
   duration: AudioDuration;
@@ -41,16 +42,27 @@ function adjustmentText(duration: AudioDuration): string {
   return parts.length > 0 ? parts.join("; ") : "none";
 }
 
-/** Target and measured durations of the real audio, side by side and unrounded. */
+function paddingText(duration: AudioDuration): string {
+  const count = duration.mp3_padding_adjusted_samples;
+  if (count === 0) return "none (the encoder's header was already exact)";
+  return `${samples(count)} added to the end padding so the header matches what was encoded`;
+}
+
+/** Baseline, speed, target and measured durations of the real audio, side by side, unrounded. */
 export function DurationDetails({ duration }: Props) {
   return (
     <div className="duration" aria-label="Audio duration">
       <p>
-        <strong>Target {seconds(duration.target_seconds)}</strong> · <strong>Actual</strong>{" "}
-        {seconds(duration.mp3_decoded_seconds)} (decoded from the final MP3)
+        <strong>Baseline</strong> {seconds(duration.baseline_seconds)} · <strong>Speed</strong>{" "}
+        {speedLabel(duration.speed)} · <strong>Target {seconds(duration.target_seconds)}</strong> ·{" "}
+        <strong>Actual</strong> {seconds(duration.mp3_decoded_seconds)} (decoded from the final MP3)
       </p>
       <dl className="duration-list">
-        <dt>Target (last − first sentence start)</dt>
+        <dt>Baseline at 1x (last − first sentence start)</dt>
+        <dd>{seconds(duration.baseline_seconds)}</dd>
+        <dt>Speed</dt>
+        <dd>{speedLabel(duration.speed)}</dd>
+        <dt>Target (baseline ÷ speed, to the sample)</dt>
         <dd>
           {seconds(duration.target_seconds)} · {samples(duration.target_samples)}
         </dd>
@@ -79,6 +91,8 @@ export function DurationDetails({ duration }: Props) {
         </dd>
         <dt>Silence adjustment</dt>
         <dd>{adjustmentText(duration)}</dd>
+        <dt>MP3 header correction</dt>
+        <dd>{paddingText(duration)}</dd>
       </dl>
     </div>
   );

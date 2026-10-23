@@ -458,8 +458,12 @@ Two kinds of compatibility matter:
 **Supported rollback targets**: deploys built from a commit whose
 `backend/alembic/versions/` contains the database's current revision. Today the production
 database is at `0002`, and every production deploy so far (from `3806012`, the merge of
-PR #2, onwards) contains `0002`, so all of them are supported targets. After a future
-migration (`0003`) is deployed, older deploys stop being supported targets.
+PR #2, onwards) contains `0002`, so all of them are supported targets. The audio speed pull
+request adds migration `0003` (`jobs.audio_speed_percent`, expand-only: a `NOT NULL` column with a
+constant default and a CHECK). Once it is deployed, the database is at `0003` and every deploy
+built before it (including the Milestone 3C ones) stops being a supported Render rollback target;
+use `docker/rollback-target-check.sh <commit> 0003` to check. Rolling forward by reverting the
+change in a pull request keeps working, because the image still contains `0003`.
 
 **Before rolling back** (read-only checks):
 
@@ -514,6 +518,23 @@ the smoke test:
 | `002e2bb` (Milestone 2A) | `0001` | default | Exits: `Can't locate revision identified by '0002'`; database unchanged |
 | `002e2bb` | `0001` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (schema compatible) |
 | Current branch image | `0001`, `0002` | default, after the above | Starts; reads rows written by the `0001`-era code |
+
+Rehearsal for migration `0003` (audio speed), local throwaway PostgreSQL 17, previous production
+commit `5c236e2` (Milestone 3C, knows `0001`, `0002`) against the new image (knows `0003`), with the
+mock smoke test (`docker/smoke-test.sh`, one job each time):
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `5c236e2` | default, empty database | Migrates to `0002`; smoke test passes |
+| 2 | new | default | `0002` -> `0003`; smoke test passes; the job written by `5c236e2` reads as 100 (1x) |
+| 3 | `5c236e2` | default, database at `0003` | Exits 1: `Can't locate revision identified by '0003'`; database unchanged (`0003`) |
+| 4 | `5c236e2` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (the schema is compatible: its inserts omit the new column and get 100) |
+| 5 | new | default, after step 4 | Starts; reads the rows written by `5c236e2` (all 100) |
+
+This confirms that migration `0003` is expand-only for the **schema**, and that the **revision
+graph** limit described above applies (step 3). Production was not touched and nothing was migrated
+there; `alembic upgrade head` runs on the first start of the new image after the pull request is
+merged and deployed.
 
 Repeat it for any pull request that adds a migration: build the previous production commit
 and the new one (`git worktree add <dir> <commit>` + `docker build`), migrate a throwaway

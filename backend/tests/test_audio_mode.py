@@ -253,6 +253,45 @@ def test_the_result_has_exactly_the_target_duration(audio_client, audio_tools, t
     )
 
 
+@pytest.mark.parametrize(
+    ("speed", "target_samples"),
+    [(0.5, 16 * RATE), (1.75, 109_714), (2, 4 * RATE)],  # 8 s / 1.75 = 109714.29 samples
+)
+def test_the_speed_changes_the_file_that_is_produced_and_downloaded(
+    audio_client, audio_tools, tmp_path, speed, target_samples
+):
+    client = audio_client()
+    csrf = login(client)
+    created = create_job(client, csrf, speed=speed, **EIGHT_SECONDS).json()
+    job = wait_for_terminal(client, created["id"], 60)
+    assert job["status"] == "completed", job
+    assert job["baseline_duration_seconds"] == 8
+    assert job["speed"] == speed
+
+    result = client.get(f"/api/jobs/{job['id']}/result").json()
+    assert result["speed"] == speed
+    duration = result["audio"]["duration"]
+    assert duration["baseline_seconds"] == 8
+    assert duration["speed"] == speed
+    assert duration["target_samples"] == target_samples
+    assert duration["target_seconds"] == target_samples / RATE
+    assert duration["processed_samples"] == target_samples
+    assert abs(duration["mp3_decoded_samples"] - target_samples) <= 1
+    assert abs(duration["mp3_header_samples"] - target_samples) <= 1
+    # Fitted straight from the natural speech: source / target, with the speed inside the target.
+    assert duration["source_samples"] == round(NATURAL_SECONDS * RATE)
+    assert duration["tempo_factor"] == pytest.approx(
+        NATURAL_SECONDS * RATE / target_samples, rel=0.01
+    )
+    notices = " ".join(result["notices"])
+    assert "Audio speed" in notices
+    assert "was selected" not in notices  # it was applied, not merely recorded
+
+    downloaded = client.get(result["audio"]["download_url"])
+    count = decoded_sample_count(audio_tools, downloaded.content, tmp_path)
+    assert abs(count - target_samples) <= 1
+
+
 def test_the_job_records_the_real_audio_processor(audio_client, db_engine):
     client = audio_client()
     csrf = login(client)

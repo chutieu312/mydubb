@@ -1,8 +1,10 @@
 """Duration fitting with FFmpeg: the whole speech audio is sped up or slowed down to the target.
 
-Contract (see docs/ARCHITECTURE.md): the final audio is exactly `target_seconds` long. The
-spoken content is never cut, skipped or repeated to get there; only the tempo of the complete
-audio changes (`atempo`, which keeps the pitch).
+Contract (see docs/ARCHITECTURE.md): the final audio is exactly `target_samples` long, where
+the target is the baseline (last - first sentence start) divided by the speed the user chose
+(see audio/speed.py). The spoken content is never cut, skipped or repeated to get there; only
+the tempo of the complete audio changes (`atempo`, which keeps the pitch). The speed is part of
+the target, not a second tempo step: the source is fitted directly to the final length.
 
 1. The speech provider's lossless WAV is measured: `factor = source_samples / target_samples`
    (the same ratio as source_duration / target_duration).
@@ -17,8 +19,11 @@ audio changes (`atempo`, which keeps the pitch).
 4. The PCM is encoded to MP3 once. The MP3 is then verified on the real file: the number of
    samples a decoder produces and the playable length declared by the MP3's own gapless
    header (frames - encoder delay - padding, read without FFmpeg) must both equal the target
-   (one sample of rounding at most). ffprobe's container duration is recorded but not used
-   to decide: FFmpeg versions disagree on whether it includes the encoder delay and padding.
+   (one sample of rounding at most). FFmpeg's muxer caps the padding it writes, which would
+   leave the header up to 46 samples too long for some targets; `set_exact_padding` corrects
+   exactly that case first (and reports it), see audio/mp3_header.py. ffprobe's container
+   duration is recorded but not used to decide: FFmpeg versions disagree on whether it
+   includes the encoder delay and padding.
 """
 
 import logging
@@ -46,7 +51,8 @@ from app.audio.ffmpeg import (
     probe_mp3,
     tempo_filter_chain,
 )
-from app.audio.mp3_header import Mp3HeaderError, read_gapless_info
+from app.audio.mp3_header import Mp3HeaderError, read_gapless_info, set_exact_padding
+from app.audio.speed import DurationTarget
 from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio
@@ -115,14 +121,14 @@ class FfmpegAudioProcessor:
         self._cancel.set()
 
     def fit_to_duration(
-        self, speech: SpeechAudio, target_seconds: int, work_dir: Path
+        self, speech: SpeechAudio, target: DurationTarget, work_dir: Path
     ) -> ProcessedAudio:
         if speech.lossless_path is None:
             raise _failure("audio_source_missing")
         output = work_dir / "final.mp3"
         scratch = Path(tempfile.mkdtemp(prefix="audio-", dir=work_dir))
         try:
-            report = self._fit(speech.lossless_path, target_seconds, scratch, output)
+            report = self._fit(speech.lossless_path, target, scratch, output)
         except ProcessingError:
             output.unlink(missing_ok=True)
             raise
@@ -158,13 +164,13 @@ class FfmpegAudioProcessor:
         return ProcessedAudio(path=output, duration_adjusted=True, duration_report=report)
 
     def _fit(
-        self, lossless: Path, target_seconds: int, scratch: Path, output: Path
+        self, lossless: Path, target: DurationTarget, scratch: Path, output: Path
     ) -> DurationReport:
         source = read_wav_info(lossless)
         rate = source.format.sample_rate
         if source.format.sample_width != 2:
             raise InvalidAudioError("only 16-bit audio is supported")
-        target_frames = target_seconds * rate
+        target_frames = target.samples(rate)
         if target_frames * source.format.frame_bytes > MAX_PCM_BYTES:
             raise _failure("audio_duration_unsupported")
 
@@ -172,10 +178,15 @@ class FfmpegAudioProcessor:
         fitted = scratch / "fitted.wav"
         padded, trimmed = conform_wav(processed.path, processed.info, fitted, target_frames)
 
-        encode_mp3(self._tools, fitted, output, float(target_seconds), cancel=self._cancel)
+        encode_mp3(self._tools, fitted, output, target_frames / rate, cancel=self._cancel)
+        try:
+            padding_adjusted = set_exact_padding(output, target_frames)
+        except Mp3HeaderError:
+            logger.warning("Encoded MP3 header cannot be made to match the target")
+            raise _failure("audio_verification_failed") from None
         container_seconds = probe_mp3(self._tools, output, cancel=self._cancel)
         decoded_wav = scratch / "decoded.wav"
-        decode_to_wav(self._tools, output, decoded_wav, float(target_seconds), cancel=self._cancel)
+        decode_to_wav(self._tools, output, decoded_wav, target_frames / rate, cancel=self._cancel)
         decoded = read_wav_info(decoded_wav)
         try:
             header = read_gapless_info(output)
@@ -201,7 +212,9 @@ class FfmpegAudioProcessor:
             raise _failure("audio_verification_failed")
         return DurationReport(
             sample_rate=rate,
-            target_seconds=target_seconds,
+            baseline_seconds=target.baseline_seconds,
+            speed=target.speed,
+            target_samples=target_frames,
             source_samples=source.frames,
             processed_samples=target_frames,
             tempo_factor=factor,
@@ -211,6 +224,7 @@ class FfmpegAudioProcessor:
             mp3_decoded_samples=decoded.frames,
             mp3_header_samples=header.playable_samples,
             mp3_container_seconds=container_seconds,
+            mp3_padding_adjusted_samples=padding_adjusted,
         )
 
     def _tempo(
