@@ -452,27 +452,30 @@ def test_the_repair_rewrites_only_the_padding_and_the_tag_crc(audio_tools, work_
     changed = [i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b]
     # Padding (12 bits spread over two bytes) and the two CRC bytes: nothing in the audio.
     assert 1 <= len(changed) <= 4
-    first_audio_frame = 44 + 288  # ID3v2 tag + the Info frame
-    assert all(index < first_audio_frame for index in changed)
+    first = mp3_header._read_first_frame(mp3)
+    crc_at = first.file_offset + first.tag + mp3_header._TAG_CRC_OFFSET
+    assert all(index <= crc_at + 1 for index in changed)  # all inside the Info frame header
     # A second call finds nothing left to do.
     assert set_exact_padding(mp3, target) == 0
 
 
 def test_the_repaired_tag_crc_is_the_one_ffmpeg_would_write(audio_tools, work_dir):
-    """The CRC algorithm is checked on files FFmpeg wrote (before and after the repair)."""
+    """The CRC algorithm is checked on a file FFmpeg wrote (whatever its ID3 / frame layout)."""
     mp3 = encode_exact(audio_tools, work_dir, BASE + 192)
-    data = mp3.read_bytes()
-    frame = bytearray(data[44 : 44 + 190])
-    stored = int.from_bytes(frame[167:169], "big")
-    frame[167:169] = bytes(2)
+    first = mp3_header._read_first_frame(mp3)
+    crc_at = first.tag + mp3_header._TAG_CRC_OFFSET
+    frame = bytearray(first.data[: mp3_header._TAG_CRC_COVERS])
+    stored = int.from_bytes(frame[crc_at : crc_at + 2], "big")
+    frame[crc_at : crc_at + 2] = bytes(2)
     assert mp3_header._tag_crc(bytes(frame)) == stored
 
 
 def test_a_header_the_repair_does_not_understand_is_an_error_not_a_guess(audio_tools, work_dir):
     target = BASE + 27
     mp3 = encode_exact(audio_tools, work_dir, target)
+    first = mp3_header._read_first_frame(mp3)
     data = bytearray(mp3.read_bytes())
-    data[44 + 167] ^= 0xFF  # corrupt the stored tag CRC
+    data[first.file_offset + first.tag + mp3_header._TAG_CRC_OFFSET] ^= 0xFF  # corrupt the CRC
     mp3.write_bytes(bytes(data))
     with pytest.raises(Mp3HeaderError, match="tag CRC"):
         set_exact_padding(mp3, target)
