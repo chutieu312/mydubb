@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from app.audio import fitter
+from app.audio import fitter, mp3_header
 from app.audio.duration import ROUNDING_LIMIT_FRAMES, DurationReport
 from app.audio.ffmpeg import (
     ATEMPO_MAX,
@@ -23,11 +23,20 @@ from app.audio.ffmpeg import (
     AudioTools,
     AudioToolTimeout,
     check_capabilities,
+    decode_to_wav,
+    encode_mp3,
     run_tool,
     tempo_filter_chain,
 )
 from app.audio.fitter import MAX_TEMPO_PASSES, FfmpegAudioProcessor
-from app.audio.mp3_header import Mp3Gapless, Mp3HeaderError, read_gapless_info
+from app.audio.mp3_header import (
+    Mp3Gapless,
+    Mp3HeaderError,
+    read_gapless_info,
+    set_exact_padding,
+)
+from app.audio.speed import AudioSpeed, DurationTarget
+from app.audio.wav import read_wav_info
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio
 from tests.audio_helpers import (
@@ -68,11 +77,11 @@ def work_dir(tmp_path) -> Path:
     return directory
 
 
-def fit(processor, work_dir: Path, wav: bytes, target: int):
+def fit(processor, work_dir: Path, wav: bytes, target: int, speed: AudioSpeed = AudioSpeed.X1):
     source = work_dir / "speech.wav"
     source.write_bytes(wav)
     speech = SpeechAudio(path=work_dir / "speech.mp3", is_fixture=False, lossless_path=source)
-    return processor.fit_to_duration(speech, target, work_dir)
+    return processor.fit_to_duration(speech, DurationTarget(target, speed), work_dir)
 
 
 def decoded_samples(audio_tools: AudioTools, mp3: Path, tmp_path: Path) -> int:
@@ -88,9 +97,12 @@ def decoded_samples(audio_tools: AudioTools, mp3: Path, tmp_path: Path) -> int:
 
 def assert_exact(result, audio_tools, tmp_path, target: int) -> DurationReport:
     """The processed PCM and the final MP3 both have exactly the target number of samples."""
+    return assert_exact_samples(result, audio_tools, tmp_path, target * RATE)
+
+
+def assert_exact_samples(result, audio_tools, tmp_path, expected: int) -> DurationReport:
     report = result.duration_report
     assert result.duration_adjusted is True
-    expected = target * RATE
     assert report.target_samples == expected
     assert report.processed_samples == expected
     assert report.sample_rate == RATE
@@ -117,7 +129,9 @@ def loud_runs(samples, threshold: int = 2000, merge_gap: int = 600) -> list[tupl
     return [(start, end) for start, end in runs]
 
 
-def assert_words_complete_and_in_order(samples, report: DurationReport, source_seconds, scale):
+def assert_words_complete_and_in_order(
+    samples, report: DurationReport, source_seconds, scale, pitch_tolerance_hz: float = 0
+):
     """Every word is there, in order, at its own pitch, with the end of the last word intact."""
     target = report.target_samples
     factor = source_seconds * RATE / target
@@ -135,7 +149,8 @@ def assert_words_complete_and_in_order(samples, report: DurationReport, source_s
         assert start == pytest.approx(expected_start, abs=tolerance)
         assert end - start == pytest.approx(expected_length, abs=tolerance)
         middle = (start + end) // 2
-        assert dominant_frequency(samples, middle - 2048, 4096, frequency) == frequency
+        found = dominant_frequency(samples, middle - 2048, 4096, frequency)
+        assert abs(found - frequency) <= pitch_tolerance_hz
         position += seconds * scale
     # The last word runs to the end: at most the reported silence padding follows it.
     assert len(samples) - 1 - last_loud_index(samples) <= report.padded_samples + 100
@@ -304,6 +319,299 @@ def test_the_report_lists_target_source_pcm_and_mp3_separately(
     assert report["mp3_container_seconds"] >= 4.0
 
 
+# --- audio speed: the target is baseline / speed, fitted from the original in one step ---------
+
+
+# Baseline 20 s (the example in the product decision): speed, target samples at 24 kHz.
+# 20 s / 1.75 = 11.428571... s = 274285.714... samples, which rounds to 274286.
+SPEED_TABLE = [
+    (AudioSpeed.X0_5, 960_000),
+    (AudioSpeed.X0_75, 640_000),
+    (AudioSpeed.X1, 480_000),
+    (AudioSpeed.X1_25, 384_000),
+    (AudioSpeed.X1_5, 320_000),
+    (AudioSpeed.X1_75, 274_286),
+    (AudioSpeed.X2, 240_000),
+]
+
+
+@pytest.mark.parametrize(("speed", "expected"), SPEED_TABLE, ids=[s.label for s, _ in SPEED_TABLE])
+def test_every_speed_is_fitted_to_its_own_target_in_one_step(
+    processor, audio_tools, work_dir, tmp_path, speed, expected
+):
+    scale = 4.0  # natural speech of 20.4 s, close to the 20 s baseline
+    wav, source_seconds = speech_like(scale)
+    result = fit(processor, work_dir, wav, 20, speed)
+
+    report = assert_exact_samples(result, audio_tools, tmp_path, expected)
+    assert report.baseline_seconds == 20
+    assert report.speed is speed
+    assert report.source_samples == round(source_seconds * RATE)
+    # The tempo is source/target from the ORIGINAL audio (not 20.4/20 and then x speed again),
+    # and nothing audible is cut.
+    assert report.tempo_factor == pytest.approx(source_seconds * RATE / expected, rel=0.01)
+    assert report.trimmed_samples == 0
+    assert report.padded_samples <= ROUNDING_LIMIT_FRAMES
+    decoded = tmp_path / "decoded.wav"
+    subprocess.run(  # noqa: S603
+        [audio_tools.ffmpeg, "-v", "error", "-y", "-i", str(result.path), str(decoded)],
+        check=True,
+        capture_output=True,
+    )
+    # Every word is still there, in order, with its own pitch, and the last one reaches the end.
+    # The pitch is kept to within 2 Hz (atempo at a factor of 2.5 moves 900 Hz by about 1 Hz).
+    assert_words_complete_and_in_order(
+        read_samples(decoded), report, source_seconds, scale, pitch_tolerance_hz=2
+    )
+
+
+def test_a_fractional_target_is_exact_in_samples(processor, audio_tools, work_dir, tmp_path):
+    # 5 s / 1.75 = 2.857142... s = 68571.43 samples: not a whole number of anything but samples.
+    result = fit(processor, work_dir, speech_with_silent_end(4.5, 1.0), 5, AudioSpeed.X1_75)
+    report = assert_exact_samples(result, audio_tools, tmp_path, 68_571)
+    as_dict = report.as_dict()
+    assert as_dict["target_samples"] == 68_571
+    assert as_dict["target_seconds"] == 68_571 / RATE
+    assert as_dict["mp3_decoded_seconds"] == 68_571 / RATE
+    assert as_dict["baseline_seconds"] == 5
+    assert as_dict["speed"] == 1.75
+    assert isinstance(as_dict["speed"], float)  # JSON-serialisable, not an Enum
+
+
+def test_one_x_is_the_baseline_even_when_azure_speaks_faster_or_slower(
+    processor, audio_tools, work_dir, tmp_path
+):
+    """1x is 'fitted to the baseline', not 'the natural speed Azure returned'."""
+    for index, natural in enumerate((3.0, 9.0)):
+        directory = work_dir / f"run-{index}"
+        directory.mkdir()
+        result = fit(processor, directory, make_wav(natural), 6, AudioSpeed.X1)
+        report = assert_exact(result, audio_tools, tmp_path, 6)
+        assert report.tempo_factor == pytest.approx(natural / 6, rel=0.01)
+
+
+def test_the_speed_is_not_applied_a_second_time_to_the_tempo(processor, work_dir):
+    # 8 s of natural speech, baseline 8 s, 2x: the tempo is 8 / 4 = 2, not 1 x 2 x 2.
+    report = fit(processor, work_dir, make_wav(8.0), 8, AudioSpeed.X2).duration_report
+    assert report.target_samples == 4 * RATE
+    assert report.tempo_factor == pytest.approx(2.0, rel=0.01)
+
+
+# --- MP3 end padding: FFmpeg's muxer caps it, which the fitter corrects ---------------------------
+#
+# At 24 kHz an MP3 frame holds 576 samples. FFmpeg writes at most 1105 samples of end padding,
+# so a target that is 1-46 samples over a whole number of frames (which fractional targets,
+# unlike whole-second ones, often are) came out up to 46 samples too long in the header and in
+# every gapless decoder. Whole seconds at 24 kHz are always 0, 192 or 384 samples over. Only that
+# exact signature is repaired; every other mismatch is refused and left to the verification.
+
+
+def encode_pcm(audio_tools, work_dir: Path, wav: bytes, name: str = "tone") -> Path:
+    source = work_dir / f"{name}.wav"
+    source.write_bytes(wav)
+    mp3 = work_dir / f"{name}.mp3"
+    encode_mp3(audio_tools, source, mp3, read_wav_info(source).duration_seconds)
+    return mp3
+
+
+def encode_exact(audio_tools, work_dir: Path, samples: int) -> Path:
+    return encode_pcm(audio_tools, work_dir, make_wav(samples / RATE))
+
+
+def decode_count(audio_tools, mp3: Path, work_dir: Path) -> int:
+    decoded = work_dir / "tone-decoded.wav"
+    decode_to_wav(audio_tools, mp3, decoded, 10.0)
+    return read_wav_info(decoded).frames
+
+
+def speech_with_silent_end(tone_seconds: float, silence_seconds: float) -> bytes:
+    """A tone, then silence: like Azure speech, which ends with about 300 ms of silence."""
+    return segments_wav([(440, tone_seconds), (0, silence_seconds)])
+
+
+FRAME = 576
+BASE = 120 * FRAME  # a whole number of frames
+
+
+@pytest.mark.parametrize("over", [0, 1, 2, 27, 45, 46, 47, 192, 300, 575])
+def test_every_position_in_a_frame_decodes_to_the_exact_target(audio_tools, work_dir, over):
+    target = BASE + over
+    mp3 = encode_exact(audio_tools, work_dir, target)
+    adjusted = set_exact_padding(mp3, target)
+
+    # Only the capped cases (1-46 samples over a frame) are touched; the rest are left alone.
+    assert (adjusted > 0) == (1 <= over <= 46)
+    assert read_gapless_info(mp3).playable_samples == target
+    assert decode_count(audio_tools, mp3, work_dir) == target
+
+
+def test_the_known_defect_has_exactly_the_documented_signature(audio_tools, work_dir):
+    info = read_gapless_info(encode_exact(audio_tools, work_dir, BASE + 27))
+    assert (info.sample_rate, info.samples_per_frame, info.encoder_delay) == (24000, 576, 576)
+    assert info.padding == mp3_header.FFMPEG_PADDING_CAP
+    assert info.playable_samples == BASE + 47  # 20 samples more than were encoded
+    assert mp3_header.capped_padding_excess(info, BASE + 27) == 20
+
+
+def test_an_mp3_that_is_already_exact_is_not_modified(audio_tools, work_dir):
+    mp3 = encode_exact(audio_tools, work_dir, BASE + 192)
+    before = mp3.read_bytes()
+    assert set_exact_padding(mp3, BASE + 192) == 0
+    assert mp3.read_bytes() == before
+
+
+def test_the_repair_rewrites_only_the_padding_and_the_tag_crc(audio_tools, work_dir):
+    target = BASE + 27
+    mp3 = encode_exact(audio_tools, work_dir, target)
+    before = bytearray(mp3.read_bytes())
+    assert set_exact_padding(mp3, target) == 20  # padding 1125 needed, 1105 written
+    after = mp3.read_bytes()
+    assert len(after) == len(before)
+    changed = [i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b]
+    # Padding (12 bits spread over two bytes) and the two CRC bytes: nothing in the audio.
+    assert 1 <= len(changed) <= 4
+    first = mp3_header._read_first_frame(mp3)
+    crc_at = first.file_offset + first.tag + mp3_header._TAG_CRC_OFFSET
+    assert all(index <= crc_at + 1 for index in changed)  # all inside the Info frame header
+    # A second call finds nothing left to do.
+    assert set_exact_padding(mp3, target) == 0
+
+
+def test_the_repaired_tag_crc_is_the_one_ffmpeg_would_write(audio_tools, work_dir):
+    """The CRC algorithm is checked on a file FFmpeg wrote (whatever its ID3 / frame layout)."""
+    mp3 = encode_exact(audio_tools, work_dir, BASE + 192)
+    first = mp3_header._read_first_frame(mp3)
+    crc_at = first.tag + mp3_header._TAG_CRC_OFFSET
+    frame = bytearray(first.data[: mp3_header._TAG_CRC_COVERS])
+    stored = int.from_bytes(frame[crc_at : crc_at + 2], "big")
+    frame[crc_at : crc_at + 2] = bytes(2)
+    assert mp3_header._tag_crc(bytes(frame)) == stored
+
+
+def assert_refused_unchanged(mp3: Path, encoded: int, match: str = "not the known padding cap"):
+    before = mp3.read_bytes()
+    with pytest.raises(Mp3HeaderError, match=match):
+        set_exact_padding(mp3, encoded)
+    assert mp3.read_bytes() == before
+
+
+def test_a_valid_mp3_is_not_relabelled_to_a_shorter_target(audio_tools, work_dir):
+    """The review case: 480000 samples, padding 960 (not the cap), asked for 479000."""
+    mp3 = encode_exact(audio_tools, work_dir, 480_000)
+    info = read_gapless_info(mp3)
+    assert (info.playable_samples, info.padding) == (480_000, 960)
+    assert mp3_header.capped_padding_excess(info, 479_000) is None
+    assert_refused_unchanged(mp3, 479_000)
+    assert read_gapless_info(mp3).playable_samples == 480_000
+
+
+@pytest.mark.parametrize("encoded", [479_999, 479_997, 479_954, 480_001, 480_046])
+def test_a_small_mismatch_outside_the_signature_is_refused(audio_tools, work_dir, encoded):
+    # Padding 960 is not the cap, so no difference, however small, is a repairable defect.
+    mp3 = encode_exact(audio_tools, work_dir, 480_000)
+    assert_refused_unchanged(mp3, encoded)
+
+
+def test_one_sample_beyond_the_capped_range_is_refused(audio_tools, work_dir):
+    # Written for BASE + 47 samples: padding exactly the cap and correct. Claiming 47 fewer
+    # samples would need a 47-sample repair, one more than the defect can produce.
+    mp3 = encode_exact(audio_tools, work_dir, BASE + 47)
+    assert read_gapless_info(mp3).padding == mp3_header.FFMPEG_PADDING_CAP
+    assert_refused_unchanged(mp3, BASE)
+
+
+def test_a_header_shorter_than_what_was_encoded_is_refused(audio_tools, work_dir):
+    mp3 = encode_exact(audio_tools, work_dir, BASE + 27)
+    assert_refused_unchanged(mp3, BASE + 500)
+
+
+def test_a_header_the_repair_does_not_understand_is_an_error_not_a_guess(audio_tools, work_dir):
+    target = BASE + 27
+    mp3 = encode_exact(audio_tools, work_dir, target)
+    first = mp3_header._read_first_frame(mp3)
+    data = bytearray(mp3.read_bytes())
+    data[first.file_offset + first.tag + mp3_header._TAG_CRC_OFFSET] ^= 0xFF  # corrupt the CRC
+    mp3.write_bytes(bytes(data))
+    assert_refused_unchanged(mp3, target, match="tag CRC")
+
+
+def test_the_processor_repairs_the_known_defect_and_keeps_the_end_of_the_speech(
+    processor, audio_tools, work_dir, tmp_path
+):
+    # 5 s / 1.75 = 68571.43 -> 68571 samples = 119 frames + 27: the capped case. The speech ends
+    # with silence, so the 20 over-claimed samples are verified silent before the repair.
+    tone, silence = 4.5, 1.0
+    result = fit(processor, work_dir, speech_with_silent_end(tone, silence), 5, AudioSpeed.X1_75)
+    report = assert_exact_samples(result, audio_tools, tmp_path, 68_571)
+    assert report.mp3_header_samples == 68_571
+    assert report.mp3_padding_adjusted_samples == 20
+    assert report.as_dict()["mp3_padding_adjusted_samples"] == 20
+    # Independent decode: exact length, and the speech ends where the tempo puts it, intact.
+    decoded = tmp_path / "independent.wav"
+    subprocess.run(  # noqa: S603
+        [audio_tools.ffmpeg, "-v", "error", "-y", "-i", str(result.path), str(decoded)],
+        check=True,
+        capture_output=True,
+    )
+    samples = read_samples(decoded)
+    assert len(samples) == 68_571
+    factor = (tone + silence) * RATE / 68_571
+    assert last_loud_index(samples) == pytest.approx(tone * RATE / factor, abs=1.5 * 2048)
+
+
+def test_the_processor_never_hides_audible_samples_behind_a_header_repair(
+    processor, work_dir, caplog
+):
+    """Capped case, but the audio is loud up to its last sample: the over-claimed samples are not
+    provably padding, so the header is not repaired and the job fails instead."""
+    # Exactly the 68,571-sample target, loud to the end: no tempo change and no silence padding.
+    loud = wav_bytes(tone_samples(3.0, 440)[:68_571])
+    with pytest.raises(ProcessingError) as raised:
+        fit(processor, work_dir, loud, 5, AudioSpeed.X1_75)
+    assert raised.value.code == "audio_verification_failed"
+    # Refused by the silence check on the 20 over-claimed samples, before any header change.
+    assert "MP3 padding cap not repaired: over-claimed samples=20" in caplog.text
+    assert not (work_dir / "final.mp3").exists()
+
+
+@pytest.mark.parametrize(
+    ("baseline", "speed", "extra"),
+    [
+        (5, AudioSpeed.X1_75, 20),  # 68571 + 20 loud samples: the header looks like the defect
+        (5, AudioSpeed.X1_75, 1000),
+        (5, AudioSpeed.X1_75, -1000),
+        (4, AudioSpeed.X1, 3),  # whole-second target, 3 samples too many
+        (4, AudioSpeed.X1, -3),
+    ],
+)
+def test_a_wrong_encode_is_not_turned_into_a_pass_by_the_header_repair(
+    processor, work_dir, monkeypatch, baseline, speed, extra
+):
+    """The encoder is handed one PCM and writes another length: verification must fail."""
+    real_encode = fitter.encode_mp3
+
+    def wrong_length(tools, wav, output, seconds, *, cancel=None):
+        samples = read_samples(wav)
+        if extra > 0:
+            samples.extend(tone_samples(1.0, 440)[:extra])
+        else:
+            del samples[extra:]
+        altered = wav.with_name("altered.wav")
+        altered.write_bytes(wav_bytes(samples))
+        real_encode(tools, altered, output, seconds, cancel=cancel)
+
+    monkeypatch.setattr(fitter, "encode_mp3", wrong_length)
+    with pytest.raises(ProcessingError) as raised:
+        fit(processor, work_dir, speech_with_silent_end(4.5, 1.0), baseline, speed)
+    assert raised.value.code == "audio_verification_failed"
+    assert not (work_dir / "final.mp3").exists()
+
+
+def test_whole_second_targets_never_need_the_correction(processor, work_dir):
+    report = fit(processor, work_dir, make_wav(5.5), 4).duration_report
+    assert report.mp3_padding_adjusted_samples == 0
+
+
 # --- failures are errors, never a quiet pass-through ---------------------------------------------
 
 
@@ -440,7 +748,7 @@ def test_without_lossless_audio_there_is_no_silent_pass_through(processor, work_
     mp3.write_bytes(b"\xff\xfb" * 100)
     speech = SpeechAudio(path=mp3, is_fixture=True)
     with pytest.raises(ProcessingError) as raised:
-        processor.fit_to_duration(speech, 4, work_dir)
+        processor.fit_to_duration(speech, DurationTarget(4), work_dir)
     assert raised.value.code == "audio_source_missing"
     assert not (work_dir / "final.mp3").exists()
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.audio.base import AudioProcessor
+from app.audio.speed import AudioSpeed, DurationTarget
 from app.db import session_scope
 from app.jobs import service
 from app.jobs.executor import JobSlot
@@ -35,7 +36,8 @@ class JobInput:
     job_id: uuid.UUID
     transcript: str  # cleaned English text; never persisted
     voice: Voice
-    target_duration_seconds: int
+    baseline_seconds: int  # last - first sentence start
+    speed: AudioSpeed
 
 
 class _Superseded(Exception):
@@ -128,7 +130,8 @@ class JobPipeline:
         speech = self._speech.synthesize(translation.text, job.voice, work_dir)
 
         self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
-        processed = self._audio.fit_to_duration(speech, job.target_duration_seconds, work_dir)
+        target = DurationTarget(job.baseline_seconds, job.speed)
+        processed = self._audio.fit_to_duration(speech, target, work_dir)
 
         completed_at = datetime.now(UTC)
         expires_at = completed_at + self._result_ttl

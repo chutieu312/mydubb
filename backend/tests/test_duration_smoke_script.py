@@ -69,6 +69,25 @@ def test_a_local_wav_is_fitted_to_each_requested_target(monkeypatch, tmp_path, c
     assert run_script(monkeypatch, tmp_path, "--wav", str(wav)) == 2  # no target given
 
 
+def test_a_local_wav_is_fitted_once_per_audio_speed(monkeypatch, tmp_path, capsys, audio_tools):
+    wav = tmp_path / "speech.wav"
+    wav.write_bytes(make_wav(5.0))
+    transcript = tmp_path / "text.txt"
+    transcript.write_text("Xin chao.", encoding="utf-8")
+    args = ("--wav", str(wav), "--speeds", "--baseline-seconds", "4", "--transcript")
+    assert run_script(monkeypatch, tmp_path, *args, str(transcript)) == 0
+
+    out = tmp_path / "out"
+    labels = ["0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x"]
+    for label in labels:
+        assert (out / f"speech-baseline4s-speed-{label}.mp3").is_file()
+    assert (out / "transcript.txt").read_text(encoding="utf-8") == "Xin chao."
+    printed = capsys.readouterr().out
+    assert printed.count("OK") >= 7
+    assert "MISMATCH" not in printed
+    assert run_script(monkeypatch, tmp_path, "--wav", str(wav), "--speeds") == 2  # no baseline
+
+
 def test_live_mode_without_credentials_explains_and_makes_no_request(monkeypatch, tmp_path, capsys):
     monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
     monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)

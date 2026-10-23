@@ -13,6 +13,7 @@ import wave
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from app.audio.speed import AudioSpeed
 from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info
 
 # `atempo` analyses 2048-sample windows (hop 1024). A residual of at most one window is the
@@ -29,7 +30,11 @@ class DurationReport:
     """What was measured on the real audio, in samples (exact) at `sample_rate`."""
 
     sample_rate: int
-    target_seconds: int
+    # Baseline from the timestamps (last - first sentence start), the speed the user chose
+    # and the resulting output length: round_half_up(baseline * sample_rate / speed) samples.
+    baseline_seconds: int
+    speed: AudioSpeed
+    target_samples: int
     # Natural length of the speech before any change.
     source_samples: int
     # PCM after tempo change and the final conform; equals the target (see `target_samples`).
@@ -48,18 +53,22 @@ class DurationReport:
     mp3_decoded_samples: int
     mp3_header_samples: int
     mp3_container_seconds: float
+    # Samples by which the header's end padding was raised so that the header says what was
+    # encoded (FFmpeg's muxer caps the padding it writes); 0 when it was already exact.
+    mp3_padding_adjusted_samples: int = 0
 
     @property
-    def target_samples(self) -> int:
-        return self.target_seconds * self.sample_rate
+    def target_seconds(self) -> float:
+        return self.target_samples / self.sample_rate
 
     def seconds(self, samples: int) -> float:
         return samples / self.sample_rate
 
     def as_dict(self) -> dict:
         return {
-            **asdict(self),
-            "target_samples": self.target_samples,
+            **{key: value for key, value in asdict(self).items() if key != "speed"},
+            "speed": self.speed.number,
+            "target_seconds": self.target_seconds,
             "source_seconds": self.seconds(self.source_samples),
             "processed_seconds": self.seconds(self.processed_samples),
             "mp3_decoded_seconds": self.seconds(self.mp3_decoded_samples),

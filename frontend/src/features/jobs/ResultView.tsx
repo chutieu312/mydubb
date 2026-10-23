@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { JobResult } from "../../api/types";
+import { formatOutputDuration, speedLabel } from "../../lib/speed";
 import { DurationDetails } from "./DurationDetails";
 
 type ResultState =
@@ -99,7 +100,17 @@ export function ResultView({ jobId, onSessionExpired }: Props) {
       <audio controls preload="metadata" src={result.audio.url} className="player">
         Your browser does not support audio playback.
       </audio>
-      {result.audio.duration && <DurationDetails duration={result.audio.duration} />}
+      {/* The file is already processed at the chosen speed, so the player stays at 1x. */}
+      {result.audio.duration ? (
+        <DurationDetails duration={result.audio.duration} />
+      ) : (
+        <p className="muted" aria-label="Audio speed">
+          Selected speed {speedLabel(result.speed)} · baseline{" "}
+          {formatOutputDuration(result.baseline_duration_seconds)} · planned length{" "}
+          {formatOutputDuration(result.output_duration_seconds)}. This audio was not adjusted, so
+          it does not have that length.
+        </p>
+      )}
       <a className="button" href={result.audio.download_url} download>
         Download MP3
       </a>

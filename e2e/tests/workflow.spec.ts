@@ -49,7 +49,9 @@ test("completes a mock job: stages, text-only result, playback, download", async
     "16:30 is the aspect ratio.",
   ].join("\n");
   await fillJobForm(page, { transcript, voice: "Emma Multilingual" });
-  await expect(page.getByText("00:06:00 (360 s)")).toBeVisible();
+  await expect(
+    page.getByLabel("Audio length preview").getByText("00:06:00 (360 s)").first(),
+  ).toBeVisible();
 
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/jobs") && r.request().method() === "POST",
@@ -58,6 +60,7 @@ test("completes a mock job: stages, text-only result, playback, download", async
   const job = await (await created).json();
   expect((await created).status()).toBe(202);
   expect(job.target_duration_seconds).toBe(360);
+  expect(job.speed).toBe(1); // the default: 1x
 
   await expect(page.locator(".stage.done", { hasText: "Completed" })).toBeVisible();
   expect(statuses.some((s) => ["translating", "synthesizing", "processing"].includes(s))).toBe(
@@ -110,8 +113,58 @@ test("completes a mock job: stages, text-only result, playback, download", async
   expect(statuses.length).toBe(pollsAtCompletion);
 });
 
+test("the chosen audio speed is previewed, submitted and kept with the job", async ({ page }) => {
+  await signIn(page);
+  await fillJobForm(page, { transcript: "Spring Boot uses JSON.", first: "00:00:05", last: "00:00:25" });
+
+  const speeds = page.getByRole("group", { name: "Audio speed" }).getByRole("radio");
+  await expect(speeds).toHaveCount(7);
+  await expect(page.getByLabel("1x", { exact: true })).toBeChecked();
+
+  const preview = page.getByLabel("Audio length preview");
+  await expect(preview).toContainText("00:00:20 (20 s)");
+  await page.getByLabel("0.75x", { exact: true }).check();
+  await expect(preview).toContainText("Selected speed0.75x");
+  await expect(preview).toContainText("00:00:26.67 (26.67 s)");
+  await page.getByLabel("1.25x", { exact: true }).check();
+  await expect(preview).toContainText("00:00:16 (16 s)");
+
+  // Keyboard: arrow keys move the choice within the group.
+  await page.getByLabel("1.25x", { exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("1.5x", { exact: true })).toBeChecked();
+  await page.getByLabel("1.25x", { exact: true }).check();
+
+  const created = page.waitForResponse(
+    (r) => r.url().endsWith("/api/jobs") && r.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Generate Dubbing" }).click();
+  const job = await (await created).json();
+  expect(job.speed).toBe(1.25);
+  expect(job.baseline_duration_seconds).toBe(20);
+  expect(job.output_duration_seconds).toBe(16);
+
+  await expect(page.locator(".stage.done", { hasText: "Completed" })).toBeVisible();
+  // Changing the form afterwards does not change what the finished job says it used.
+  await page.getByLabel("2x", { exact: true }).check();
+  await expect(page.getByText(/Speed 1\.25x · Planned audio length 00:00:16/)).toBeVisible();
+  // Mock audio is a fixture: the selection is recorded but the file is not claimed to be adjusted.
+  await expect(page.getByLabel("Audio speed", { exact: true }).filter({ hasText: "Selected speed 1.25x" })).toBeVisible();
+  await expect(page.getByText("This audio was not adjusted")).toBeVisible();
+  const player = page.locator("audio");
+  expect(await player.evaluate((audio: HTMLAudioElement) => audio.playbackRate)).toBe(1);
+});
+
 test("layout fits the viewport without horizontal scrolling", async ({ page }) => {
   await signIn(page);
+  const speedBoxes = page.getByRole("group", { name: "Audio speed" }).locator(".speed-option span");
+  const viewport = page.viewportSize()!.width;
+  for (let i = 0; i < 7; i++) {
+    const box = (await speedBoxes.nth(i).boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );

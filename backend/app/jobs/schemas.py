@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ValidationInfo, field_validator
+from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
 
+from app.audio.speed import DEFAULT_SPEED, AudioSpeed, DurationTarget, speed_from_api
 from app.jobs.models import Job
 from app.speech.voices import DEFAULT_VOICE, Voice
 from app.transcript.cleaning import clean_transcript
@@ -14,6 +15,14 @@ class CreateJobRequest(BaseModel):
     first_sentence_start: str
     last_sentence_start: str
     voice: Voice = DEFAULT_VOICE
+    # Strict: only 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2. Omitted means 1x (the behaviour before
+    # the option existed). The output length is always computed by the server, never sent.
+    speed: AudioSpeed = DEFAULT_SPEED
+
+    @field_validator("speed", mode="before")
+    @classmethod
+    def _supported_speed(cls, value: object) -> AudioSpeed:
+        return speed_from_api(value)
 
     @field_validator("transcript")
     @classmethod
@@ -49,8 +58,15 @@ class JobResponse(BaseModel):
     voice: str
     first_sentence_start: str
     last_sentence_start: str
+    # Baseline: last - first sentence start. Unchanged meaning; independent of the speed.
     target_duration_seconds: int
     target_duration: str
+    baseline_duration_seconds: int
+    # Speed chosen when the job was submitted (jobs from before the option existed: 1).
+    speed: float
+    # Planned output length: baseline / speed, unrounded. The exact sample count and the
+    # verified length are in the result (`audio.duration`).
+    output_duration_seconds: float
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
@@ -62,6 +78,8 @@ class JobResponse(BaseModel):
         error = None
         if job.error_code:
             error = JobError(code=job.error_code, message=job.error_message or "")
+        speed = AudioSpeed(job.audio_speed_percent)
+        target = DurationTarget(job.target_duration_seconds, speed)
         return cls(
             id=job.id,
             status=job.status,
@@ -70,6 +88,9 @@ class JobResponse(BaseModel):
             last_sentence_start=format_seconds(job.last_sentence_start_seconds),
             target_duration_seconds=job.target_duration_seconds,
             target_duration=format_seconds(job.target_duration_seconds),
+            baseline_duration_seconds=job.target_duration_seconds,
+            speed=speed.number,
+            output_duration_seconds=float(target.output_seconds),
             created_at=job.created_at,
             updated_at=job.updated_at,
             completed_at=job.completed_at,
@@ -88,8 +109,12 @@ class DurationOut(BaseModel):
     """Durations measured on the real audio. Seconds are samples / sample_rate, unrounded."""
 
     sample_rate: int
-    target_seconds: int
+    # Output target: round_half_up(baseline * sample_rate / speed) samples. Equal to the
+    # baseline at 1x; fractional otherwise. Same value in the two fields.
+    target_seconds: float
     target_samples: int
+    baseline_seconds: int
+    speed: float
     # Natural length of the speech before the tempo change.
     source_seconds: float
     source_samples: int
@@ -107,6 +132,16 @@ class DurationOut(BaseModel):
     tempo_factor: float | None
     padded_samples: int
     trimmed_samples: int
+    # Samples by which the MP3 header's end padding was corrected (FFmpeg caps it); 0 if exact.
+    mp3_padding_adjusted_samples: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _results_from_before_speed_existed(cls, data: object) -> object:
+        """A stored report without speed is a 1x result: its baseline is its target."""
+        if isinstance(data, dict) and "speed" not in data:
+            data = {**data, "speed": 1.0, "baseline_seconds": round(data["target_seconds"])}
+        return data
 
 
 class AudioOut(BaseModel):
@@ -123,6 +158,11 @@ class AudioOut(BaseModel):
 
 class JobResultResponse(BaseModel):
     job_id: uuid.UUID
+    # What was submitted, from the job record (also when the audio was not adjusted, e.g. with
+    # the mock audio processor, where `audio.duration` is null).
+    baseline_duration_seconds: int
+    speed: float
+    output_duration_seconds: float
     translation: TranslationOut
     audio: AudioOut
     expires_at: datetime

@@ -112,6 +112,9 @@ describe("App provider labels", () => {
 
 const RESULT = {
   job_id: "j1",
+  baseline_duration_seconds: 360,
+  speed: 1,
+  output_duration_seconds: 360,
   translation: {
     text: "Một <b>neural network</b> & loss function",
     is_illustrative: false,
@@ -169,6 +172,8 @@ describe("ResultView labels", () => {
           sample_rate: 24000,
           target_seconds: 360,
           target_samples: 8640000,
+          baseline_seconds: 360,
+          speed: 1,
           source_seconds: 370.123458,
           source_samples: 8882963,
           processed_seconds: 360,
@@ -181,6 +186,7 @@ describe("ResultView labels", () => {
           tempo_factor: 1.02812,
           padded_samples: 70,
           trimmed_samples: 0,
+          mp3_padding_adjusted_samples: 0,
         },
       },
     };
@@ -218,6 +224,8 @@ describe("ResultView labels", () => {
           sample_rate: 24000,
           target_seconds: 5,
           target_samples: 120000,
+          baseline_seconds: 5,
+          speed: 1,
           source_seconds: 5,
           source_samples: 120000,
           processed_seconds: 5,
@@ -230,6 +238,7 @@ describe("ResultView labels", () => {
           tempo_factor: null,
           padded_samples: 0,
           trimmed_samples: 0,
+          mp3_padding_adjusted_samples: 0,
         },
       },
     };

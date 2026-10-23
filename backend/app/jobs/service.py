@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.audio.speed import DEFAULT_SPEED, AudioSpeed
 from app.jobs.models import ACTIVE_STATUSES, Job, JobStatus
 from app.transcript.timestamps import target_duration_seconds
 
@@ -30,6 +31,7 @@ def create_job(
     speech_provider: str,
     audio_processor: str,
     runner_id: str,
+    audio_speed: AudioSpeed = DEFAULT_SPEED,
 ) -> Job:
     now = datetime.now(UTC)
     job = Job(
@@ -43,6 +45,7 @@ def create_job(
         target_duration_seconds=target_duration_seconds(
             first_sentence_start_seconds, last_sentence_start_seconds
         ),
+        audio_speed_percent=audio_speed.value,
         transcript_char_count=transcript_char_count,
         translation_provider=translation_provider,
         speech_provider=speech_provider,
