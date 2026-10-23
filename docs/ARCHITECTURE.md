@@ -211,7 +211,7 @@ mocks. `MOCK_FAIL_STAGE=translation|unexpected` is rejected together with
 | 2A | Private GitHub repository, CI running on GitHub (see [WORKFLOW.md](WORKFLOW.md)) | Done |
 | 2B | Online Private Beta on mydubb.com running with **mock** providers (see [DEPLOYMENT.md](DEPLOYMENT.md)) | Done (live at https://mydubb.com) |
 | 3A | Azure Translator with glossary-protected technical terms (speech and audio stay mock) | Done: live on https://mydubb.com since 2026-10-22 (PR #9) |
-| 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Implemented in a pull request; awaiting Product Owner acceptance (listening evaluation) |
+| 3B | Azure Speech (real speech with two multilingual voices, chunking, MP3 assembly; duration not adjusted) | Done: live on https://mydubb.com since 2026-10-22 (PR #11) |
 | 3C | FFmpeg duration processing | Later |
 
 Azure and FFmpeg are not prerequisites for the Milestone 2B mock deployment.

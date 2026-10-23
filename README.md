@@ -5,15 +5,14 @@ for learning technical content.
 
 Repository: https://github.com/chutieu312/mydubb (private).
 
-**Status: Milestone 3A done**: the online Private Beta runs at https://mydubb.com with real
+**Status: Milestone 3B done**: the online Private Beta runs at https://mydubb.com with real
 English-to-Vietnamese translation by Azure Translator and a glossary that keeps technical
-terms in English (`TRANSLATION_PROVIDER=azure`; off by default, so local and CI runs stay
-all-mock). Speech and audio processing are still mock on production (on top of Milestones 1, 2A
-and 2B: application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon).
-Real speech by Azure Speech (`SPEECH_PROVIDER=azure`, Milestone 3B; voices Andrew Multilingual,
-the default, and Emma Multilingual) is implemented behind configuration and awaits acceptance, so
-production still serves the mock fixture; FFmpeg duration processing (Milestone 3C) is not
-implemented, so no exact-duration dubbing exists yet. See
+terms in English (`TRANSLATION_PROVIDER=azure`), and real speech by Azure Speech
+(`SPEECH_PROVIDER=azure`; voices Andrew Multilingual, the default, and Emma Multilingual). Both
+are off by default, so local and CI runs stay all-mock (on top of Milestones 1, 2A and 2B:
+application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon). Audio
+processing is still a pass-through and FFmpeg duration processing (Milestone 3C) is not
+implemented, so the audio length is not adjusted to the target yet. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
 branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
