@@ -1,8 +1,9 @@
 # Deployment: online mock Private Beta (Milestone 2B)
 
-Target: `https://mydubb.com` running the production Docker image on free tiers. Speech and
-audio processing are **mock**; translation is real (Azure Translator) since Milestone 3A, see
-"Current deployment" and "Azure Translator" below.
+Target: `https://mydubb.com` running the production Docker image on free tiers. Audio
+processing is **mock** (pass-through); translation is real (Azure Translator, Milestone 3A) and
+speech is real (Azure Speech, Milestone 3B), see "Current deployment", "Azure Translator" and
+"Azure Speech" below.
 
 ```
 Browser ──HTTPS──► Render edge (TLS, mydubb.com) ──► Render Free web service "mydubb"
@@ -36,7 +37,7 @@ Set up on 2026-10-22 (Milestone 2B) and verified end to end.
 | Database | Neon project `mydubb`, Postgres 17, AWS US West 2 (Oregon), direct connection |
 | DNS (GoDaddy) | `A @ 216.24.57.1`, `CNAME www mydubb.onrender.com`; NS/SOA/`_domainconnect`/`_dmarc` unchanged |
 | TLS | Google Trust Services certificates for `mydubb.com` and `www.mydubb.com`, renewed by Render |
-| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech and audio processing: mock (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) |
+| Providers | Translation: **Azure Translator** (`TRANSLATION_PROVIDER=azure`, F0 resource `mydubb-translator`, Global endpoint, region `westus2`, key only in Render's environment). Speech: **Azure Speech** (`SPEECH_PROVIDER=azure`, F0 resource, region `westus2`, its own key only in Render's environment). Audio processing: mock pass-through (`ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`) |
 | Client IP header | `cf-connecting-ip` confirmed present (no "configured but absent" warning in the logs) |
 
 Milestone 3A (enabled 2026-10-22): PR #9, merge SHA `5ade22201dd7c9d8b589a3d4d296cb94417be334`;
@@ -49,7 +50,19 @@ https://mydubb.com (synthetic four-line transcript) and confirmed from the UI: A
 before submit, all stages completed, "Azure Translator" badge, natural Vietnamese with
 `machine learning`, `neural network`, `gradient descent`, `loss function`, `Spring Boot`,
 `Dependency Injection`, `REST API` and `JSON` kept in English and `10:30` unchanged, mock-fixture
-audio labeled as such. The audio is still a fixed sample; no Azure Speech or FFmpeg yet.
+audio labeled as such. At that point the audio was still a fixed sample.
+
+Milestone 3B (enabled 2026-10-22): PR #11, merge SHA `11382325077174fe0e7017a320d570555d531f6a`;
+CI on the merge commit passed
+([run](https://github.com/chutieu312/mydubb/actions/runs/39887481083)) and Render deployed that
+SHA (GitHub Deployments `7268385824`, `7268402419`, `7268494724`, success; the later ones follow
+environment-variable changes). `render.yaml` is unchanged: `SPEECH_PROVIDER=azure`,
+`AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION=westus2` were entered in the Render dashboard. Checked
+from outside: `/api/meta` reports `translation=azure, speech=azure, audio=mock` and the voices
+`AndrewMultilingual`/`EmmaMultilingual`, readiness 200. The first attempt returned `401`
+(`speech_auth_failed`) because the key entered in Render was not the Speech resource's key; after
+re-entering the correct key a job completed and the Product Owner listened to the result and
+accepted it. The audio length is still not adjusted to the target (Milestone 3C).
 
 Verification performed at the 2B deployment: health/readiness, security headers (HSTS, CSP, X-Frame-Options,
 nosniff, Referrer-Policy), API docs disabled, unauthenticated job creation and wrong Access
@@ -252,9 +265,9 @@ missing or invalid the service refuses to start (the log names the variable, not
 
 ## Azure Speech (Milestone 3B)
 
-Not enabled in production yet: production still uses the mock speech fixture until the Product
-Owner accepts the listening evaluation below. Cost rule: **Free (F0) only**; never choose
-Standard (S0) or change billing without a decision.
+Enabled in production since 2026-10-22 (see "Current deployment"); these are the steps that
+were followed. Cost rule: **Free (F0) only**; never choose Standard (S0) or change billing
+without a decision.
 
 ### 1. Create the resource (Azure portal)
 
@@ -299,7 +312,7 @@ sentence, sensible pauses (including where chunks were joined). The script ran l
 2026-10-22 with the F0 resource (see the pull request for the result); passing it still says
 nothing about pronunciation quality.
 
-### 3. Enable on Render (after acceptance only)
+### 3. Enable on Render (done for production on 2026-10-22)
 
 Render -> service **mydubb** -> **Environment** -> add `SPEECH_PROVIDER=azure`,
 `AZURE_SPEECH_KEY` (secret) and `AZURE_SPEECH_REGION`; keep `PROVIDER_MODE=mock` and

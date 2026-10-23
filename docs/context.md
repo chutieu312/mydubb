@@ -1,6 +1,6 @@
 # MyDubb — Context và handoff hiện tại
 
-Cập nhật: **2026-10-22**. Mốc hoàn tất gần nhất: **Milestone 3A** (Azure Translator thật, speech/audio còn mock), sau 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
+Cập nhật: **2026-10-22**. Mốc hoàn tất gần nhất: **Milestone 3B** (Azure Translator và Azure Speech thật, audio processing còn pass-through, chưa chỉnh duration), sau 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
 
 ## 1. Cách đọc và duy trì context
 
@@ -42,7 +42,8 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 - Dịch phần diễn giải tự nhiên, đúng nghĩa; giữ nguyên thuật ngữ English về technology, chuyên môn và khoa học. Không tự thêm giải thích, tóm tắt hoặc phiên âm.
 - Bước đầu dùng Azure Translator F0 và glossary backend, không có glossary UI. Glossary bảo vệ term đã biết; chưa hứa tự nhận diện hoàn hảo mọi term ở mọi lĩnh vực. Provider phải thay được nếu chất lượng không đạt; paid LLM translation chưa thuộc scope.
 - Ví dụ mong muốn: “A neural network uses gradient descent to minimize the loss function.” → “Một neural network sử dụng gradient descent để giảm thiểu loss function.” Câu Việt có thể khác, các term được bảo vệ phải giữ nguyên.
-- Voice API: `HoaiMy` / `NamMinh`, tương ứng `vi-VN-HoaiMyNeural` / `vi-VN-NamMinhNeural`. Mixed English/Vietnamese pronunciation cần đánh giá ở phần Azure Speech.
+- Voice API (từ 3B, Product Owner đã nghe audio thật rồi chọn): `AndrewMultilingual` (mặc định, "Andrew Multilingual") → `en-US-AndrewMultilingualNeural` và `EmmaMultilingual` ("Emma Multilingual") → `en-US-EmmaMultilingualNeural`. `HoaiMy` / `NamMinh` (voice Vietnamese Standard) đã bị thay thế hoàn toàn, request mới dùng hai tên cũ bị từ chối; job cũ vẫn đọc được.
+- Cách đọc English xen Vietnamese (đã được Product Owner nghe và chấp nhận): một voice, một speaker cho cả audio; SSML dùng `<lang xml:lang="vi-VN">` cho phần Vietnamese và `<lang xml:lang="en-US">` cho term English do glossary chung nhận diện; tốc độ mặc định. Term ngoài glossary không có span English riêng nên có thể đọc sai.
 - Không quota sản phẩm tùy ý như ba job/ngày hoặc cấm transcript dài để hạn chế testing. Có giới hạn tài nguyên thật, admission control, request-body guard và provider limits; chia request khi cần.
 - Ưu tiên free tiers; không tự mua/nâng tier, chuyển paid provider hay fallback âm thầm. Provider quota hết phải báo rõ.
 - Transcript xử lý tạm; metadata tối thiểu trong DB; translation/audio trong temporary result store. Không lưu audio binary vào DB.
@@ -59,7 +60,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 | Hosting | Docker multi-stage, FastAPI phục vụ React build và API cùng origin; Render Free Oregon |
 | Domain | https://mydubb.com; `www` và HTTP redirect về HTTPS; DNS GoDaddy |
 | CI/CD | GitHub Actions, Render auto-deploy sau checks pass; chưa dùng Jenkins |
-| Production providers | Translation: **Azure Translator thật** (`TRANSLATION_PROVIDER=azure`, resource Free F0 `mydubb-translator`, Global endpoint, region `westus2`, key chỉ nằm trong Render environment) + glossary backend. Speech: MP3 fixture khoảng 3 giây. Audio processing: pass-through. Ở mốc 2B cả ba đều là mock |
+| Production providers | Translation: **Azure Translator thật** (`TRANSLATION_PROVIDER=azure`, resource Free F0 `mydubb-translator`, Global endpoint, region `westus2`) + glossary backend. Speech: **Azure Speech thật** (`SPEECH_PROVIDER=azure`, resource Free F0, region `westus2`, REST API, key riêng của Speech chỉ nằm trong Render environment, FFmpeg trong image). Audio processing: pass-through mock, chưa chỉnh duration. Ở mốc 2B cả ba đều là mock |
 
 Giới hạn đã chấp nhận: Render có cold start; disk ephemeral làm mất results sau restart/deploy; session trong PostgreSQL vẫn tồn tại. Không scale ngang với execution/result storage hiện tại. Khoảng overlap khi deploy được hỗ trợ ở mức job ownership/recovery, không biến local results thành shared storage.
 
@@ -73,6 +74,7 @@ Các invariants vận hành:
 - Defaults đã chạy: result TTL 1 giờ; session TTL 12 giờ; job metadata chưa tự cleanup. Không nhầm với retention đề xuất ở mục 6.
 - Migrations chạy ở container startup và phải backward compatible. Expand-only **không đủ** để bảo đảm rollback: target image phải biết Alembic revision hiện tại. Mốc 2B là `0002`. Chi tiết và rehearsal nằm trong DEPLOYMENT.md.
 - Azure translation (3A): `PROVIDER_MODE=mock` vẫn mô tả speech/audio nên production vẫn cần `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`; `PROVIDER_MODE=azure` (mọi thứ thật) bị từ chối cho tới khi có Speech và FFmpeg. Chọn Azure mà thiếu `AZURE_TRANSLATOR_KEY` thì app không khởi động. Không tự retry, không fallback về mock; một chunk lỗi thì job lỗi, không có bản dịch một phần. Log chỉ có kích thước và mã lỗi, không có transcript, bản dịch hay key.
+- Azure Speech (3B): `SPEECH_PROVIDER=mock|azure` (mặc định mock). Chọn Azure thì cần `AZURE_SPEECH_KEY` (key riêng, không dùng key Translator), `AZURE_SPEECH_REGION` và `ffmpeg`/`ffprobe` trong PATH, thiếu thì app không khởi động. `PROVIDER_MODE=mock` vẫn mô tả audio processing nên production vẫn cần `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`; `PROVIDER_MODE=azure` vẫn bị từ chối cho tới 3C. Không retry, không fallback mock, một chunk lỗi thì job lỗi và không có audio một phần. Rate limiter dùng chung cho mọi job trong process (mặc định 20 request/60 giây, giới hạn F0, cộng 1 giây đệm). Log chỉ có status, request id, số lượng và độ dài audio, không có key, SSML hay text.
 - Roll forward là mặc định khi rollback target không tương thích. Bỏ migration step để chạy code cũ chỉ là đường khẩn cấp có điều kiện, cần Product Owner duyệt; không downgrade production DB tự động.
 
 ## 5. Milestones và bằng chứng bàn giao
@@ -85,7 +87,8 @@ Các invariants vận hành:
 | M2B | Render + Neon + domain/HTTPS, production mock opt-in, heartbeat/recovery, security hardening, smoke tests; PR #2–#7 | Hoàn tất |
 | M2B review | PR #8 sửa heartbeat nuôi job mồ côi, cleanup khi mkdtemp/scheduling lỗi; giới hạn rollback và rehearsal | Đã merge/deploy, kiểm chứng production |
 | M3A | Azure Translator thật + glossary backend (PR #9); speech/audio còn mock | Hoàn tất: đã merge, deploy, Product Owner xác nhận trên production (2026-10-22) |
-| M3 phần tiếp theo | Azure Speech thật; sau đó FFmpeg duration processing | Chưa bắt đầu |
+| M3B | Azure Speech thật (REST), voice Andrew/Emma Multilingual, chunking, ghép audio và MP3 bằng FFmpeg; chưa chỉnh duration (PR #11) | Hoàn tất: đã merge, deploy, Product Owner nghe và chấp nhận trên production (2026-10-22) |
+| M3C | FFmpeg duration processing (tempo toàn bộ audio về target) | Chưa bắt đầu |
 
 Bằng chứng cuối của 2B (không phải kiểm tra live tự động mỗi khi đọc file):
 
@@ -106,15 +109,30 @@ Kết quả và bằng chứng của 3A:
 - Product Owner gửi job trên https://mydubb.com (transcript giả bốn dòng) và xác nhận qua ảnh chụp: disclosure trước nút submit, các stage hoàn thành, badge "Azure Translator", bản dịch tự nhiên giữ nguyên `machine learning`, `neural network`, `gradient descent`, `loss function`, `Spring Boot`, `Dependency Injection`, `REST API`, `JSON` và `10:30`, audio gắn nhãn "Mock fixture". Product Owner đánh giá chất lượng này là đạt. Claude không tự chạy job trên production vì không có Access Code.
 - Giới hạn còn lại: glossary chỉ bảo vệ term đã khai báo; Microsoft tính phí cả markup (mỗi lần một term xuất hiện thêm 31 ký tự vào quota); Azure có thể sửa ký hiệu code (quan sát `a && b` thành `a & b`); nếu Azure bỏ/sửa span thì job lỗi thay vì trả bản dịch sai (chưa gặp ở live test); dùng API v3.0, bản GA `2026-06-06` khác request/response và là migration riêng; speech vẫn là fixture, audio processing vẫn pass-through, chưa có duration guarantee.
 
+Kết quả và bằng chứng của 3B:
+
+- Đã có: `AzureSpeechProvider` (`backend/app/speech/azure.py`) qua `SpeechProvider`, dùng **REST API** (`POST {region}.tts.speech.microsoft.com/cognitiveservices/v1`) thay vì Speech SDK: SDK là thư viện native nặng, không cần tính năng streaming, REST dùng lại `httpx`. Giới hạn đã xác minh cho đường REST: F0 20 request/60 giây cho cả resource; tối đa 10 phút audio mỗi request và audio dài hơn bị **cắt âm thầm** với HTTP 200 (giới hạn 64 KB SSML là của WebSocket, không áp dụng). Chunk tối đa 2.000 ký tự (mặc định), gom theo dòng/câu, câu dài chỉ cắt ở khoảng trắng và không cắt giữa glossary term; test xác nhận không mất, lặp, đảo nội dung. Mỗi chunk yêu cầu WAV 24 kHz mono, kiểm tra header nghiêm ngặt, từ chối audio gần 10 phút hoặc ngắn bất thường; ghép ở mức sample (không nối byte file đã encode), FFmpeg encode một lần ra MP3 mono 96 kbit/s có header seek, `ffprobe` xác nhận. WAV đã ghép được giữ trong work dir (`SpeechAudio.lossless_path`) để 3C chỉnh tempo trước khi encode. 11 mã lỗi `speech_*` an toàn. Glossary chung thêm `REST API` (phân biệt hoa/thường) và `pipeline`. UI: banner theo thành phần "real translation and speech, duration not adjusted", disclosure nêu Azure Translator và Azure Speech, badge "Azure Speech" và "Duration not adjusted", `is_fixture=false`, voice selector hiển thị tên "Andrew Multilingual"/"Emma Multilingual", không có phần trăm giả.
+- Voice: ban đầu implement HoaiMy/NamMinh; sau khi Product Owner nghe mẫu thật chọn Andrew/Emma Multilingual với `<lang>` spans (cập nhật trong cùng PR #11). Job cũ lưu tên voice cũ vẫn đọc/hiển thị được (cột `jobs.voice` là text, không migration).
+- Runtime image: thêm Debian `ffmpeg` (kèm `ffprobe`), image tăng từ khoảng 405 MB lên khoảng 1,04 GB; bản FFmpeg static nhỏ hơn nhưng là binary bên thứ ba không ký nên không chọn.
+- [PR #11](https://github.com/chutieu312/mydubb/pull/11): reviewed HEAD `f5cb638e2c5e66964d38b1e411c3ec4a6c162806` ([CI PR](https://github.com/chutieu312/mydubb/actions/runs/39886354304) pass, gồm 428 backend test với Azure giả và FFmpeg thật, 29 frontend test, 12 E2E, Docker runtime check); merge SHA `11382325077174fe0e7017a320d570555d531f6a`.
+- [CI trên merge commit main](https://github.com/chutieu312/mydubb/actions/runs/39887481083) pass. GitHub Deployments `7268385824`, `7268402419`, `7268494724` đều success đúng merge SHA (các lần sau là redeploy khi đổi biến môi trường trên Render); dashboard Render chưa được đối chiếu độc lập.
+- Live Azure Speech (F0) bằng `uv run python -m scripts.azure_speech_smoke --multi-chunk` từ `backend/` với transcript tổng hợp bốn dòng đã nghe thử: 10 request, mọi request HTTP 200, WAV qua kiểm tra, MP3 sau khi ghép qua `ffprobe` cho cả hai voice. Script không tự kết luận chất lượng phát âm.
+- Kiểm tra từ bên ngoài sau deploy: `/api/meta` báo `translation=azure, speech=azure, audio=mock` và hai voice Andrew/Emma; `/api/ready` 200.
+- Sự cố khi bật: lần thử đầu trên production Azure Speech trả 401 (`speech_auth_failed`) vì `AZURE_SPEECH_KEY` trong Render không đúng (key khác với key local đã chạy live test); app xử lý đúng thiết kế (lỗi rõ, không retry, không fallback). Product Owner nhập lại key đúng rồi job chạy được. Bài học: key Speech là key của resource Speech, khác key Translator; dán không kèm dấu nháy.
+- Product Owner chạy job trên https://mydubb.com, nghe file kết quả và đánh giá chất lượng rất tốt; **Product Owner đã đồng ý đóng 3B**.
+- Giới hạn còn lại: audio chưa được chỉnh về target duration (3C), result nói rõ điều này; term English ngoài glossary không có span `en-US` riêng nên có thể đọc sai; F0 chỉ 20 request/phút cho cả resource nên transcript dài ở bước `synthesizing` nhiều phút, quota/rate limit làm job lỗi rõ ràng; xuống dòng trong chunk được giữ như mẫu đã nghe nhưng khoảng ngắt giữa các chunk chưa được đo riêng; mới đánh giá bằng transcript ngắn, chưa với transcript dài thật nhiều chunk.
+
 ## 6. Quyết định còn mở
 
 - **Duration tolerance:** ±50 ms trên audio sau decode mới là đề xuất, chưa được chốt riêng hay chứng minh đạt được. Trước FFmpeg cần thống nhất cách đo, xử lý encoder delay/padding và tiêu chí pass/fail.
 - **Tempo quá lớn/nhỏ:** cần xác định cách bảo vệ chất lượng, giới hạn kỹ thuật và lỗi hiển thị; không tự thay target hoặc cắt nội dung.
 - **Metadata retention:** 7 ngày mới là đề xuất; chưa có quyết định triển khai cleanup. Result/session defaults 1 giờ/12 giờ không có nghĩa metadata cũng đã có TTL.
+- **Chi phí Azure Speech:** resource Free F0; Product Owner cần tự xác nhận pricing tier và theo dõi mức dùng so với allowance hằng tháng trên trang giá. Không nâng tier khi chưa được duyệt.
 - **Chi phí:** budget GitHub Actions $0 kèm hard stop chưa được xác nhận. Không coi số phút/free-tier allowance trong tài liệu lịch sử là số dư hiện tại. Azure Translator dùng resource Free F0; Product Owner cần tự xác nhận pricing tier là Free F0 trong portal (Claude không xem được) và theo dõi mức dùng so với 2 triệu ký tự/tháng, nhớ rằng markup của glossary được tính phí. Không nâng tier hay thêm provider trả phí khi chưa được duyệt.
 - **Glossary quality:** mới được thử bằng transcript giả ngắn. Cần transcript đại diện từ khóa học thật để đánh giá term chưa biết/đa nghĩa, chất lượng dịch dài và mức hao quota; glossary UI và automatic domain-wide term detection chưa thuộc scope. Không hứa glossary nhỏ sẽ bảo vệ mọi thuật ngữ.
 - **Translation provider/API:** v3.0 đang dùng; chuyển sang API `2026-06-06` hoặc provider khác chỉ khi có lý do (chất lượng, ngừng hỗ trợ) và cần quyết định riêng cùng live test. Paid LLM translation chưa được duyệt.
-- **Mixed pronunciation:** phát âm thuật ngữ English trong giọng Việt cần đánh giá khi có Azure Speech; chưa có kết luận.
+- **Mixed pronunciation:** đã đạt với voice Andrew/Emma Multilingual và `<lang>` spans trên transcript ngắn. Còn mở: chất lượng với term ngoài glossary và với transcript thật dài; mở rộng glossary là việc riêng, chưa có glossary UI hay tự nhận diện term.
+- **Kích thước image:** khoảng 1,04 GB với Debian `ffmpeg`; chỉ xem lại nếu deploy/disk thành vấn đề, cần quyết định riêng về FFmpeg static.
 
 ## 7. Tài liệu và workflow cần dùng
 
