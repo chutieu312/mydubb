@@ -417,8 +417,8 @@ uv run python -m scripts.pronunciation_smoke            # offline: classificatio
 uv run python -m scripts.pronunciation_smoke --speak    # 4 Azure Speech requests (F0), MP3s
 ```
 
-`--speak` writes `pronunciation-samples/before-<voice>.mp3` (glossary only, as production reads
-today) and `after-<voice>.mp3` (with detection) for both voices; ffmpeg must be on `PATH` (or run
+`--speak` writes `pronunciation-samples/before-<voice>.mp3` (glossary only, as production read
+before PR #20) and `after-<voice>.mp3` (with detection) for both voices; ffmpeg must be on `PATH` (or run
 it inside the image, see the pull request). `--translate` translates the sample live instead of
 using the stored translation (1 Translator request). Only listening tells whether `container`,
 `Kernel`, `trenchcoat` and `/proc` sound right; HTTP 200 and a valid MP3 do not.
@@ -561,9 +561,11 @@ built before it (including the Milestone 3C ones) stops being a supported Render
 use `docker/rollback-target-check.sh <commit> 0003` to check. Rolling forward by reverting the
 change in a pull request keeps working, because the image still contains `0003`. The English
 detection pull request adds migration `0004` (table `glossary_candidates` and the nullable column
-`jobs.glossary_candidates_recorded_at`, expand-only). Once it is deployed, the database is at
-`0004` and every deploy built before it (including the audio speed ones) stops being a supported
-Render rollback target; check with `docker/rollback-target-check.sh <commit> 0004`.
+`jobs.glossary_candidates_recorded_at`, expand-only). It was deployed on 2026-10-23 (PR #20, merge
+`ed49fea`, Deployment `dep-dbduvi8m7kps73bpg8jg` live), so the production database is at `0004`
+(the startup migration ran; not checked with SQL) and every deploy built before it (including the
+audio speed ones) is no longer a supported Render rollback target; check with
+`docker/rollback-target-check.sh <commit> 0004`.
 
 **Before rolling back** (read-only checks):
 
