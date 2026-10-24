@@ -42,7 +42,7 @@ export function setCsrfToken(token: string | null): void {
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-async function request<T>(
+export async function request<T>(
   method: string,
   path: string,
   options: { body?: unknown; signal?: AbortSignal } = {},
