@@ -20,7 +20,7 @@ const escapes = (page: Page) =>
     const check = (root: Element | null) => {
       if (!root) return;
       const limit = root.getBoundingClientRect().right + 1;
-      for (const el of root.querySelectorAll("*")) {
+      for (const el of Array.from(root.querySelectorAll("*"))) {
         if (el.closest(".sr-only")) continue;
         const rect = el.getBoundingClientRect();
         if (rect.width > 0 && rect.right > limit) {
