@@ -127,11 +127,13 @@ JSON, roughly a million and a half words) to protect a small instance's memory.
 | Cognito sessions | PostgreSQL `user_sessions` | Deleted by cleanup once expired or revoked |
 | Pending sign-in steps (encrypted Cognito session/access token) | PostgreSQL `auth_challenges` | Payload erased when the step ends; row deleted by cleanup once consumed or expired (minutes) |
 | Password-reset events (hashed email, time) | PostgreSQL `password_reset_events` | Deleted by cleanup after one day |
+| Password-reset attempts (hashed email, state, times) | PostgreSQL `password_reset_attempts` | Recorded before each Cognito reset request; a `pending` one is never deleted (it is enforced and resolved as `unknown` once settled); resolved ones are deleted by cleanup after one day |
 | Glossary candidates (term, key, kind, job count, first/last seen, review status) | PostgreSQL `glossary_candidates` | No automatic deletion and no retention of its own; independent of results, jobs and sessions (no foreign key). No transcript, translation, excerpt, job or session is stored with a term |
 
 Cleanup runs at startup and every `CLEANUP_INTERVAL_SECONDS` (in a thread): removes expired
 or unreadable result directories, abandoned `.staging-*` directories, stale sessions (both kinds),
-finished sign-in steps and old password-reset events.
+finished sign-in steps and old password-reset events; it also records password resets whose
+outcome was never written (database error, crash) as `unknown` and revokes for them (fail closed).
 Reads also check expiry, so an expired result is never served even between cleanup runs.
 
 Result publication and cleanup are race-safe within the single process:

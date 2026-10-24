@@ -569,7 +569,10 @@ audio speed ones) is no longer a supported Render rollback target; check with
 migration `0005` (tables `users`, `user_sessions`, `auth_challenges`, `password_reset_events` and the
 nullable column `jobs.user_id`, expand-only; it runs even while `AUTH_MODE=access_code`). Once it is
 deployed, every deploy built before it is no longer a supported Render rollback target; check with
-`docker/rollback-target-check.sh <commit> 0005`. Switching `AUTH_MODE` back to `access_code` is a
+`docker/rollback-target-check.sh <commit> 0005`. The same pull request also adds migration `0006`
+(table `password_reset_attempts` and the nullable column `auth_challenges.lease_token`,
+expand-only), so after it is deployed the database is at `0006`: check targets with
+`docker/rollback-target-check.sh <commit> 0006`. Switching `AUTH_MODE` back to `access_code` is a
 configuration change, not a code rollback (see [AUTHENTICATION.md](AUTHENTICATION.md#rollback)).
 
 **Before rolling back** (read-only checks):
@@ -675,6 +678,19 @@ previous production commit `ec47212` (knows `0001`-`0004`) against the new image
 
 No Cognito user pool was involved (steps 6-7 use placeholder identifiers). Production was not
 touched.
+
+Repeated with migration `0006` (same pull request, second review round): `ec47212` against the new
+image at commit `c4407ab` (knows `0001`-`0006`), same procedure:
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `ec47212` | default, empty database | Migrates to `0004`; smoke test passes |
+| 2 | new | default | `0004` -> `0005` -> `0006`; smoke test passes; `password_reset_attempts` and `auth_challenges.lease_token` exist; every job has `user_id NULL` |
+| 3 | `ec47212` | default, database at `0006` | Exits 1: `Can't locate revision identified by '0006'`; database unchanged |
+| 4 | `ec47212` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes |
+| 5 | new | default, after step 4 | Starts; smoke test passes; four jobs completed, none assigned to a user |
+| 6 | new | `AUTH_MODE=cognito`, dummy pool, one stale `pending` reset attempt seeded by SQL | Starts; the startup recovery logs `Recorded 1 unresolved password reset(s) as unknown` and the row is `unknown`; `/api/meta` `auth.mode=cognito`; `POST /api/session` 405; `/api/auth/me` and `POST /api/jobs` 401 |
+| 7 | new | `AUTH_MODE=cognito` without `AUTH_TOKEN_ENCRYPTION_KEY` | Refuses to start; the error names the variable only |
 
 Repeat it for any pull request that adds a migration: build the previous production commit
 and the new one (`git worktree add <dir> <commit>` + `docker build`), migrate a throwaway

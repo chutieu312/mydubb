@@ -19,7 +19,8 @@ Browser (Studio UI) ──same origin──► FastAPI (Render) ──HTTPS, pub
       │  cookie mydubb_auth (opaque, HttpOnly)          │                                (us-west-2, Lite)
       │                                                 ▼
       │                                          PostgreSQL (Neon): users, user_sessions,
-      │                                          auth_challenges, password_reset_events, jobs.user_id
+      │                                          auth_challenges, password_reset_attempts,
+      │                                          password_reset_events, jobs.user_id
 ```
 
 - **Cognito owns credentials.** Passwords go from the browser to MyDubb over HTTPS, are forwarded
@@ -296,6 +297,10 @@ Render-generated value can stay for a quick rollback.
   uv run python -m scripts.auth_users revoke-sessions lan@example.com
   unset DATABASE_URL
   ```
+
+  `revoke-sessions` and `disable` also cancel every sign-in or pending step of that user that
+  started before the command (even one that already passed Cognito); `enable` allows new sign-ins
+  only. Use `revoke-sessions` after changing a user's password or email in the AWS console.
 - **Password reset by the user**: "Forgot password" in the UI (only works once the email is
   verified). An administrator can also use **Reset password** in the console (then also
   `revoke-sessions`, see the limits above).
@@ -309,6 +314,12 @@ ownership, CSRF/logout/expiry, password reset and its races, disabled users, the
 exclusive, and cleanup. `tests/test_auth_cognito_client.py` checks the real HTTP client against a
 fake transport (request shape, `SECRET_HASH`, error mapping, timeouts, no redirects, no secrets in
 logs) and the settings. `tests/test_auth_migration.py` checks migration `0005` with older rows.
+`tests/test_auth_races.py` holds requests inside the fake Cognito (threading events, no sleeps) to
+check administrator revocation against sign-ins in flight and the lease fencing of challenges;
+`tests/test_auth_reset_recovery.py` covers a reset whose outcome cannot be recorded (database error
+after Cognito succeeded, process interrupted, no answer from Cognito, unrecorded rejection), wrong
+codes, a sign-in racing an unrecorded reset, lease operations and the client's response deadline.
+Each fix was also checked by disabling it and seeing its tests fail.
 
 **Local run in Cognito mode** (needs a real test user pool; never the production pool): put the
 variables above in `backend/.env` with `AUTH_MODE=cognito`, start the backend as in the README and
@@ -344,8 +355,8 @@ merged, the AWS setup above done, the live check passed.
   mode never reads `user_sessions`), Access Code sign-in works again, and Cognito users' jobs are no
   longer visible (their rows stay; switching back to `cognito` shows them again to their owners).
 - **Code rollback** follows [DEPLOYMENT.md, "Rolling back"](DEPLOYMENT.md#rolling-back): migration
-  `0005` is expand-only, but once the database is at `0005` only images that contain `0005` are
-  supported Render rollback targets; older images need the emergency path
+  `0005` and `0006` are expand-only, but once the database is at `0006` only images that contain
+  `0006` are supported Render rollback targets; older images need the emergency path
   (`RUN_MIGRATIONS_ON_START=false`), which was rehearsed (see DEPLOYMENT.md). Older code never reads
   the new tables, so it cannot accept a Cognito session.
 - The tables can stay after a rollback; nothing needs to be deleted.
