@@ -3,10 +3,12 @@ import { useState, type FormEvent } from "react";
 import { ApiError, api, setCsrfToken } from "../../api/client";
 
 interface Props {
+  // Shown when a session ended (expired, or the server no longer recognises it).
+  notice?: string | null;
   onAuthenticated: () => void;
 }
 
-export function AccessGate({ onAuthenticated }: Props) {
+export function AccessGate({ notice, onAuthenticated }: Props) {
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,27 +35,48 @@ export function AccessGate({ onAuthenticated }: Props) {
   };
 
   return (
-    <section className="card narrow" aria-labelledby="access-title">
-      <h2 id="access-title">Private Beta Access</h2>
-      <form onSubmit={submit} className="stack">
-        <label htmlFor="access-code">Access Code</label>
-        <input
-          id="access-code"
-          type="password"
-          autoComplete="off"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          required
-        />
-        {error && (
-          <p className="error" role="alert">
-            {error}
+    <section className="gate" aria-labelledby="gate-title">
+      <div className="gate-story">
+        <p className="eyebrow">Less reading. More understanding.</p>
+        <h1 id="gate-title">A new language. The same ideas.</h1>
+        <p className="muted">
+          Natural Vietnamese voices. Clear English terms. Audio that fits your pace.
+        </p>
+      </div>
+      <div className="gate-form">
+        <h2>Welcome to MyDubb</h2>
+        <p className="muted">Enter the Access Code you were given to open your studio.</p>
+        {notice && (
+          <p className="callout warning" role="alert">
+            {notice}
           </p>
         )}
-        <button type="submit" disabled={submitting || code.length === 0}>
-          {submitting ? "Checking…" : "Enter"}
-        </button>
-      </form>
+        <form onSubmit={submit} className="stack">
+          <div className="field">
+            <label htmlFor="access-code">Access Code</label>
+            <input
+              id="access-code"
+              type="password"
+              autoComplete="off"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              required
+            />
+          </div>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            className="button primary wide"
+            disabled={submitting || code.length === 0}
+          >
+            {submitting ? "Checking…" : "Enter"}
+          </button>
+        </form>
+      </div>
     </section>
   );
 }

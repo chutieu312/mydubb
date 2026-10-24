@@ -2,18 +2,16 @@ import { useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { Job, VoiceOption } from "../../api/types";
-import {
-  AUDIO_SPEEDS,
-  DEFAULT_SPEED,
-  formatOutputDuration,
-  previewOutputSeconds,
-  speedLabel,
-} from "../../lib/speed";
-import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
+import { DEFAULT_SPEED } from "../../lib/speed";
+import { previewTargetDuration } from "../../lib/timestamps";
+import { FieldMessage } from "./FieldMessage";
+import { LengthSummary } from "./LengthSummary";
+import { SpeedField } from "./SpeedField";
+import { VoiceField } from "./VoiceField";
 
 interface Props {
   voices: VoiceOption[];
-  // Says which text is sent to which Azure service on submit; null when nothing is.
+  // One line saying that the text is sent to an outside service on submit; null when it is not.
   disclosure: string | null;
   onJobCreated: (job: Job) => void;
   onSessionExpired: () => void;
@@ -62,9 +60,14 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
   };
 
   return (
-    <form className="card stack" onSubmit={submit} noValidate>
-      <div className="field">
-        <label htmlFor="transcript">English Transcript</label>
+    <form className="studio" onSubmit={submit} noValidate>
+      <section className="panel panel-sky" aria-label="Transcript and timing">
+        <div className="panel-head">
+          <label htmlFor="transcript" className="panel-title">
+            English Transcript
+          </label>
+          <span className="small muted">English → Vietnamese</span>
+        </div>
         <textarea
           id="transcript"
           rows={10}
@@ -74,111 +77,57 @@ export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired
           aria-invalid={Boolean(fieldErrors.transcript)}
         />
         <FieldMessage message={fieldErrors.transcript} />
-      </div>
 
-      <div className="row">
-        <TimestampInput
-          id="first-start"
-          label="First Sentence Start Time"
-          value={firstStart}
-          onChange={setFirstStart}
-          error={fieldErrors.first_sentence_start}
-        />
-        <TimestampInput
-          id="last-start"
-          label="Last Sentence Start Time"
-          value={lastStart}
-          onChange={setLastStart}
-          error={fieldErrors.last_sentence_start}
-        />
-      </div>
-
-      <fieldset className="field" aria-describedby="speed-help">
-        <legend>Audio speed</legend>
-        <div className="speed-group">
-          {AUDIO_SPEEDS.map((option) => (
-            <label key={option} className="speed-option">
-              <input
-                type="radio"
-                name="speed"
-                value={option}
-                checked={speed === option}
-                onChange={() => setSpeed(option)}
-              />
-              <span>{speedLabel(option)}</span>
-            </label>
-          ))}
+        <div className="times">
+          <TimestampInput
+            id="first-start"
+            label="First Sentence Start Time"
+            value={firstStart}
+            onChange={setFirstStart}
+            error={fieldErrors.first_sentence_start}
+          />
+          <TimestampInput
+            id="last-start"
+            label="Last Sentence Start Time"
+            value={lastStart}
+            onChange={setLastStart}
+            error={fieldErrors.last_sentence_start}
+          />
         </div>
-        <p className="muted" id="speed-help">
-          <small>
-            1x fits the audio to the time between the two timestamps. Other speeds make the audio
-            file shorter or longer than that time; the downloaded file itself changes.
-          </small>
-        </p>
-        <FieldMessage message={fieldErrors.speed} />
-      </fieldset>
+        <p className="small muted">Use the start times from your original transcript.</p>
+        <details className="disclosure plain">
+          <summary>How timing works</summary>
+          <p className="small muted">
+            The audio length is the time between the two start times. At 1x the audio fits that
+            time; another speed makes the audio file shorter or longer.
+          </p>
+        </details>
+      </section>
 
-      <div className="preview" aria-live="polite" aria-label="Audio length preview">
-        <dl className="preview-list">
-          <dt>Duration at 1x (Last Start − First Start)</dt>
-          <dd>{preview === null ? "—" : `${formatSeconds(preview)} (${preview} s)`}</dd>
-          <dt>Selected speed</dt>
-          <dd>{speedLabel(speed)}</dd>
-          <dt>Expected audio length</dt>
-          <dd>
-            <strong>
-              {preview === null ? "—" : formatOutputDuration(previewOutputSeconds(preview, speed))}
-            </strong>
-          </dd>
-        </dl>
-        {preview !== null && speed !== DEFAULT_SPEED && (
-          <p className="warning-inline">
-            At {speedLabel(speed)} the audio will be {speed > DEFAULT_SPEED ? "shorter" : "longer"}{" "}
-            than the time between the two timestamps, so it will not match the video&apos;s length
-            for that stretch.
+      <aside className="panel panel-sand" aria-label="Voice and speed settings">
+        <VoiceField voices={voices} value={voice} onChange={setVoice} error={fieldErrors.voice} />
+        <SpeedField value={speed} onChange={setSpeed} error={fieldErrors.speed} />
+        <LengthSummary baselineSeconds={preview} speed={speed} />
+
+        {formError && (
+          <p className="error" role="alert">
+            {formError}
           </p>
         )}
-        <small className="muted">
-          Estimate only; the server validates the input and calculates the final length.
-        </small>
-      </div>
-
-      <fieldset className="field">
-        <legend>Voice</legend>
-        <div className="row">
-          {voices.map((v) => (
-            <label key={v.id} className="choice">
-              <input
-                type="radio"
-                name="voice"
-                value={v.id}
-                checked={voice === v.id}
-                onChange={() => setVoice(v.id)}
-              />
-              {v.label} <span className="muted">({v.description})</span>
-            </label>
-          ))}
-        </div>
-        <FieldMessage message={fieldErrors.voice} />
-      </fieldset>
-
-      {formError && (
-        <p className="error" role="alert">
-          {formError}
-        </p>
-      )}
-      {disclosure && (
-        <p className="privacy-notice" id="azure-disclosure">
-          {disclosure}
-        </p>
-      )}
-      <button
-        type="submit"
-        disabled={submitting}
-        aria-describedby={disclosure ? "azure-disclosure" : undefined}
-      >
-        {submitting ? "Submitting…" : "Generate Dubbing"}
-      </button>
+        {disclosure && (
+          <p className="small muted" id="azure-disclosure">
+            {disclosure} See Privacy below.
+          </p>
+        )}
+        <button
+          type="submit"
+          className="button primary wide"
+          disabled={submitting}
+          aria-describedby={disclosure ? "azure-disclosure" : undefined}
+        >
+          {submitting ? "Submitting…" : "Generate audio"}
+        </button>
+      </aside>
     </form>
   );
 }
@@ -196,6 +145,7 @@ function TimestampInput(props: {
       <input
         id={props.id}
         inputMode="numeric"
+        autoComplete="off"
         placeholder="HH:MM:SS"
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
@@ -204,8 +154,4 @@ function TimestampInput(props: {
       <FieldMessage message={props.error} />
     </div>
   );
-}
-
-function FieldMessage({ message }: { message?: string }) {
-  return message ? <p className="error">{message}</p> : null;
 }

@@ -23,12 +23,12 @@ test("rejects a wrong Access Code and keeps the session cookie away from JavaScr
 test("shows server-side validation errors", async ({ page }) => {
   await signIn(page);
 
-  await page.getByRole("button", { name: "Generate Dubbing" }).click();
+  await page.getByRole("button", { name: "Generate audio" }).click();
   await expect(page.getByText("Transcript must contain English text.")).toBeVisible();
 
   await fillJobForm(page, { transcript: "Hello.", first: "00:05:00", last: "00:01:00" });
   const response = page.waitForResponse((r) => r.url().endsWith("/api/jobs"));
-  await page.getByRole("button", { name: "Generate Dubbing" }).click();
+  await page.getByRole("button", { name: "Generate audio" }).click();
   expect((await response).status()).toBe(422);
   await expect(page.getByText(/must be later than First Sentence Start Time/)).toBeVisible();
 });
@@ -49,14 +49,14 @@ test("completes a mock job: stages, text-only result, playback, download", async
     "16:30 is the aspect ratio.",
   ].join("\n");
   await fillJobForm(page, { transcript, voice: "Emma Multilingual" });
-  await expect(
-    page.getByLabel("Audio length preview").getByText("00:06:00 (360 s)").first(),
-  ).toBeVisible();
+  await expect(page.getByLabel("Audio length preview").locator(".length-value")).toHaveText(
+    "00:06:00",
+  );
 
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/jobs") && r.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "Generate Dubbing" }).click();
+  await page.getByRole("button", { name: "Generate audio" }).click();
   const job = await (await created).json();
   expect((await created).status()).toBe(202);
   expect(job.target_duration_seconds).toBe(360);
@@ -77,10 +77,15 @@ test("completes a mock job: stages, text-only result, playback, download", async
   await expect(translation.locator("img")).toHaveCount(0);
   expect(await page.evaluate(() => (window as { __xss?: number }).__xss)).toBeUndefined();
 
-  await expect(page.locator(".badge", { hasText: "Illustrative mock" })).toBeVisible();
-  await expect(
-    page.locator(".notice li", { hasText: "NOT generated from your transcript" }),
-  ).toBeVisible();
+  // Mock mode stays recognisable: the placeholder translation and the fixture are flagged.
+  await expect(page.locator(".chip", { hasText: "Illustrative mock" })).toBeVisible();
+  await expect(page.locator(".callout", { hasText: "NOT generated from your transcript" })).toBeVisible();
+  await expect(page.getByText("Mock sample ready")).toBeVisible();
+  // The server's own notes are in Audio details, closed until opened.
+  const note = page.locator(".notes li", { hasText: "NOT generated from your transcript" });
+  await expect(note).toBeHidden();
+  await page.getByText("Audio details").click();
+  await expect(note).toBeVisible();
 
   // Native audio player loads the MP3.
   const duration = await page
@@ -121,13 +126,12 @@ test("the chosen audio speed is previewed, submitted and kept with the job", asy
   await expect(speeds).toHaveCount(7);
   await expect(page.getByLabel("1x", { exact: true })).toBeChecked();
 
-  const preview = page.getByLabel("Audio length preview");
-  await expect(preview).toContainText("00:00:20 (20 s)");
+  const length = page.getByLabel("Audio length preview").locator(".length-value");
+  await expect(length).toHaveText("00:00:20");
   await page.getByLabel("0.75x", { exact: true }).check();
-  await expect(preview).toContainText("Selected speed0.75x");
-  await expect(preview).toContainText("00:00:26.67 (26.67 s)");
+  await expect(length).toHaveText("00:00:26.67");
   await page.getByLabel("1.25x", { exact: true }).check();
-  await expect(preview).toContainText("00:00:16 (16 s)");
+  await expect(length).toHaveText("00:00:16");
 
   // Keyboard: arrow keys move the choice within the group.
   await page.getByLabel("1.25x", { exact: true }).focus();
@@ -138,7 +142,7 @@ test("the chosen audio speed is previewed, submitted and kept with the job", asy
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/jobs") && r.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "Generate Dubbing" }).click();
+  await page.getByRole("button", { name: "Generate audio" }).click();
   const job = await (await created).json();
   expect(job.speed).toBe(1.25);
   expect(job.baseline_duration_seconds).toBe(20);
@@ -150,7 +154,7 @@ test("the chosen audio speed is previewed, submitted and kept with the job", asy
   await expect(page.getByText(/Speed 1\.25x · Planned audio length 00:00:16/)).toBeVisible();
   // Mock audio is a fixture: the selection is recorded but the file is not claimed to be adjusted.
   await expect(page.getByLabel("Audio speed", { exact: true }).filter({ hasText: "Selected speed 1.25x" })).toBeVisible();
-  await expect(page.getByText("This audio was not adjusted")).toBeVisible();
+  await expect(page.locator(".callout", { hasText: "This audio was not adjusted" })).toBeVisible();
   const player = page.locator("audio");
   expect(await player.evaluate((audio: HTMLAudioElement) => audio.playbackRate)).toBe(1);
 });
@@ -175,7 +179,7 @@ test("layout fits the viewport without horizontal scrolling", async ({ page }) =
   for (const control of [
     page.getByLabel("English Transcript"),
     page.getByLabel("Last Sentence Start Time"),
-    page.getByRole("button", { name: "Generate Dubbing" }),
+    page.getByRole("button", { name: "Generate audio" }),
   ]) {
     const box = (await control.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(0);

@@ -1,5 +1,5 @@
 import type { JobStatus, VoiceOption } from "../../api/types";
-import { formatOutputDuration, speedLabel } from "../../lib/speed";
+import { formatClock, speedLabel } from "../../lib/speed";
 import { ResultView } from "./ResultView";
 import { useJobPolling } from "./useJobPolling";
 
@@ -22,7 +22,7 @@ export function JobPanel({ jobId, voices, onSessionExpired }: Props) {
 
   if (!job) {
     return (
-      <section className="card" aria-live="polite">
+      <section className="panel panel-coral" aria-live="polite">
         <p>{error ?? "Loading job status…"}</p>
       </section>
     );
@@ -31,23 +31,30 @@ export function JobPanel({ jobId, voices, onSessionExpired }: Props) {
   // Stages are reported by the server; no progress percentage is invented.
   const currentIndex = STAGES.findIndex((s) => s.status === job.status);
   const failed = job.status === "failed";
+  const completed = job.status === "completed";
+  const voiceLabel = voices.find((v) => v.id === job.voice)?.label ?? job.voice;
 
   return (
-    <section className="card stack" aria-labelledby="job-title">
-      <h2 id="job-title">Processing status</h2>
-      <p className="muted">
-        Voice {voices.find((v) => v.id === job.voice)?.label ?? job.voice} · Duration at 1x{" "}
-        {job.target_duration} ({job.baseline_duration_seconds} s) · Speed {speedLabel(job.speed)} ·
-        Planned audio length {formatOutputDuration(job.output_duration_seconds)} (all calculated by
-        the server)
+    <section className="panel panel-coral" aria-labelledby="job-title">
+      <h2 id="job-title">
+        {failed ? "Audio could not be created" : completed ? "Your audio" : "Creating your audio…"}
+      </h2>
+      {/* What the server stored for this job, not what the form shows now. */}
+      <p className="muted small">
+        Voice {voiceLabel} · Duration at 1x {job.target_duration} · Speed {speedLabel(job.speed)} ·
+        Planned audio length {formatClock(job.output_duration_seconds)}
       </p>
-      <ol className="stages" aria-live="polite">
+      <ol className="stages" aria-label="Progress" aria-live="polite">
         {STAGES.map((stage, index) => {
           let state = "pending";
           if (!failed && index < currentIndex) state = "done";
-          if (!failed && index === currentIndex) state = job.status === "completed" ? "done" : "active";
+          if (!failed && index === currentIndex) state = completed ? "done" : "active";
           return (
-            <li key={stage.status} className={`stage ${state}`}>
+            <li
+              key={stage.status}
+              className={`stage ${state}`}
+              aria-current={state === "active" ? "step" : undefined}
+            >
               {stage.label}
             </li>
           );
@@ -55,13 +62,13 @@ export function JobPanel({ jobId, voices, onSessionExpired }: Props) {
         {failed && <li className="stage failed">Failed</li>}
       </ol>
       {failed && job.error && (
-        <p className="error" role="alert">
+        <p className="callout error" role="alert">
           {job.error.message}
         </p>
       )}
-      {error && <p className="warning">{error}</p>}
-      {job.status === "completed" && (
-        <ResultView jobId={job.id} onSessionExpired={onSessionExpired} />
+      {error && <p className="callout warning">{error}</p>}
+      {completed && (
+        <ResultView jobId={job.id} voiceLabel={voiceLabel} onSessionExpired={onSessionExpired} />
       )}
     </section>
   );

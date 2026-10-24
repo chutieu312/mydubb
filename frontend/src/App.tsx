@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, api, setCsrfToken } from "./api/client";
 import type { AppMeta, Job } from "./api/types";
+import { AppFooter } from "./components/AppFooter";
+import { AppHeader } from "./components/AppHeader";
 import { AccessGate } from "./features/access/AccessGate";
 import { DubbingForm } from "./features/dubbing/DubbingForm";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
-import { azureDisclosure } from "./lib/providers";
+import { azureDisclosure, azureDisclosureShort } from "./lib/providers";
+import { useTheme } from "./lib/useTheme";
 
 type AuthState = "checking" | "anonymous" | "authenticated";
 
@@ -19,6 +22,7 @@ export function App() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const logoutPending = useRef(false);
+  const [theme, toggleTheme] = useTheme();
 
   useEffect(() => {
     let active = true;
@@ -90,58 +94,67 @@ export function App() {
 
   return (
     <div className="app">
-      <header className="header">
-        <h1>
-          MyDubb <span className="subtitle">Transcript to Vietnamese Voice</span>
-        </h1>
-        {auth === "authenticated" && (
-          <button type="button" className="secondary" onClick={logout} disabled={loggingOut}>
-            {loggingOut ? "Logging out…" : "Log out"}
-          </button>
-        )}
-      </header>
-      {auth === "authenticated" && logoutError && (
-        <p className="error" role="alert">
-          {logoutError}
-        </p>
-      )}
+      <AppHeader
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        signedIn={auth === "authenticated"}
+        loggingOut={loggingOut}
+        onLogout={logout}
+      />
 
-      {meta && <ProviderBanner providers={meta.providers} />}
-
-      <main className="main">
-        {loadError && (
-          <p className="error" role="alert">
-            {loadError}
+      <div className="page">
+        {auth === "authenticated" && logoutError && (
+          <p className="callout error" role="alert">
+            {logoutError}
           </p>
         )}
-        {sessionNotice && <p className="warning">{sessionNotice}</p>}
-        {auth === "checking" && <p>Loading…</p>}
-        {auth === "anonymous" && <AccessGate onAuthenticated={handleAuthenticated} />}
-        {auth === "authenticated" && meta && (
-          <>
-            <DubbingForm
-              voices={meta.voices}
-              disclosure={azureDisclosure(meta.providers)}
-              onJobCreated={handleJobCreated}
-              onSessionExpired={handleSessionExpired}
-            />
-            {jobId && (
-              <JobPanel
-                key={jobId}
-                jobId={jobId}
+
+        {meta && <ProviderBanner providers={meta.providers} />}
+
+        <main className="main">
+          {loadError && (
+            <p className="callout error" role="alert">
+              {loadError}
+            </p>
+          )}
+          {auth === "checking" && <p className="muted">Loading…</p>}
+          {auth === "anonymous" && (
+            <AccessGate notice={sessionNotice} onAuthenticated={handleAuthenticated} />
+          )}
+          {auth === "authenticated" && meta && (
+            <>
+              <section className="hero">
+                <p className="eyebrow">Your dubbing studio</p>
+                <h1>Turn English into Vietnamese audio</h1>
+                <p className="muted">
+                  Paste a transcript, choose a voice and speed, then listen and download the MP3.
+                </p>
+              </section>
+              <DubbingForm
                 voices={meta.voices}
+                disclosure={azureDisclosureShort(meta.providers)}
+                onJobCreated={handleJobCreated}
                 onSessionExpired={handleSessionExpired}
               />
-            )}
-          </>
-        )}
-      </main>
+              {jobId && (
+                <JobPanel
+                  key={jobId}
+                  jobId={jobId}
+                  voices={meta.voices}
+                  onSessionExpired={handleSessionExpired}
+                />
+              )}
+            </>
+          )}
+        </main>
 
-      <footer className="footer muted">
-        <small>
-          Private beta. Transcripts are processed temporarily and are not stored permanently.
-        </small>
-      </footer>
+        {meta && (
+          <AppFooter
+            disclosure={azureDisclosure(meta.providers)}
+            resultTtlSeconds={meta.result_ttl_seconds}
+          />
+        )}
+      </div>
     </div>
   );
 }
