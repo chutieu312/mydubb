@@ -80,7 +80,9 @@ Body `{ "email": "…", "password": "…" }` (email 3-320 characters, password 1
   ("Incorrect email or password. If you forgot your password, use Forgot password.") so the
   response never reveals whether an account exists.
 - `403 account_disabled`: the password was correct but the account is disabled **in MyDubb**.
-- `409 password_changed`: the password was reset while this sign-in was in progress; sign in again.
+- `409 password_changed`: the account's access changed while this sign-in was in progress (a
+  password reset, an administrator's `revoke-sessions`/`disable`, or a reset whose outcome is still
+  unknown, for up to about 80 s); sign in again (later, in the last case).
 - `429 too_many_attempts` (+ `Retry-After`, `retry_after_seconds`): too many failed sign-ins from
   this client or overall (`ACCESS_MAX_FAILURES_*` settings).
 - `429 auth_rate_limited`: Amazon Cognito throttled the request; try again later (no `Retry-After`).
@@ -96,7 +98,12 @@ with a temporary password.
   stays usable (up to 5 failed attempts in total).
 - `400 challenge_invalid`: unknown, expired, already used, wrong step, other browser, too many
   attempts, or Cognito's sign-in session expired. Start again at login.
-- `409 challenge_busy`: another request for the same challenge is still running.
+- `409 challenge_busy`: another request for the same challenge is running, or took it over while
+  this one was waiting for Cognito (this request then completes nothing and creates no session).
+  The new password may already be active at Cognito in that case: if the other request does not
+  finish, sign in with the new password.
+- `400 challenge_invalid` is also returned when the step expired while Cognito was answering; the
+  new password may already be active (sign in with it).
 - `403 account_disabled`, `409 password_changed`, `429 auth_rate_limited`, `503 auth_unavailable` as
   above. `409 account_setup_incomplete`: Cognito requires profile attributes that the administrator
   did not set (an administrator must fix the account).
@@ -117,7 +124,10 @@ Body `{ "challenge_id": "…", "code": "123456" }` (code 1-10 digits).
 - `400 code_invalid`: wrong or expired code (the same code for both); the challenge stays usable up to
   5 failed attempts.
 - `400 challenge_invalid`, `409 challenge_busy`, `403 account_disabled`, `409 password_changed`,
-  `429 auth_rate_limited`, `503 auth_unavailable`.
+  `429 auth_rate_limited`, `503 auth_unavailable`. As for the new password, a request that lost the
+  step (`409 challenge_busy`) or whose step expired meanwhile (`400 challenge_invalid`) creates no
+  session even though Cognito may already have verified the email; signing in again then goes
+  straight to `authenticated`.
 
 ### `POST /api/auth/forgot-password`
 Body `{ "email": "…" }`.
@@ -135,7 +145,15 @@ Body `{ "email": "…", "code": "123456", "new_password": "…" }`.
   existing MyDubb session of that account is revoked, including a sign-in that was in progress with
   the old password.
 - `400 code_invalid`: wrong, expired or never requested code, or no such account (indistinguishable).
-- `422 password_rejected`, `429 too_many_attempts`, `429 auth_rate_limited`, `503 auth_unavailable`.
+  Never signs anyone out.
+- `422 password_rejected`, `429 too_many_attempts`, `429 auth_rate_limited`.
+- `503 auth_unavailable` has two cases, told apart by the `message` (show it as is):
+  - MyDubb could not record the attempt before contacting Cognito: nothing was sent, nothing changed;
+    try again later.
+  - Cognito did not answer (timeout, network, server error): MyDubb cannot know whether the password
+    changed, so the account is **signed out everywhere** (fail closed). Sign-ins are refused with
+    `409 password_changed` for up to about 80 s; then the user signs in with the new password, or,
+    if that fails, with the old one or requests a new code. Nothing is retried automatically.
 
 ### `GET /api/auth/me`
 - `200 { "user": { "id", "email", "display_name" }, "csrf_token": "…", "expires_at": "…" }`.
@@ -169,3 +187,17 @@ The endpoint names and request bodies are as proposed. Additions and precisions:
 5. `GET /api/meta` gains `auth`; the Access Code endpoints disappear in Cognito mode (and vice versa).
 6. Extra error codes beyond the proposal: `account_disabled`, `password_changed`,
    `account_setup_incomplete`, `challenge_busy`, `auth_rate_limited`, `auth_unavailable`.
+
+### Revision after review (PR #25, second round)
+
+No endpoint, body, response shape or error code changed. Precisions to existing codes:
+
+- `reset-password` `503 auth_unavailable` can now mean "outcome unknown, signed out everywhere"
+  (see above); its `message` says which case applies, so the UI should display the server message
+  for this endpoint rather than a fixed text.
+- `409 password_changed` also covers an administrator revocation and an unknown reset outcome; its
+  message is now "Your password or account access changed while you were signing in. Please sign in
+  again."
+- `409 challenge_busy` / `400 challenge_invalid` can also come back from `new-password` and
+  `email-verification/confirm` after Cognito already accepted the step (the request lost its lease
+  or the step expired meanwhile). Treat them as before: back to the login form.

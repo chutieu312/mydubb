@@ -45,8 +45,14 @@ Browser (Studio UI) ──same origin──► FastAPI (Render) ──HTTPS, pub
   `GetUserAttributeVerificationCode`, `VerifyUserAttribute`, `ForgotPassword`,
   `ConfirmForgotPassword`), which Cognito does not authorize with IAM. Plain HTTPS through `httpx`
   (the AWS JSON 1.1 protocol), like the Azure integrations: no boto3, no Identity Pool, Lambda or API
-  Gateway. Each request has a total timeout (`COGNITO_TIMEOUT_SECONDS`, default 10), never follows a
-  redirect and is never retried; failures are reported (`503 auth_unavailable`), never hidden.
+  Gateway. Requests never follow a redirect and are never retried; failures are reported
+  (`503 auth_unavailable`), never hidden. **Time limits:** `COGNITO_TIMEOUT_SECONDS` (T, default
+  10) bounds each phase of a request separately (waiting for a connection, connecting, each write,
+  each read; that is what `httpx.Timeout` does, it is not a total deadline), and MyDubb adds a
+  response deadline of T from the start of the call, checked while the answer is read. A read that
+  started just before the deadline can still wait up to T, so a call ends within about 2T. Name
+  resolution (DNS) goes through the operating system and is not bounded by MyDubb, and nothing
+  bounds how long Cognito itself takes to apply a request it received.
 - **No database transaction is open while Cognito is called.** Each step is a short transaction
   before or after the request.
 
@@ -62,12 +68,25 @@ A sign-in that is not finished yet (temporary password, unverified email) gets a
 | `kind` | `new_password` or `email_verification`: a challenge only works for its own step |
 | `encrypted_payload` | The Cognito sign-in session + username (new password) or the access token (email verification), AES-256-GCM with `AUTH_TOKEN_ENCRYPTION_KEY`, associated data = row id + kind. Erased when the step ends |
 | `expires_at` | `AUTH_NEW_PASSWORD_CHALLENGE_TTL_SECONDS` (default 180, matching Cognito's default 3-minute sign-in session) or `AUTH_EMAIL_VERIFICATION_CHALLENGE_TTL_SECONDS` (default 900, below the access token's 60 minutes) |
-| `locked_until`, `consumed_at`, `attempts`, `sends` | Concurrency and replay protection, see below |
+| `locked_until`, `lease_token`, `consumed_at`, `attempts`, `sends` | Concurrency and replay protection, see below |
 
 A request claims the challenge with one compare-and-set `UPDATE` (matching token, binding, kind,
-not consumed, not expired, not held) that takes a short lease; a concurrent request for the same
-challenge gets `409 challenge_busy`, a replay after completion gets `400 challenge_invalid`. The
-step that succeeds consumes the challenge; 5 failed attempts (wrong code or rejected password)
+not consumed, not expired, not held) that takes a short lease and stamps it with a fresh random
+`lease_token`; a concurrent request for the same challenge gets `409 challenge_busy`, a replay
+after completion gets `400 challenge_invalid`. Completing (consume) and releasing are
+compare-and-set on **that lease token**, so a request whose lease ran out and was taken over by
+another request changes nothing: it cannot release the new holder's lease, count an attempt,
+complete the step or create a session, and it answers `409 challenge_busy`. Completing also
+re-checks `expires_at`: a step that expired while Cognito was answering is closed without a
+session (`400 challenge_invalid`). The lease length (`COGNITO_TIMEOUT_SECONDS` + 5 s) only decides
+when a stuck request may be taken over; correctness does not depend on it.
+
+Side effects at Cognito cannot be undone: if a request loses its step (or the step expires) after
+Cognito already **set the new password** or **verified the email**, that change stays, and the next
+sign-in uses the new password or finds the email verified. The step's session is never created by
+the request that lost it.
+
+The step that succeeds consumes the challenge; 5 failed attempts (wrong code or rejected password)
 consume it; at most 3 verification emails per challenge. A challenge never gives access to jobs or
 `/api/auth/me`. Rotating `AUTH_TOKEN_ENCRYPTION_KEY` only breaks steps in flight (they end with
 `challenge_invalid`; sign in again).
@@ -80,7 +99,7 @@ consume it; at most 3 verification emails per challenge. A challenge never gives
 | Invitation (temporary password) | `InitiateAuth` returns `NEW_PASSWORD_REQUIRED` -> `RespondToAuthChallenge` -> `GetUser` | `authenticated` or `email_verification_required` |
 | Email verification | `GetUserAttributeVerificationCode` (on "send"), `VerifyUserAttribute`, `GetUser` | `authenticated` only once Cognito reports `email_verified=true` |
 | Forgot password | `ForgotPassword` | Always `202` (no account enumeration) |
-| Reset password | `ConfirmForgotPassword`, then revocation in the database | `200`; not signed in |
+| Reset password | Attempt recorded, `ConfirmForgotPassword`, outcome recorded (revocation) | `200`; not signed in. `503` when the outcome is unknown (signed out everywhere) |
 | Logout | none | session revoked server-side |
 
 **Email verification is enforced by MyDubb.** With email as the user pool's username attribute,
@@ -108,16 +127,56 @@ the Access Code limiter. Cognito's own throttling returns `429 auth_rate_limited
 ### Password reset revokes sessions, including sign-ins in flight
 
 A sign-in records `auth_started_at` from the **database clock** before its first Cognito request
-and carries it through every step into the session. After Cognito confirms a reset,
-`record_password_reset` runs one transaction: an advisory lock on the email (hash), a row in
-`password_reset_events`, `users.sessions_valid_after = now()` for the accounts with that email, and
-`revoked_at` on all their sessions. Creating a session takes the same lock and refuses
-(`409 password_changed`) when a reset event or `sessions_valid_after` is at or after its
-`auth_started_at`. So a sign-in that verified the old password before the reset, but finishes after
-it, cannot create a session, even for a first sign-in whose user row did not exist yet; and every
-request also checks `auth_started_at > sessions_valid_after`. Reset events are deleted after a day.
+and carries it through every step into the session. A completed reset runs one transaction: an
+advisory lock on the email (hash), a row in `password_reset_events`,
+`users.sessions_valid_after = now()` for the accounts with that email, and `revoked_at` on all
+their sessions. Creating a session takes the same lock and refuses (`409 password_changed`) when a
+reset event or `sessions_valid_after` is at or after its `auth_started_at`. So a sign-in that
+verified the old password before the reset, but finishes after it, cannot create a session, even
+for a first sign-in whose user row did not exist yet; and every request also checks
+`auth_started_at > sessions_valid_after`. Reset events are deleted after a day.
 
-Limits (stated, not hidden):
+#### Partial failures between Cognito and PostgreSQL
+
+There is no transaction spanning Cognito and PostgreSQL, so the reset is recorded as an
+**intent before** the Cognito request and its outcome **after** it (`password_reset_attempts`):
+
+```
+begin (commit)      pending, started_at = DB clock, settle_at = started_at + 2T + 60 s
+                    (if this write fails: 503, ConfirmForgotPassword is NOT sent)
+ConfirmForgotPassword (no transaction open, never retried)
+  answer: success   -> succeeded: revoke now (sessions + sign-ins in flight), answer 200
+  answer: refused   -> rejected:  nothing changes (wrong/expired code, password policy, ...)
+  no answer         -> unknown:   revoke now and refuse sign-ins that started before settle_at;
+  (timeout/5xx)                   answer 503 auth_unavailable ("could not confirm ... signed out")
+recording the outcome fails (database error) or the process dies -> attempt stays pending:
+  - once settle_at has passed, every request treats sessions that started before settle_at as
+    revoked, and sign-ins that started before it are refused (fail closed);
+  - the startup recovery and the periodic cleanup record it as unknown and revoke for good.
+```
+
+What this guarantees: once the password may have changed, old sessions stop working at the latest
+when the attempt settles (about 80 s with the default timeout), even if MyDubb could not write
+anything at that moment and later restarts; a reset with a wrong code never signs anyone out, and an
+attempt still in flight blocks nothing. The answer to the user stays truthful: `200` when Cognito
+confirmed the change (even if recording failed: enforcement follows when it settles), `503` when
+the outcome is unknown.
+
+Trade-offs (chosen for safety):
+
+- **Unknown outcome or crash -> signed out**, even if Cognito did not change the password; after an
+  unknown outcome, sign-ins (with either password) are refused with `409 password_changed` until
+  the attempt settles (about 80 s).
+- **An unrecorded rejection fails closed**: if even "rejected" cannot be written (database error at
+  that moment), the account is signed out once the attempt settles. A caller cannot cause the
+  database error, so this is not a way to sign someone out.
+- **Window**: between Cognito applying the change and enforcement there are milliseconds normally,
+  up to `settle_at` when recording failed.
+- **Assumption**: `settle_at` assumes Cognito applies or drops a request within 60 s after MyDubb's
+  own bound (2T). MyDubb cannot bound Cognito's processing or the operating system's DNS resolver;
+  a change applied later than that would not revoke sign-ins that started after `settle_at`.
+
+Other limits (stated, not hidden):
 
 - Only resets done **through MyDubb's endpoint** revoke sessions. A password set by an administrator
   in the AWS console, or a reset done through any other client of the user pool, is not seen: also
@@ -125,8 +184,6 @@ Limits (stated, not hidden):
 - The match is by the email the user typed for the reset. If an administrator changed a user's
   email in Cognito and the user has not signed in since, their old sessions still carry the old
   email and are not revoked by a reset with the new one (revoke them with the tool).
-- If the database fails right after Cognito accepted the reset, the request fails with a server
-  error and the old sessions are not revoked; the password is changed. Revoke with the tool.
 
 ### Disabling a user: what happens to existing sessions
 
@@ -134,6 +191,15 @@ Limits (stated, not hidden):
 |---|---|---|---|
 | **Disable in Cognito** (console, `AdminDisableUser`) | Refused (`401 invalid_credentials`) | Email verification fails (`challenge_invalid`): Cognito revokes the access tokens. A pending new-password step fails at the Cognito call | **Not affected**: they stay valid until they expire (up to `SESSION_TTL_SECONDS`, 12 h by default) or are revoked. MyDubb does not ask Cognito on each request |
 | **Disable in MyDubb** (`scripts/auth_users.py disable`) | Refused after the password check (`403 account_disabled`) | Cannot finish (`account_disabled`) | **Revoked immediately**; the next request returns `401` |
+| **Revoke sessions in MyDubb** (`scripts/auth_users.py revoke-sessions`) | Allowed if they start after the command | Steps that started before cannot finish (`409 password_changed`) | **Revoked immediately** |
+
+`disable` and `revoke-sessions` move `users.sessions_valid_after` to the database clock in the same
+transaction that revokes the sessions. The update holds the user row lock, which a sign-in's session
+creation also takes (its upsert of the user row), so a sign-in that had already passed Cognito but
+had not created its session yet cannot create one afterwards, and a pending new-password or
+email-verification step that started before the command cannot complete. `enable` only clears
+`disabled_at`: it never moves `sessions_valid_after` back, so it does not revive a session or a
+sign-in that started before the revocation. Other users are never touched.
 
 To remove someone's access right away, do both: disable in Cognito (no new sign-in, no password
 reset) **and** run `disable` in MyDubb (ends their sessions). Deleting a user in Cognito behaves like

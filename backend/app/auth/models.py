@@ -95,9 +95,40 @@ class AuthChallenge(Base):
     sends: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"), default=0)
     # A request working on the challenge holds it until then (at most one at a time).
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Random token of the current lease: only the request that holds it can consume or release
+    # the challenge (a request whose lease expired and was taken over cannot).
+    lease_token: Mapped[str | None] = mapped_column(String(64))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class PasswordResetAttempt(Base):
+    """A password reset sent to Cognito, recorded *before* the request so that its outcome is
+    never lost: if MyDubb cannot record the result (database error, crash, unanswered request),
+    the attempt stays `pending` and is treated as a reset once `settle_at` has passed.
+
+    pending -> succeeded | rejected | unknown. `succeeded` and `unknown` revoke the account's
+    sessions; `rejected` (Cognito refused it, e.g. a wrong code) changes nothing.
+    """
+
+    __tablename__ = "password_reset_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('pending','succeeded','rejected','unknown')", name="state_valid"
+        ),
+        Index(None, "email_hash", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    # SHA-256 of the lowercased email (no address stored).
+    email_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(10))
+    # Database clock, before the Cognito request was sent.
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # After this instant the request can no longer be in flight (see RESET_SETTLE_MARGIN).
+    settle_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PasswordResetEvent(Base):

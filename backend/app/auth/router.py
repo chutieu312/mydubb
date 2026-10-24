@@ -16,6 +16,7 @@ from typing import Literal, NoReturn
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.access.rate_limit import FailedAttemptLimiter
@@ -31,20 +32,24 @@ from app.auth.crypto import TokenCipher
 from app.auth.principal import Principal
 from app.auth.service import (
     MAX_VERIFICATION_SENDS,
+    RESET_SETTLE_MARGIN_SECONDS,
     AccountDisabled,
     ChallengeBusy,
     ChallengeInvalid,
     ChallengeKind,
     ClaimedChallenge,
     IssuedChallenge,
+    LeaseOutcome,
     PasswordChangedDuringSignIn,
+    ResetOutcome,
+    begin_password_reset,
     claim_challenge,
     consume_challenge,
     create_challenge,
     database_now,
     establish_user_session,
+    finish_password_reset,
     normalize_email,
-    record_password_reset,
     release_challenge,
     revoke_user_session,
     sha256_hex,
@@ -159,6 +164,14 @@ def _cognito_throttled() -> ApiError:
         status.HTTP_429_TOO_MANY_REQUESTS,
         "auth_rate_limited",
         "The sign-in service is receiving too many requests. Please try again later.",
+    )
+
+
+def _challenge_busy() -> ApiError:
+    return ApiError(
+        status.HTTP_409_CONFLICT,
+        "challenge_busy",
+        "This sign-in step is already being processed. Please wait.",
     )
 
 
@@ -283,7 +296,8 @@ def _start_challenge(
 def _claim(
     services: AppServices, request: Request, challenge_id: str, kind: ChallengeKind
 ) -> ClaimedChallenge:
-    # The lease outlasts one Cognito request (its timeout) plus a margin.
+    # A lease that runs out only lets another request take a stuck step over; consume/release
+    # check the lease token, so correctness does not depend on this length.
     lease = services.settings.cognito_timeout_seconds + 5
     try:
         return _in_transaction(
@@ -300,15 +314,23 @@ def _claim(
     except ChallengeInvalid:
         raise _challenge_invalid() from None
     except ChallengeBusy:
-        raise ApiError(
-            status.HTTP_409_CONFLICT,
-            "challenge_busy",
-            "This sign-in step is already being processed. Please wait.",
-        ) from None
+        raise _challenge_busy() from None
 
 
 def _consume(services: AppServices, claimed: ClaimedChallenge) -> None:
-    _in_transaction(services, lambda db: consume_challenge(db, claimed.id))
+    """Complete the step, or stop: a request that lost its lease, or whose step expired while
+    Cognito was answering, must not go on to the next step or a session."""
+    outcome = _in_transaction(services, lambda db: consume_challenge(db, claimed))
+    if outcome is LeaseOutcome.LOST:
+        logger.info("Sign-in step was taken over by another request; not completed here")
+        raise _challenge_busy()
+    if outcome is LeaseOutcome.EXPIRED:
+        raise _challenge_invalid()
+
+
+def _close(services: AppServices, claimed: ClaimedChallenge) -> None:
+    """End a step that cannot succeed (if this request still holds it)."""
+    _in_transaction(services, lambda db: consume_challenge(db, claimed))
 
 
 def _release(
@@ -318,9 +340,10 @@ def _release(
     failed_attempt: bool = False,
     sent: bool = False,
 ) -> None:
+    # A request that lost its lease changes nothing (the new holder keeps it).
     _in_transaction(
         services,
-        lambda db: release_challenge(db, claimed.id, failed_attempt=failed_attempt, sent=sent),
+        lambda db: release_challenge(db, claimed, failed_attempt=failed_attempt, sent=sent),
     )
 
 
@@ -372,7 +395,8 @@ def _finish_sign_in(
         raise ApiError(
             status.HTTP_409_CONFLICT,
             "password_changed",
-            "The password was changed while you were signing in. Please sign in again.",
+            "Your password or account access changed while you were signing in. "
+            "Please sign in again.",
         ) from None
     response.set_cookie(
         AUTH_COOKIE,
@@ -410,6 +434,31 @@ def _after_auth(
     # MFA and other steps are not configured for MyDubb (see docs/AUTHENTICATION.md).
     logger.warning("Unsupported Cognito sign-in challenge %s", outcome.name[:40])
     raise _unavailable()
+
+
+def _reset_settle_seconds(services: AppServices) -> float:
+    """When a reset request MyDubb sent can no longer be in flight: two Cognito timeouts (each
+    phase of the request is bounded by it, plus the response deadline) and a margin."""
+    return 2 * services.settings.cognito_timeout_seconds + RESET_SETTLE_MARGIN_SECONDS
+
+
+def _record_reset(
+    services: AppServices, attempt_id: uuid.UUID, email: str, outcome: ResetOutcome
+) -> None:
+    try:
+        revoked = _in_transaction(
+            services, lambda db: finish_password_reset(db, attempt_id, email, outcome)
+        )
+    except Exception as exc:
+        # Fail closed: the attempt stays pending and is enforced once it settles.
+        logger.error(
+            "Password reset outcome %s not recorded (%s); enforced when the attempt settles",
+            outcome.value,
+            type(exc).__name__,
+        )
+        return
+    if outcome is not ResetOutcome.REJECTED:
+        logger.info("Password reset %s; %d session(s) revoked", outcome.value, revoked)
 
 
 def _check_recovery_limits(
@@ -477,10 +526,10 @@ def new_password(
             raise _password_rejected() from None
         if exc.kind is CognitoErrorKind.NOT_AUTHORIZED:
             # Cognito's sign-in session expired or was already used.
-            _consume(services, claimed)
+            _close(services, claimed)
             raise _challenge_invalid() from None
         if exc.kind is CognitoErrorKind.INVALID_PARAMETER:
-            _consume(services, claimed)
+            _close(services, claimed)
             raise ApiError(
                 status.HTTP_409_CONFLICT,
                 "account_setup_incomplete",
@@ -488,6 +537,8 @@ def new_password(
             ) from None
         _release(services, claimed)
         _cognito_failure(exc)
+    # Cognito has set the new password; if this request lost the step meanwhile, the user signs
+    # in with the new password.
     _consume(services, claimed)
     return _after_auth(services, response, outcome, claimed.auth_started_at)
 
@@ -510,7 +561,7 @@ def send_email_verification(
     except CognitoError as exc:
         if exc.kind is CognitoErrorKind.NOT_AUTHORIZED:
             # The access token expired or was revoked (e.g. the user was disabled).
-            _consume(services, claimed)
+            _close(services, claimed)
             raise _challenge_invalid() from None
         _release(services, claimed)
         _cognito_failure(exc)
@@ -537,10 +588,12 @@ def confirm_email_verification(
             _release(services, claimed, failed_attempt=True)
             raise _code_invalid() from None
         if exc.kind is CognitoErrorKind.NOT_AUTHORIZED:
-            _consume(services, claimed)
+            _close(services, claimed)
             raise _challenge_invalid() from None
         _release(services, claimed)
         _cognito_failure(exc)
+    # Cognito has verified the email; if this request lost the step meanwhile, the next sign-in
+    # finds the email verified.
     _consume(services, claimed)
     return _finish_sign_in(
         services, response, access_token, claimed.auth_started_at, after_verification=True
@@ -578,9 +631,31 @@ def reset_password(
 ) -> StatusResponse:
     email = body.email.strip()
     _check_recovery_limits(services, request, email)
+    # The attempt is committed before Cognito is asked, so its outcome can never be lost: if it
+    # cannot be recorded afterwards, the attempt stays pending and counts as a reset once it has
+    # settled (see app/auth/service.py). Without this record nothing is sent to Cognito.
+    try:
+        attempt_id = _in_transaction(
+            services, lambda db: begin_password_reset(db, email, _reset_settle_seconds(services))
+        )
+    except SQLAlchemyError as exc:
+        logger.error("Password reset not started: database unavailable (%s)", type(exc).__name__)
+        raise _unavailable() from None
     try:
         _cognito(services).confirm_forgot_password(email, body.code, body.new_password)
     except CognitoError as exc:
+        if exc.kind is CognitoErrorKind.UNAVAILABLE:
+            # Cognito may or may not have changed the password (no answer, timeout, 5xx): fail
+            # closed. Never retried; the user tries the new password or asks for a new code.
+            _record_reset(services, attempt_id, email, ResetOutcome.UNKNOWN)
+            raise ApiError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "auth_unavailable",
+                "We could not confirm whether your password was changed. For your safety, this "
+                "account is signed out everywhere. In a minute or two, sign in with the new "
+                "password; if it does not work, request a new code.",
+            ) from None
+        _record_reset(services, attempt_id, email, ResetOutcome.REJECTED)
         if exc.kind is CognitoErrorKind.INVALID_PASSWORD:
             raise _password_rejected() from None
         if exc.kind in (
@@ -591,8 +666,9 @@ def reset_password(
             # Wrong, expired or never-requested code, unknown or disabled account: one answer.
             raise _code_invalid() from None
         _cognito_failure(exc)
-    revoked = _in_transaction(services, lambda db: record_password_reset(db, email))
-    logger.info("Password reset completed; %d session(s) revoked", revoked)
+    # The password is changed. If recording fails, the sessions are still revoked once the
+    # attempt settles, so the answer stays a success.
+    _record_reset(services, attempt_id, email, ResetOutcome.SUCCEEDED)
     return StatusResponse(status="password_reset")
 
 

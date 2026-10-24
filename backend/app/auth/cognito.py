@@ -11,8 +11,17 @@ The HTTP shape is the AWS JSON 1.1 protocol of the user pools API: one HTTPS `PO
 `https://cognito-idp.<region>.amazonaws.com/` with `X-Amz-Target:
 AWSCognitoIdentityProviderService.<Operation>`. The official SDK (boto3) was not added: it would
 retry by default and pull in a large dependency for seven calls, while `httpx` is already used
-for Azure. Every request has a finite total timeout, never follows redirects and is never
-retried; a lost answer is reported as `UNAVAILABLE` and the caller decides what the user sees.
+for Azure. Requests never follow redirects and are never retried; a lost answer is reported as
+`UNAVAILABLE` and the caller decides what the user sees.
+
+Time limits (COGNITO_TIMEOUT_SECONDS = T). `httpx.Timeout(T)` is **not** a total deadline: it
+bounds each phase separately (waiting for a pooled connection, connecting, each write, each
+read). On top of it this client enforces a deadline of T from the start of the call for the
+response: once T has passed, reading stops and the call fails as `UNAVAILABLE`. A single read
+that started before the deadline can still wait up to T, so a call returns within about 2T.
+Name resolution goes through the operating system's resolver, which these limits do not cover.
+Nothing here can bound how long Cognito takes to apply a request it received, which is why a
+password reset whose answer is lost is treated as possibly applied (see app/auth/service.py).
 
 Passwords, codes and tokens only travel in request bodies over TLS. Nothing here logs a body,
 an email address, a password, a code, a token or Cognito's error message: logs carry the
@@ -24,6 +33,8 @@ import hashlib
 import hmac
 import json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -137,11 +148,15 @@ class HttpCognitoClient:
         client_secret: SecretStr | None,
         timeout_seconds: float,
         transport: httpx.BaseTransport | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._url = f"https://cognito-idp.{region}.amazonaws.com/"
         self._client_id = client_id
         self._client_secret = client_secret
+        self._timeout = timeout_seconds
+        self._clock = clock
         self._http = httpx.Client(
+            # Per phase (pool, connect, write, each read); the response deadline is in _call.
             timeout=httpx.Timeout(timeout_seconds),
             follow_redirects=False,
             transport=transport,
@@ -242,20 +257,27 @@ class HttpCognitoClient:
                 self._client_secret.get_secret_value(), username, self._client_id
             )
 
+    def _check_deadline(self, operation: str, deadline: float) -> None:
+        if self._clock() > deadline:
+            raise _deadline_exceeded(operation)
+
     def _call(self, operation: str, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {
             "Content-Type": "application/x-amz-json-1.1",
             "X-Amz-Target": f"AWSCognitoIdentityProviderService.{operation}",
         }
+        deadline = self._clock() + self._timeout
         try:
             with self._http.stream(
                 "POST", self._url, content=json.dumps(payload), headers=headers
             ) as response:
+                self._check_deadline(operation, deadline)
                 raw = b""
                 for chunk in response.iter_bytes():
                     raw += chunk
                     if len(raw) > _MAX_RESPONSE_BYTES:
                         raise _unexpected(operation)
+                    self._check_deadline(operation, deadline)
         except httpx.TimeoutException:
             logger.warning("Cognito %s timed out", operation)
             raise CognitoError(CognitoErrorKind.UNAVAILABLE, "Timeout") from None
@@ -286,6 +308,11 @@ class HttpCognitoClient:
             request_id,
         )
         raise CognitoError(kind, aws_type)
+
+
+def _deadline_exceeded(operation: str) -> CognitoError:
+    logger.warning("Cognito %s exceeded the response deadline", operation)
+    return CognitoError(CognitoErrorKind.UNAVAILABLE, "Deadline")
 
 
 def _error_type(headers: httpx.Headers, raw: bytes) -> str:

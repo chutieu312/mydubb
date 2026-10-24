@@ -321,12 +321,14 @@ def test_concurrent_completion_runs_once(cognito_client, make_cognito_client, fa
         )
     )
     first.start()
-    assert entered.wait(10)
-    busy = second_tab.post("/api/auth/new-password", json=body)
+    try:
+        assert entered.wait(10)
+        busy = second_tab.post("/api/auth/new-password", json=body)
+    finally:
+        release.set()
+        first.join(10)
     assert busy.status_code == 409
     assert busy.json()["error"]["code"] == "challenge_busy"
-    release.set()
-    first.join(10)
     del fake_cognito.hooks["RespondToAuthChallenge"]
     assert results["first"].status_code == 200
     late = second_tab.post("/api/auth/new-password", json=body)
@@ -498,11 +500,13 @@ def test_a_sign_in_in_progress_cannot_outlive_a_password_reset(
     result = {}
     thread = threading.Thread(target=lambda: result.setdefault("r", _login(cognito_client)))
     thread.start()
-    assert entered.wait(10)
-    del fake_cognito.hooks["InitiateAuth"]
-    assert _reset(make_cognito_client(), fake_cognito).status_code == 200
-    release.set()
-    thread.join(10)
+    try:
+        assert entered.wait(10)
+        del fake_cognito.hooks["InitiateAuth"]
+        assert _reset(make_cognito_client(), fake_cognito).status_code == 200
+    finally:
+        release.set()
+        thread.join(10)
 
     assert result["r"].status_code == 409
     assert result["r"].json()["error"]["code"] == "password_changed"

@@ -6,7 +6,13 @@ from dotenv import dotenv_values
 from sqlalchemy import create_engine, pool
 
 from app.access.models import AccessSession  # noqa: F401  (register models)
-from app.auth.models import AuthChallenge, PasswordResetEvent, User, UserSession  # noqa: F401
+from app.auth.models import (  # noqa: F401
+    AuthChallenge,
+    PasswordResetAttempt,
+    PasswordResetEvent,
+    User,
+    UserSession,
+)
 from app.config import to_sqlalchemy_url
 from app.db import Base
 from app.glossary_candidates.models import GlossaryCandidate  # noqa: F401

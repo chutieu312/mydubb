@@ -5,7 +5,7 @@ import logging
 import time
 
 from app.access.service import delete_stale_sessions
-from app.auth.service import delete_stale_auth_rows
+from app.auth.service import delete_stale_auth_rows, resolve_stale_password_resets
 from app.db import session_scope
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
@@ -82,6 +82,13 @@ def run_cleanup(services: AppServices) -> None:
         # Cognito sessions, finished sign-in steps and old reset events (empty in Access Code
         # mode); cleaned in both modes so nothing lingers after switching back.
         auth_rows = delete_stale_auth_rows(db)
+    # Password resets whose outcome was never recorded (database error, crash): enforced as
+    # resets (fail closed). Requests already refuse their sessions once they settle; this makes
+    # it permanent. Its own transaction, so a failure here never blocks the cleanup above.
+    with session_scope(services.session_factory) as db:
+        unresolved = resolve_stale_password_resets(db)
+    if unresolved:
+        logger.warning("Recorded %d unresolved password reset(s) as unknown", unresolved)
     if removed or sessions or auth_rows:
         logger.info(
             "Cleanup removed %d result(s), %d stale session(s) and %d auth row(s)",

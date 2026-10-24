@@ -9,9 +9,16 @@ git-ignored `backend/.env`; it is never taken from the command line and never pr
 docs/AUTHENTICATION.md, "Disabling a user").
 
     uv run python -m scripts.auth_users list [--limit N]
-    uv run python -m scripts.auth_users disable USER       # blocks MyDubb access, ends sessions
-    uv run python -m scripts.auth_users enable USER
-    uv run python -m scripts.auth_users revoke-sessions USER
+    uv run python -m scripts.auth_users disable USER          # blocks access, signs out everywhere
+    uv run python -m scripts.auth_users enable USER           # new sign-ins only
+    uv run python -m scripts.auth_users revoke-sessions USER  # signs out everywhere
+
+`revoke-sessions` and `disable` end the user's sessions *and* every sign-in or pending sign-in
+step (new password, email verification) that started before the command ran (database clock):
+such a sign-in cannot create a session afterwards, even if it already passed Cognito. Sign-ins
+that start after the command work normally (unless the user is disabled). `enable` only allows
+new sign-ins again; it never revives a session or a sign-in that started before the revocation.
+Other users are not affected.
 
 USER is the MyDubb user id (from `list`) or the email address; an email shared by several
 accounts must be given as an id.
@@ -28,7 +35,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.models import User, UserSession
-from app.auth.service import normalize_email, revoke_user_sessions
+from app.auth.service import enable_user, normalize_email, revoke_user_access
 from app.db import session_scope
 from scripts.glossary_candidates import CommandError, database_url
 
@@ -72,18 +79,19 @@ def run(argv: Sequence[str], factory: sessionmaker[Session], out=sys.stdout) -> 
             for user in users:
                 print(_row(db, user), file=out)
             return 0
-        user = find_user(db, args.user)
-        now = datetime.now(UTC)
+        user_id = find_user(db, args.user).id
         if args.command == "disable":
-            user.disabled_at, user.updated_at = now, now
-            revoked = revoke_user_sessions(db, [user.id])
-            print(f"disabled; {revoked} session(s) revoked: {_row(db, user)}", file=out)
+            revoked = revoke_user_access(db, user_id, disable=True)
+            verb = f"disabled; {revoked} session(s) revoked"
         elif args.command == "enable":
-            user.disabled_at, user.updated_at = None, now
-            print(f"enabled: {_row(db, user)}", file=out)
-        elif args.command == "revoke-sessions":
-            revoked = revoke_user_sessions(db, [user.id])
-            print(f"{revoked} session(s) revoked: {_row(db, user)}", file=out)
+            enable_user(db, user_id)
+            verb = "enabled"
+        else:  # revoke-sessions
+            revoked = revoke_user_access(db, user_id)
+            verb = f"{revoked} session(s) revoked, earlier sign-ins cancelled"
+        user = db.get(User, user_id, populate_existing=True)
+        assert user is not None
+        print(f"{verb}: {_row(db, user)}", file=out)
     return 0
 
 
@@ -93,9 +101,9 @@ def _parser() -> argparse.ArgumentParser:
     listing = commands.add_parser("list", help="users, newest first")
     listing.add_argument("--limit", type=int, default=100)
     for name, help_text in (
-        ("disable", "block MyDubb access and revoke the user's sessions"),
-        ("enable", "allow MyDubb access again (Cognito must allow sign-in too)"),
-        ("revoke-sessions", "sign the user out everywhere"),
+        ("disable", "block MyDubb access; end sessions and earlier sign-ins in progress"),
+        ("enable", "allow new sign-ins again (Cognito must allow sign-in too)"),
+        ("revoke-sessions", "end the user's sessions and earlier sign-ins in progress"),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("user", help="user id or email")
