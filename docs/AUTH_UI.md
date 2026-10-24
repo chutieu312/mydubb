@@ -1,7 +1,9 @@
 # Sign-in UI (email + password)
 
-Status: **integrated with the merged backend contract and tested against fakes; not verified
-against a real Amazon Cognito user pool.** Production keeps using the Access Code until the cutover
+Status: **integrated with the merged backend contract, tested against fakes, and partly accepted
+in a live browser against a real Cognito dev pool** (sign in, session, jobs, two accounts; see
+"Tests"). Onboarding, email verification and password reset have **not** been run in a browser
+against a real pool. Production keeps using the Access Code until the cutover
 in [AUTHENTICATION.md](AUTHENTICATION.md). The official HTTP contract is
 [AUTH_API.md](AUTH_API.md); this page describes only the browser side. It does not say that
 authentication is finished.
@@ -116,7 +118,7 @@ cd frontend && npm ci && npm run lint && npm run typecheck && npm test && npm ru
 cd e2e && npm ci && npx playwright install chromium && bash run-e2e.sh
 ```
 
-Three different kinds of evidence, kept apart:
+Four different kinds of evidence, kept apart:
 
 1. **Component and integration tests (Vitest, fake `fetch`)**: `PasswordAuthFlow.test.tsx`,
    `App.auth.test.tsx`, `authApi.test.ts` (adapter), `AppHeader.test.tsx` and
@@ -133,7 +135,23 @@ Three different kinds of evidence, kept apart:
    `auth.signin`, `auth.recovery`, `auth.session` and `auth.layout` run on desktop and phone
    viewports. Real: routers, sessions, CSRF, challenges, PostgreSQL, jobs, the built UI. Fake: the
    user pool. No AWS call, no credential.
-3. **Live Cognito acceptance: not run** (see the checklist).
+3. **Live browser acceptance, partial (Playwright, opt-in, never in CI)**: `e2e/live/` (how to run
+   and its safety rules: [e2e/live/README.md](../e2e/live/README.md)). It ran **14/14 on
+   `ae1fa18`** (the product code of this pull request has not changed since): real Chromium, the
+   built UI, a local backend on a real Cognito **dev** user pool, two pre-onboarded verified users,
+   **mock providers** (no Azure), desktop 1280 px and a 390 px phone viewport. Covered: sign in, reload
+   restore, HttpOnly/SameSite cookie, mock job with player and download, Light/Dark, sign out ending
+   API access, a second user in the same browser seeing nothing of the first, cross-user
+   job/result/audio blocked both ways (404), session expiry with the draft back for the same user only,
+   sign out of every session, no credential in console, URL, storage or other requests.
+   Not covered live: invitation, temporary password, email verification, forgot/reset (these need
+   email codes), a slow or unreachable Cognito, production.
+4. **Backend HTTP checks of onboarding and reset** were reported as passed by the backend work; the
+   UI work did not run them and they were not exercised through a browser.
+
+The live tooling itself (URL restrictions, file serving, credentials parsing, redaction, cleanup of
+sessions and artifacts) is tested with fake data: `cd e2e && npm run test:live-tooling`, and the live
+spec was also run end to end against the fake-Cognito stack with tricky fake credentials.
 
 ## Browser checks (Chromium via Playwright)
 
@@ -149,21 +167,22 @@ order, visible focus rings, Enter to submit, Show/Hide with Space, and `aria-inv
 **Not checked**: Safari/iOS, Firefox, real devices and password managers, a screen reader, `prefers-
 reduced-motion`, and a hands-on review of every dark-theme screenshot beyond the ones listed above.
 
-## Live acceptance checklist (not run)
+## Live acceptance checklist
 
 Against a staging or local stack with a real **test** user pool and email delivery, never
-production data. Record results in the pull request.
+production data. Record results in the pull request. Ticked items were run by `e2e/live` on
+`ae1fa18` (local backend, real Cognito dev pool, mock providers, Chromium only).
 
 - [ ] Invitation email arrives; sign in with the temporary password; choose a new password.
 - [ ] Verification email arrives only after "Send code"; wrong code rejected; right code signs in; resend limit honoured.
 - [ ] The password rule of the real pool: what the UI shows when a password is rejected, and that users learn the rule somewhere.
 - [ ] Forgot/reset with a real verified account and an unknown address: same message; reset works; an open session of that account is signed out.
 - [ ] Reset when Cognito is slow or unreachable (unknown outcome): the message, no retry, and sign in after about 80 s.
-- [ ] Session expiry, reload restore, sign out success and failure with the backend stopped.
-- [ ] Two real accounts in turn: no shared jobs, results or drafts.
-- [ ] Dubbing with a signed-in account: voice, speed, playback, download.
-- [ ] Light/Dark, 320/390/412 px, keyboard only, one screen reader pass, Safari/iPhone.
-- [ ] No password, code or challenge id in storage, URL or console (dev tools).
+- [x] Session expiry and reload restore; sign out success. (Sign out failure with the backend stopped: fake stack only.)
+- [x] Two real accounts in turn: no shared jobs, results or drafts; cross-user job/result/audio blocked both ways.
+- [x] Dubbing with a signed-in account: voice, speed, playback, download (mock providers).
+- [ ] Light/Dark and a 390 px viewport were checked live; 320/412 px, keyboard only, a screen reader and Safari/iPhone were not.
+- [x] No password or challenge id in storage, URL or console, and no request to another origin (automated check in the live run).
 
 ## Production cutover (browser side)
 
@@ -187,9 +206,19 @@ Coordinate with [AUTHENTICATION.md](AUTHENTICATION.md); this page adds only what
 3. **Send-code timing** is described two ways in AUTH_API.md (see "Email verification").
 4. `challenge_expires_at` is validated but unused by the UI; the server's `challenge_invalid` is the
    authority.
+5. **CSRF check with a non-ASCII header answers 500.** `backend/app/dependencies.py:75` compares
+   `X-CSRF-Token` with `hmac.compare_digest` on `str`, which raises for non-ASCII text. Repro on the
+   fake-Cognito stack: sign in, then `POST /api/auth/logout` with a token containing the Latin-1 byte
+   `0xE9` → `500 internal_error`; an ASCII wrong token → `403 csrf_failed`. Expected `403` in both
+   cases. No security impact (the request is still refused and the session stays); the UI treats it
+   as a failed sign out. Comparing bytes (`.encode()`) would fix it.
+6. **Test double only:** `backend/tests/fake_cognito.py:112` (and the code checks at 157 and 178) use
+   `secrets.compare_digest` on `str`, so a non-ASCII password makes the fake-Cognito stack answer
+   `500`. Real Cognito is not affected; it limits what the fake stack can test.
 
 ## Not verified
 
-- Anything against a real Amazon Cognito user pool or real email delivery.
+- Onboarding (invitation, temporary password), email verification and forgot/reset in a browser
+  against a real user pool, and real email delivery (SES).
 - That migration `0006` exists on the production database (see the pull request for what was and was not checked).
 - Browsers other than Chromium, assistive technology, password managers.

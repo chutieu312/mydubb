@@ -32,6 +32,12 @@ These specs run in the projects `auth-desktop` and `auth-mobile` (`E2E_COGNITO_B
 
 A live Amazon Cognito run is **not** covered here.
 
+### Live browser acceptance (opt-in, not in CI)
+
+[live/](live/README.md) holds a separate, manual run against a local backend on a real Cognito
+**dev** pool (`npx playwright test -c playwright.live.config.ts`). It is never picked up by this
+suite, `npm test` or CI. Its tooling is tested with fake data by `npm run test:live-tooling`.
+
 Not covered: WebKit / iOS Safari, Firefox, real devices, Azure. The mock stack has no real audio
 processing, so exact-duration fitting is covered elsewhere: the backend tests and
 `docker/audio_runtime_check.py` run the real FFmpeg (see

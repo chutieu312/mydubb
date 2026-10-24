@@ -1,15 +1,48 @@
-import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  expect,
+  test,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { escapes, overflow, studio, theme } from "../tests/authHelpers";
 import { textContrast } from "../tests/contrast";
-import { loadLive, scrub, type LiveUser } from "./liveEnv";
+import {
+  isSameOrigin,
+  liveUsersFrom,
+  parseLiveEnv,
+  parseLoopbackUrl,
+  safeDecode,
+  scrub,
+  secretForms,
+  type LiveUser,
+} from "./core.mjs";
 
 // LIVE browser acceptance: real Chromium, the real built UI, the real backend and a real Cognito
-// DEV user pool, two pre-onboarded, email-verified users, mock providers (no Azure). Not a fake.
-// Credentials come from e2e/.env.live and are never printed: every failure message is scrubbed,
-// and trace, video and automatic screenshots are off (see playwright.live.config.ts).
+// DEV user pool, two pre-onboarded, email-verified users, mock providers (no Azure).
+//
+// Credentials (e2e/.env.live, or the file named by LIVE_ENV_FILE) never reach a message:
+// 1. they are typed with keyboard.insertText after focusing the field, so no Playwright call that
+//    can fail or wait carries them (a failed `fill(value)` prints the value in its call log);
+// 2. assertions compare them in code and assert on booleans only;
+// 3. every failure message is still scrubbed of all their forms (raw, JSON-escaped, URL-encoded).
+// Every context only reaches the UI's own origin, and is signed out before it is closed, also
+// when a test failed (afterAll / finally).
 
-const { user1, user2, secrets } = loadLive();
+const envFile = process.env.LIVE_ENV_FILE
+  ? resolve(process.env.LIVE_ENV_FILE)
+  : fileURLToPath(new URL("../.env.live", import.meta.url));
+if (!existsSync(envFile)) throw new Error("The live credentials file does not exist (see live/README.md)");
+const { user1, user2, warnings } = liveUsersFrom(parseLiveEnv(readFileSync(envFile, "utf8")));
+for (const warning of warnings) console.log(warning);
+const secrets = secretForms([user1, user2]);
 const marker = () => `LIVE-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
 
 test.describe.configure({ mode: "serial" });
@@ -26,30 +59,71 @@ function live(name: string, body: () => Promise<void>) {
   });
 }
 
-interface Watch {
-  consoleLeaks: number;
-  foreignRequests: number;
-  secretOutsideLogin: number;
-  secretInUrl: number;
-}
-const watch: Watch = { consoleLeaks: 0, foreignRequests: 0, secretOutsideLogin: 0, secretInUrl: 0 };
+const watch = { consoleLeaks: 0, foreignRequests: 0, secretOutsideLogin: 0, secretInUrl: 0 };
+const cleanup = { signedOut: 0, withoutSession: 0, failed: 0 };
 
-function monitor(page: Page, origin: string) {
+let origin = "";
+let browser: Browser;
+const open = new Set<BrowserContext>();
+
+function monitor(page: Page) {
   page.on("console", (message) => {
     if (secrets.some((secret) => message.text().includes(secret))) watch.consoleLeaks++;
   });
   page.on("request", (request) => {
-    const url = new URL(request.url());
-    if (url.origin !== origin) watch.foreignRequests++;
-    if (secrets.some((secret) => decodeURIComponent(request.url()).includes(secret))) watch.secretInUrl++;
+    const url = request.url();
+    if (secrets.some((secret) => safeDecode(url).includes(secret))) watch.secretInUrl++;
     const body = request.postData() ?? "";
-    const isLogin = url.pathname === "/api/auth/login" && request.method() === "POST";
+    const isLogin = isSameOrigin(url, origin) && new URL(url).pathname === "/api/auth/login";
     if (!isLogin && secrets.some((secret) => body.includes(secret))) watch.secretOutsideLogin++;
   });
 }
 
-let origin = "";
-let browser: Browser;
+/** A browser profile that can only reach the UI's own origin; everything else is aborted. */
+async function newContext(options: BrowserContextOptions = {}): Promise<BrowserContext> {
+  const context = await browser.newContext({ ...options, baseURL: origin });
+  await context.route("**/*", (route) => {
+    if (isSameOrigin(route.request().url(), origin)) return route.continue();
+    watch.foreignRequests++;
+    return route.abort("blockedbyclient");
+  });
+  open.add(context);
+  return context;
+}
+
+async function newPage(context: BrowserContext): Promise<Page> {
+  const page = await context.newPage();
+  monitor(page);
+  return page;
+}
+
+/**
+ * Best-effort sign out of whatever session this profile holds, then close it. Never throws, so a
+ * cleanup problem cannot hide the error of the test that failed.
+ */
+async function closeContext(context: BrowserContext) {
+  if (!open.delete(context)) return;
+  try {
+    const me = await context.request.get("/api/auth/me", { timeout: 15_000 });
+    if (me.status() === 401) {
+      cleanup.withoutSession++;
+    } else if (me.status() === 200) {
+      const { csrf_token: csrf } = (await me.json()) as { csrf_token?: string };
+      const out = await context.request.post("/api/auth/logout", {
+        headers: { "X-CSRF-Token": csrf ?? "", Origin: origin },
+        timeout: 15_000,
+      });
+      if (out.status() === 204 || out.status() === 401) cleanup.signedOut++;
+      else cleanup.failed++;
+    } else {
+      cleanup.failed++;
+    }
+  } catch {
+    cleanup.failed++;
+  }
+  await context.close().catch(() => undefined);
+}
+
 let ctx1: BrowserContext;
 let ctx2: BrowserContext;
 let page1: Page;
@@ -58,39 +132,64 @@ const state = { account1: "", account2: "", job1: "", job2: "", marker1: marker(
 
 test.beforeAll(async ({ browser: b, baseURL }) => {
   browser = b;
-  origin = new URL(baseURL!).origin;
-  ctx1 = await browser.newContext({ baseURL });
-  ctx2 = await browser.newContext({ baseURL });
-  page1 = await ctx1.newPage();
-  page2 = await ctx2.newPage();
-  monitor(page1, origin);
-  monitor(page2, origin);
+  origin = parseLoopbackUrl(baseURL!, "LIVE_UI_URL").origin;
+  ctx1 = await newContext();
+  ctx2 = await newContext();
+  page1 = await newPage(ctx1);
+  page2 = await newPage(ctx2);
 });
 
 test.afterAll(async () => {
-  await ctx1?.close();
-  await ctx2?.close();
+  for (const context of [...open]) await closeContext(context);
+  console.log(
+    `live cleanup: ${cleanup.signedOut} session(s) signed out, ` +
+      `${cleanup.withoutSession} profile(s) without a session, ${cleanup.failed} failed`,
+  );
 });
 
 const account = async (page: Page) =>
   ((await page.locator(".header .account").textContent()) ?? "").replace("Signed in as", "").trim();
 
-async function signIn(page: Page, user: LiveUser) {
-  await page.goto("/");
+/**
+ * Types a credential like a user would, without putting it into any Playwright call that could
+ * fail or wait (and print its arguments). On any problem only the field's name is reported.
+ */
+async function typeSecret(page: Page, field: Locator, value: string, label: string) {
+  try {
+    await field.click();
+    await field.fill("");
+    await page.keyboard.insertText(value);
+    const typed = await field.evaluate((element) => (element as HTMLInputElement).value.length);
+    if (typed !== value.length) throw new Error("incomplete");
+  } catch {
+    throw new Error(`could not type the ${label}`);
+  }
+}
+
+/**
+ * Signs in on a page that shows the sign-in form; fails with the screen reached instead. Only an
+ * error inside the form counts: a notice above it (e.g. "session has expired") is already there.
+ */
+async function submitSignIn(page: Page, user: LiveUser) {
   await expect(page.getByLabel("Email")).toBeVisible();
-  await page.getByLabel("Email").fill(user.email);
-  await page.getByLabel("Password", { exact: true }).fill(user.password);
+  await typeSecret(page, page.getByLabel("Email"), user.email, "email");
+  await typeSecret(page, page.getByLabel("Password", { exact: true }), user.password, "password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   const outcome = await Promise.race([
     studio(page).waitFor({ timeout: 45_000 }).then(() => "studio"),
     page.getByRole("heading", { name: "Set your password" }).waitFor({ timeout: 45_000 }).then(() => "set-password"),
     page.getByRole("heading", { name: "Verify your email" }).waitFor({ timeout: 45_000 }).then(() => "verify-email"),
-    page.getByRole("alert").waitFor({ timeout: 45_000 }).then(() => "error"),
+    page.locator(".gate-form form [role=alert]").waitFor({ timeout: 45_000 }).then(() => "error"),
   ]);
   if (outcome !== "studio") {
-    const detail = outcome === "error" ? (await page.getByRole("alert").textContent()) ?? "" : outcome;
+    const detail = outcome === "error" ? ((await page.locator(".gate-form form [role=alert]").textContent()) ?? "") : outcome;
     throw new Error(`sign-in did not reach the Studio: ${detail}`);
   }
+}
+
+async function signIn(page: Page, user: LiveUser) {
+  await page.goto("/");
+  await submitSignIn(page, user);
 }
 
 async function signOut(page: Page) {
@@ -140,8 +239,9 @@ live("L01 the real UI talks to the real backend: email + password, mock provider
   const meta = (await (await page1.request.get("/api/meta")).json()) as {
     auth: { mode: string; self_registration: boolean };
     providers: Record<string, string>;
-    mock_mode: boolean;
   };
+  // Credentials are typed only after this: a backend that is not email + password with mock
+  // providers stops the run here (serial mode skips the rest).
   expect(meta.auth.mode).toBe("cognito");
   expect(meta.auth.self_registration).toBe(false);
   expect(Object.values(meta.providers)).toEqual(["mock", "mock", "mock"]);
@@ -235,8 +335,7 @@ live("L11 an expired session: the same user gets the draft back, another user do
   // Page A (user 1) holds an unsent draft. Page B, same browser profile, signs out: the server
   // session ends, so page A finds out on its next request.
   const draft = marker();
-  const pageB = await ctx2.newPage();
-  monitor(pageB, origin);
+  const pageB = await newPage(ctx2);
   await studio(page2).fill(`${draft} unsent draft`);
   await page2.getByLabel("First Sentence Start Time").fill("00:00:05");
   await page2.getByLabel("Last Sentence Start Time").fill("00:00:25");
@@ -249,8 +348,8 @@ live("L11 an expired session: the same user gets the draft back, another user do
   await expect(page2.getByRole("heading", { name: "Sign in to MyDubb" })).toBeVisible();
   await expect(page2.getByRole("alert")).toContainText("session has expired");
 
-  // Same user: the draft is back.
-  await signIn2(page2, user1);
+  // Same user, same page (no reload, the page memory is kept): the draft is back.
+  await submitSignIn(page2, user1);
   expect((await studio(page2).inputValue()).includes(draft)).toBe(true);
 
   // Expire again, then user 2 signs in on that page: nothing of user 1's draft is shown.
@@ -259,31 +358,21 @@ live("L11 an expired session: the same user gets the draft back, another user do
   await signOut(pageB);
   await page2.getByRole("button", { name: "Generate audio" }).click();
   await expect(page2.getByRole("heading", { name: "Sign in to MyDubb" })).toBeVisible();
-  await signIn2(page2, user2);
+  await submitSignIn(page2, user2);
   expect((await studio(page2).inputValue()).includes(draft)).toBe(false);
   expect((await studio(page2).inputValue()) === "").toBe(true);
   await pageB.close();
 });
 
-/** Sign in on a page that already shows the sign-in form (no navigation, keeps the page memory). */
-async function signIn2(page: Page, user: LiveUser) {
-  await page.getByLabel("Email").fill(user.email);
-  await page.getByLabel("Password", { exact: true }).fill(user.password);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(studio(page)).toBeVisible({ timeout: 45_000 });
-}
-
 live("L12 mobile viewport (390 px): sign in screen and Studio in Light and Dark", async () => {
-  const mobile = await browser.newContext({
-    baseURL: origin,
+  const mobile = await newContext({
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
     deviceScaleFactor: 2,
   });
-  const page = await mobile.newPage();
-  monitor(page, origin);
   try {
+    const page = await newPage(mobile);
     await page.goto("/");
     await expect(page.getByLabel("Email")).toBeVisible();
     for (const mode of ["light", "dark"] as const) {
@@ -293,11 +382,12 @@ live("L12 mobile viewport (390 px): sign in screen and Studio in Light and Dark"
       for (const target of [page.locator(".gate-form h2"), page.locator(".button.primary").first()]) {
         expect(await textContrast(target)).toBeGreaterThanOrEqual(4.5);
       }
+      // Taken before anything is typed.
       await page.screenshot({ path: `test-results/live-shots/mobile-sign-in-${mode}.png`, fullPage: true });
     }
     if ((await theme(page)) !== "light") await page.locator(".header .pill").click();
 
-    await signIn2Fresh(page, user2);
+    await submitSignIn(page, user2);
     for (const mode of ["light", "dark"] as const) {
       if ((await theme(page)) !== mode) await page.locator(".header .pill").click();
       expect(await overflow(page)).toBeLessThanOrEqual(0);
@@ -311,18 +401,11 @@ live("L12 mobile viewport (390 px): sign in screen and Studio in Light and Dark"
     }
     await signOut(page);
   } finally {
-    await mobile.close();
+    await closeContext(mobile);
   }
 });
 
-async function signIn2Fresh(page: Page, user: LiveUser) {
-  await page.getByLabel("Email").fill(user.email);
-  await page.getByLabel("Password", { exact: true }).fill(user.password);
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(studio(page)).toBeVisible({ timeout: 45_000 });
-}
-
-live("L13 finally, every remaining session is signed out", async () => {
+live("L13 every remaining session is signed out through the UI", async () => {
   for (const page of [page1, page2]) {
     await page.goto("/");
     // Wait until the page has decided (Studio or sign in) before looking at it.
