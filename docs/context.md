@@ -1,6 +1,6 @@
 # MyDubb — Context và handoff hiện tại
 
-Cập nhật: **2026-10-23**. Mốc hoàn tất gần nhất: **English detection** (English mà bản dịch giữ lại được đọc `en-US`; term mới tích lũy thành glossary candidates để review theo đợt; PR #20), sau Audio speed, 3C, 3B, 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
+Cập nhật: **2026-10-24**. Mốc hoàn tất gần nhất: **UI refresh** (layout Studio, Light/Dark theme, result gọn, diagnostics vào Audio details; PR #22), sau English detection, Audio speed, 3C, 3B, 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
 
 ## 1. Cách đọc và duy trì context
 
@@ -50,11 +50,11 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 - Ưu tiên free tiers; không tự mua/nâng tier, chuyển paid provider hay fallback âm thầm. Provider quota hết phải báo rõ.
 - Transcript xử lý tạm; metadata tối thiểu trong DB; translation/audio trong temporary result store. Không lưu audio binary vào DB.
 
-## 4. Hệ thống hiện có (sau English detection)
+## 4. Hệ thống hiện có (sau UI refresh)
 
 | Thành phần | Hiện trạng |
 |---|---|
-| Frontend | React + TypeScript + Vite; responsive; Vitest; Playwright Chromium desktop/mobile viewport |
+| Frontend | React + TypeScript + Vite; layout Studio responsive (kiểm tra 320/390/412 px); theme Light mặc định + Dark do người dùng chọn (design tokens `styles/tokens.css`, preference trong localStorage); UI tiếng Anh; Vitest; Playwright Chromium desktop/mobile viewport |
 | Backend | Python 3.12, FastAPI, uv; modular monolith; HTTP handlers tách business logic |
 | Pipeline | TranslationProvider → SpeechProvider → AudioProcessor → ResultStore; protocols nhỏ; wiring trong `services.py` |
 | Execution | Một instance, một uvicorn process; bounded worker threads và queue trong RAM; chưa có durable queue |
@@ -95,6 +95,7 @@ Các invariants vận hành:
 | M3C | FFmpeg duration processing: tempo toàn bộ audio về đúng target, giữ pitch, xác minh bằng sample count (PR #13) | Hoàn tất: đã merge, deploy, Product Owner test và xác nhận trên production (2026-10-23) |
 | Audio speed | Bảy tốc độ audio, output = baseline / speed, fit một bước từ WAV gốc; migration `0003` (PR #18) | Hoàn tất: đã merge, deploy qua CD, Product Owner test mọi speed trên production (2026-10-23) |
 | English detection | English còn trong bản dịch đọc `en-US`; glossary candidates tích lũy qua job, review theo đợt bằng CLI local; migration `0004`; glossary thêm `Linux`, `Linux kernel`, `container runtime` (PR #20) | Hoàn tất: đã merge, deploy qua CD, Product Owner nghe trên production (2026-10-23) |
+| UI refresh | Layout Studio, Light/Dark theme, result gọn (provider/diagnostics trong "Audio details"), disclosure gọn + Privacy, Access Code restyle; không đổi backend/API/auth (PR #22) | Hoàn tất: đã merge, deploy qua CD, Product Owner xem trên production (2026-10-24) |
 
 Bằng chứng cuối của 2B (không phải kiểm tra live tự động mỗi khi đọc file):
 
@@ -163,6 +164,17 @@ Kết quả và bằng chứng của English detection:
 - Nghiệm thu: Product Owner merge PR #20, test trên https://mydubb.com và báo trong chat rằng audio "đọc rất là ổn". Xác nhận này là chung; chưa được xác nhận riêng: dữ liệu candidate trên production (`list`, count tăng khi chạy lại, Rejected giữ nguyên), cách đọc `/proc`, và chưa có đợt review/promote đầu tiên.
 - Giới hạn còn lại: English trùng hình âm tiết Việt (`run`, `map`, `Go`) vẫn `vi-VN` nếu không có trong glossary; loanword viết như English (`video`, `internet`) đọc `en-US`; không phân biệt technical term với từ thường còn sót (`trenchcoat`), không sửa bản dịch; term trong một mệnh đề English còn sót được đọc `en-US` nhưng không được thu thập; candidate store có thể chứa tên người (reviewer nên reject); CLI review chạy local với `DATABASE_URL` production gõ không echo.
 
+Kết quả và bằng chứng của UI refresh:
+
+- Đã có: layout Studio theo mockup Product Owner duyệt (transcript + hai timestamp bên trái; voice, speed, expected length, Generate audio bên phải; job/result bên dưới; mobile một cột). Theme: Light mặc định, không theo OS; nút Light/Dark ở header, lưu preference trong localStorage với một key `mydubb-theme` (không token, không Access Code); đổi theme không reset form hay job. Result: audio, Download MP3, voice/speed của chính job, target/actual ở mức dễ đọc, translation expand/collapse, hạn hết từ `expires_at`; provider và số đo (sample, MP3 header, ffprobe...) nằm trong "Audio details" đóng mặc định. Backend vẫn giữ nguyên provider metadata và duration report.
+- Giữ trong luồng chính, từ field có cấu trúc (không lọc chuỗi `notices`): fixture, bản dịch minh hoạ, "duration not adjusted", speed khác 1x, lỗi, expiry. `notices` của server hiển thị nguyên văn trong Audio details. Mock/hybrid vẫn có ProviderBanner; production all-real không có banner, Beta hay Development. Việc gửi text tới Azure: một dòng trên nút Generate + nội dung đầy đủ trong Privacy (footer). Footer cũ "Private beta... not stored permanently" được thay bằng câu chỉ nêu điều kiểm chứng được (kết quả giữ tạm theo `result_ttl_seconds`).
+- Access Code: chỉ restyle; không đổi session, CSRF, Origin, ownership, cookies. Không có form email/password, signup hay forgot password. Authentication email/password invite-only đã quyết định về sản phẩm nhưng phương án chưa chốt, thuộc PR riêng sau.
+- Khác mockup: tiêu đề hero "Turn English into Vietnamese audio" (không dùng "Make it sound like you." vì không có voice cloning); giữ nhãn `First/Last Sentence Start Time` cho khớp lỗi 422 của backend; bỏ "Listen to a sample", waveform trang trí và tên người dùng; `<html lang>` là `en`.
+- [PR #22](https://github.com/chutieu312/mydubb/pull/22): reviewed HEAD `c353667d937f144b97039455d4ebf99d8052ae75` ([CI PR](https://github.com/chutieu312/mydubb/actions/runs/40048721531) pass: frontend 82 test, 28 E2E desktop/mobile gồm contrast hai theme, overflow 320/390/412 và keyboard; không gọi Azure); merge SHA `b7af0a38dcabab2d485bba4ecb32efc651557da3`.
+- [CI trên merge commit main](https://github.com/chutieu312/mydubb/actions/runs/40050042456) pass đủ job và CI success; **Deploy to Render** và **Production smoke check** success. Sau đó `/api/meta` vẫn `azure/azure/ffmpeg`, `mock_mode=false`.
+- Nghiệm thu: Product Owner kiểm tra https://mydubb.com và báo trong chat rằng giao diện "rất đẹp và ok". Xác nhận này là chung; từng trạng thái (failed, expired, session-expired) và Dark theme trên production không được ghi ở đây như đã kiểm chứng riêng.
+- Giới hạn còn lại: `notices` của backend chưa có trường `kind` có cấu trúc nên UI chưa hiện từng notice đúng chỗ mà không lọc chuỗi (cần thay đổi backend riêng nếu muốn); tương phản và responsive được kiểm bằng E2E Chromium và đo màu tự động, chưa kiểm thủ công trên Safari/iPhone, Firefox hay màn hình đọc.
+
 ## 6. Quyết định còn mở
 
 - **Duration tolerance (đã giải quyết ở 3C):** tiêu chí là đúng target, PCM và MP3 decode (cùng header gapless) lệch tối đa 1 sample; không dùng ±50 ms. Còn mở: nếu cần chính xác cả với player bỏ qua metadata MP3 thì phải đổi format (WAV, hoặc AAC), là thay đổi API/format cần quyết định riêng.
@@ -174,6 +186,7 @@ Kết quả và bằng chứng của English detection:
 - **Translation provider/API:** v3.0 đang dùng; chuyển sang API `2026-06-06` hoặc provider khác chỉ khi có lý do (chất lượng, ngừng hỗ trợ) và cần quyết định riêng cùng live test. Paid LLM translation chưa được duyệt.
 - **Mixed pronunciation:** đã đạt với voice Andrew/Emma Multilingual và `<lang>` spans trên transcript ngắn. Từ PR #20, English bản dịch giữ lại ngoài glossary cũng đọc `en-US` (Product Owner nghe ổn trên production). Còn mở: English trùng hình âm tiết Việt (`run`, `Go`), cách đọc code/path, transcript thật dài; mở rộng glossary đi qua review candidate theo đợt, chưa có glossary UI.
 - **Candidate retention:** bảng `glossary_candidates` không tự xoá và chưa có retention riêng; nếu cần là quyết định riêng.
+- **Authentication:** email/password invite-only đã quyết định về sản phẩm; phương án (tự xây hay dịch vụ ngoài), activation và reset password chưa chốt. Hiện vẫn dùng Access Code; UI refresh (PR #22) không thêm form auth giả.
 - **Kích thước image:** khoảng 1,04 GB với Debian `ffmpeg`; chỉ xem lại nếu deploy/disk thành vấn đề, cần quyết định riêng về FFmpeg static.
 
 ## 7. Tài liệu và workflow cần dùng
