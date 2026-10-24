@@ -27,6 +27,7 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `config.py` | Environment-based `Settings`; refuses unsafe combinations at startup | — |
 | `db.py` | Engine (with connect timeout), session factory, declarative base | — |
 | `access/` | Access Code check, server-side sessions, brute-force limiter, session router | db |
+| `auth/` | Amazon Cognito mode (`AUTH_MODE=cognito`): user pool HTTP client, users keyed by issuer + `sub`, user sessions, encrypted pending sign-in steps, password-reset revocation, `/api/auth` router, the `Principal` both modes resolve to (see [AUTHENTICATION.md](AUTHENTICATION.md)) | db, `access.rate_limit` |
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
 | `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter | `processing_errors`, `audio`, `translation.glossary` |
@@ -70,8 +71,15 @@ Interfaces are deliberately small `Protocol`s with one method each
   to a client-supplied `X-Forwarded-For` (as Render's does), the left-most entry is
   spoofable, so it is only the fallback. The global failure limit applies in all cases.
 - In production, responses carry `Strict-Transport-Security` and API docs are disabled.
-- Ownership: every job row has `session_id`; all job/result/audio queries filter by the
-  caller's session. A job ID alone grants nothing; foreign jobs return `404`.
+- Ownership: every Access Code job row has `session_id`; all job/result/audio queries filter by
+  the caller's session. A job ID alone grants nothing; foreign jobs return `404`.
+
+**Cognito mode** (`AUTH_MODE=cognito`, exclusive with the Access Code; not enabled in production
+yet) replaces the shared code with invited email/password accounts in an Amazon Cognito user pool
+while keeping the session model above: an opaque HttpOnly `mydubb_auth` cookie whose hash is in
+`user_sessions`, the same CSRF/Origin rules, no Cognito token in the browser. Users are keyed by
+issuer + `sub`; jobs carry `user_id` and are owned by the user (Access Code jobs keep `user_id NULL`
+and are never assigned to a user). Design, AWS setup and limits: [AUTHENTICATION.md](AUTHENTICATION.md).
 
 ## Job lifecycle
 
@@ -115,10 +123,15 @@ JSON, roughly a million and a half words) to protect a small instance's memory.
 | Translation text + MP3 | Local disk `RESULT_STORAGE_DIR/<job_id>/` | `RESULT_TTL_SECONDS` after completion (default 1 h) |
 | Per-job working files | OS temp dir | Deleted when the pipeline ends |
 | Sessions | PostgreSQL `access_sessions` | Deleted by cleanup once expired or revoked; their jobs keep metadata with `session_id = NULL` |
+| Cognito users (issuer, `sub`, email, display name, disabled flag; no password) | PostgreSQL `users` | No automatic deletion; their jobs reference them (`user_id`, set NULL if a user row is deleted) |
+| Cognito sessions | PostgreSQL `user_sessions` | Deleted by cleanup once expired or revoked |
+| Pending sign-in steps (encrypted Cognito session/access token) | PostgreSQL `auth_challenges` | Payload erased when the step ends; row deleted by cleanup once consumed or expired (minutes) |
+| Password-reset events (hashed email, time) | PostgreSQL `password_reset_events` | Deleted by cleanup after one day |
 | Glossary candidates (term, key, kind, job count, first/last seen, review status) | PostgreSQL `glossary_candidates` | No automatic deletion and no retention of its own; independent of results, jobs and sessions (no foreign key). No transcript, translation, excerpt, job or session is stored with a term |
 
 Cleanup runs at startup and every `CLEANUP_INTERVAL_SECONDS` (in a thread): removes expired
-or unreadable result directories, abandoned `.staging-*` directories and stale sessions.
+or unreadable result directories, abandoned `.staging-*` directories, stale sessions (both kinds),
+finished sign-in steps and old password-reset events.
 Reads also check expiry, so an expired result is never served even between cleanup runs.
 
 Result publication and cleanup are race-safe within the single process:

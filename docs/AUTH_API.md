@@ -19,8 +19,13 @@ objects (there is no success envelope in this API).
 
 | `auth.mode` | Login UI | Endpoints that exist |
 |---|---|---|
-| `access_code` (default) | Access Code form | `/api/session` (unchanged, see API.md). Every `/api/auth/*` path returns `404 not_found` |
-| `cognito` | Email + password form, forgot/reset password | `/api/auth/*` below. Every `/api/session` path returns `404 not_found` |
+| `access_code` (default) | Access Code form | `/api/session` (unchanged, see API.md). `/api/auth/*` does not exist |
+| `cognito` | Email + password form, forgot/reset password | `/api/auth/*` below. `/api/session` does not exist |
+
+"Does not exist" means `404 not_found`; on a server that also serves the built UI (production
+image), a `POST`/`DELETE` to such a path answers `405 method_not_allowed` instead, because the UI's
+catch-all route matches the path for `GET` only. Either way the UI must not call the other mode's
+endpoints.
 
 The two modes are exclusive. In `cognito` mode an Access Code session cookie is never accepted and is
 never upgraded to a user session. `self_registration` is always `false` (accounts are created by an
@@ -162,3 +167,5 @@ The endpoint names and request bodies are as proposed. Additions and precisions:
    alone is not enough.
 4. `forgot-password` answers `202` and `reset-password` does not sign the user in.
 5. `GET /api/meta` gains `auth`; the Access Code endpoints disappear in Cognito mode (and vice versa).
+6. Extra error codes beyond the proposal: `account_disabled`, `password_changed`,
+   `account_setup_incomplete`, `challenge_busy`, `auth_rate_limited`, `auth_unavailable`.

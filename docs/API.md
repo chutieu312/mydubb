@@ -14,11 +14,19 @@ are JSON unless noted.
 `fields` is present only for `validation_error`; some errors add fields such as
 `retry_after_seconds` or `job_error_code`.
 
-**Authentication**: an HttpOnly `mydubb_session` cookie (`SameSite=Strict`, `Secure` when
-`COOKIE_SECURE=true`) established by `POST /api/session`.
+**Authentication** depends on `AUTH_MODE` (reported as `auth.mode` by `GET /api/meta`):
 
-**CSRF**: state-changing requests made with a session (`POST /api/jobs`, `DELETE /api/session`)
-must send `X-CSRF-Token` with the token returned by `POST`/`GET /api/session`. In addition, any
+- `access_code` (default, production today): an HttpOnly `mydubb_session` cookie (`SameSite=Strict`,
+  `Secure` when `COOKIE_SECURE=true`) established by `POST /api/session` (below).
+- `cognito`: an HttpOnly `mydubb_auth` cookie established by the email/password endpoints under
+  `/api/auth`, documented in [AUTH_API.md](AUTH_API.md). `/api/session` does not exist in this mode,
+  and an Access Code session is never accepted.
+
+Everything below about CSRF, jobs and errors applies to both session kinds.
+
+**CSRF**: state-changing requests made with a session (`POST /api/jobs`, `DELETE /api/session`,
+`POST /api/auth/logout`) must send `X-CSRF-Token` with the token returned by `POST`/`GET
+/api/session` (Access Code) or by the `authenticated` response / `GET /api/auth/me` (Cognito). In addition, any
 `POST/PUT/PATCH/DELETE` with an `Origin` header that is neither the request's own host nor in
 `TRUSTED_ORIGINS` is rejected (`403 origin_rejected`).
 
@@ -31,9 +39,11 @@ must send `X-CSRF-Token` with the token returned by `POST`/`GET /api/session`. I
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds` |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)) |
 
 ## Session (Private Beta access)
+
+Only with `AUTH_MODE=access_code`. For `AUTH_MODE=cognito` see [AUTH_API.md](AUTH_API.md).
 
 ### `POST /api/session`
 Body `{"access_code": "…"}`.
@@ -138,7 +148,10 @@ Responses:
 
 ### `GET /api/jobs/{id}`
 Requires session. Returns the Job body. `404 job_not_found` if the job does not exist **or
-belongs to another session** (indistinguishable by design).
+belongs to someone else** (indistinguishable by design). The owner is taken from the session, never
+from the request: with the Access Code it is the session; in Cognito mode it is the signed-in user
+(any of the user's sessions sees the user's jobs, and Access Code-era jobs are visible to no user).
+The same rule applies to the result and audio endpoints below.
 
 ```json
 {
