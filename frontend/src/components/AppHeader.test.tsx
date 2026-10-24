@@ -16,9 +16,18 @@ describe("AppHeader account", () => {
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
   });
 
-  it("falls back to the email when there is no display name", () => {
+  it("falls back to the email when the display name is blank or null", () => {
     render(<AppHeader {...base} signedIn user={{ email: "ada@example.com", display_name: " " }} />);
     expect(screen.getByText("ada@example.com")).toBeTruthy();
+    cleanup();
+    render(<AppHeader {...base} signedIn user={{ email: "bao@example.com", display_name: null }} />);
+    expect(screen.getByText("bao@example.com")).toBeTruthy();
+  });
+
+  it("keeps a very long email inside the header", () => {
+    const long = `${"a".repeat(60)}@${"b".repeat(60)}.example.com`;
+    render(<AppHeader {...base} signedIn user={{ email: long, display_name: null }} />);
+    expect(screen.getByText(long).closest(".account")).toBeTruthy();
   });
 
   it("shows Signing out while pending", () => {

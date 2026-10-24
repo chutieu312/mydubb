@@ -13,7 +13,7 @@ interface Props {
 }
 
 export function AppHeader({ theme, onToggleTheme, signedIn, user, loggingOut, onLogout }: Props) {
-  const account = user ? user.display_name.trim() || user.email : null;
+  const account = user ? user.display_name?.trim() || user.email : null;
   return (
     <header className="header">
       <div className="header-inner">

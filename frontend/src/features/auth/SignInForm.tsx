@@ -7,7 +7,8 @@ import { useSubmit } from "./useSubmit";
 interface Props {
   initialEmail: string;
   onSubmit: (email: string, password: string) => Promise<Outcome>;
-  onForgotPassword: (email: string) => void;
+  // Absent when the backend does not offer password reset.
+  onForgotPassword?: (email: string) => void;
 }
 
 export function SignInForm({ initialEmail, onSubmit, onForgotPassword }: Props) {
@@ -49,14 +50,16 @@ export function SignInForm({ initialEmail, onSubmit, onForgotPassword }: Props) 
       >
         {pending ? "Signing in…" : "Sign in"}
       </button>
-      <button
-        type="button"
-        className="link-button"
-        onClick={() => onForgotPassword(email.trim())}
-        disabled={pending}
-      >
-        Forgot password?
-      </button>
+      {onForgotPassword && (
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => onForgotPassword(email.trim())}
+          disabled={pending}
+        >
+          Forgot password?
+        </button>
+      )}
       <p className="muted small">Access is currently by invitation only.</p>
     </form>
   );

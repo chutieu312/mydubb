@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from "react";
 
-import type { PasswordPolicy } from "../../lib/passwordPolicy";
 import type { Outcome } from "./errors";
 import { FormError, TextField } from "./fields";
 import { NewPasswordFields } from "./NewPasswordFields";
-import { validateNewPassword, type NewPasswordErrors } from "./newPasswordValidation";
+import {
+  CODE_FORMAT_TEXT,
+  isValidCode,
+  normalizeCode,
+  validateNewPassword,
+  type NewPasswordErrors,
+} from "./newPasswordValidation";
 import { useSubmit } from "./useSubmit";
 
 interface RequestProps {
@@ -50,27 +55,29 @@ export function ForgotPasswordForm({ initialEmail, onSubmit, onBack }: RequestPr
 }
 
 interface ResetProps {
-  policy: PasswordPolicy;
   onSubmit: (code: string, newPassword: string) => Promise<Outcome>;
   onRequestNewCode: () => void;
   onBack: () => void;
 }
 
 /** Step 2: the emailed code and the new password. */
-export function ResetPasswordForm({ policy, onSubmit, onRequestNewCode, onBack }: ResetProps) {
+export function ResetPasswordForm({ onSubmit, onRequestNewCode, onBack }: ResetProps) {
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [errors, setErrors] = useState<NewPasswordErrors>({});
+  const [codeError, setCodeError] = useState<string | null>(null);
   const { pending, failure, run } = useSubmit();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const found = validateNewPassword(policy, password, confirm);
+    const found = validateNewPassword(password, confirm);
+    const clean = normalizeCode(code);
     setErrors(found);
-    if (found.password || found.confirm) return;
+    setCodeError(isValidCode(clean) ? null : CODE_FORMAT_TEXT);
+    if (found.confirm || !isValidCode(clean)) return;
 
-    const outcome = await run(() => onSubmit(code.replace(/\s+/g, ""), password));
+    const outcome = await run(() => onSubmit(clean, password));
     if (outcome !== undefined && !outcome?.keepInput) {
       setPassword("");
       setConfirm("");
@@ -85,10 +92,10 @@ export function ResetPasswordForm({ policy, onSubmit, onRequestNewCode, onBack }
         autoComplete="one-time-code"
         value={code}
         onChange={setCode}
+        error={codeError}
         disabled={pending}
       />
       <NewPasswordFields
-        policy={policy}
         password={password}
         confirm={confirm}
         onPassword={setPassword}

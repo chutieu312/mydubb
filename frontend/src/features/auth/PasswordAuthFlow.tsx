@@ -1,11 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { authApi } from "../../api/authApi";
 import type { AuthStep, AuthUser } from "../../api/authTypes";
 import { setCsrfToken } from "../../api/client";
-import { DEFAULT_PASSWORD_POLICY, type PasswordPolicy } from "../../lib/passwordPolicy";
 import { AuthCard, type AuthNotice } from "./AuthCard";
-import { isChallengeGone, toFailure, type Outcome } from "./errors";
+import { endedStepNotice, toFailure, toResetFailure, type Outcome } from "./errors";
 import { ForgotPasswordForm, ResetPasswordForm } from "./ForgotPasswordForms";
 import { NewPasswordForm } from "./NewPasswordForm";
 import { SignInForm } from "./SignInForm";
@@ -24,29 +23,36 @@ type Screen =
 interface Props {
   // Shown on the first sign-in screen, e.g. after the session expired.
   notice?: string | null;
-  policy?: PasswordPolicy;
+  // From GET /api/meta (auth.password_reset): without it there is no Forgot password.
+  passwordReset?: boolean;
   onAuthenticated: (user: AuthUser) => void;
 }
 
-const CHALLENGE_EXPIRED: AuthNotice = {
-  text: "That sign-in attempt expired. Please sign in again.",
-  tone: "warning",
-};
+const warning = (text: string): AuthNotice => ({ text, tone: "warning" });
+const info = (text: string): AuthNotice => ({ text, tone: "info" });
 
-export function PasswordAuthFlow({
-  notice,
-  policy = DEFAULT_PASSWORD_POLICY,
-  onAuthenticated,
-}: Props) {
+export function PasswordAuthFlow({ notice, passwordReset = true, onAuthenticated }: Props) {
   const [screen, setScreen] = useState<Screen>({ name: "sign-in" });
   const [screenNotice, setScreenNotice] = useState<AuthNotice | null>(
-    notice ? { text: notice, tone: "warning" } : null,
+    notice ? warning(notice) : null,
   );
   // False only for the first screen of a page load; later screens take focus.
   const [navigated, setNavigated] = useState(false);
   const [email, setEmail] = useState("");
 
+  // A response may only change what is on screen if the user is still where the request was
+  // made: every screen change bumps `epoch`, and an unmounted flow ignores everything.
+  const epoch = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const go = (next: Screen, nextNotice: AuthNotice | null = null) => {
+    epoch.current += 1;
     setScreen(next);
     setScreenNotice(nextNotice);
     setNavigated(true);
@@ -57,7 +63,7 @@ export function PasswordAuthFlow({
   const proceed = (step: AuthStep) => {
     switch (step.status) {
       case "authenticated":
-        if (step.csrf_token) setCsrfToken(step.csrf_token);
+        setCsrfToken(step.csrf_token);
         onAuthenticated(step.user);
         break;
       case "new_password_required":
@@ -69,70 +75,85 @@ export function PasswordAuthFlow({
     }
   };
 
-  // Runs a request; null means it succeeded, a Failure is what the form shows.
-  const attempt = async (
-    request: () => Promise<void>,
-    fallback: string,
-    onChallengeGone?: () => void,
-  ): Promise<Outcome> => {
+  // Runs one request. Null means "nothing to show" (success, or a stale answer that is ignored);
+  // a Failure is what the form displays. No request is ever repeated automatically.
+  async function attempt<T>(
+    request: () => Promise<T>,
+    onSuccess: (result: T) => void,
+    onError: (err: unknown) => Outcome,
+  ): Promise<Outcome> {
+    const started = epoch.current;
+    const current = () => mounted.current && epoch.current === started;
     try {
-      await request();
+      const result = await request();
+      if (current()) onSuccess(result);
       return null;
     } catch (err) {
-      if (onChallengeGone && isChallengeGone(err)) {
-        onChallengeGone();
-        return null;
-      }
-      return toFailure(err, fallback);
+      return current() ? onError(err) : null;
     }
+  }
+
+  // A pending step that cannot continue sends the user back to sign in with an explanation;
+  // any other failure is shown by the step itself.
+  const stepError = (fallback: string) => (err: unknown) => {
+    const ended = endedStepNotice(err);
+    if (ended === null) return toFailure(err, fallback);
+    backToSignIn(warning(ended));
+    return null;
   };
 
-  const signIn = (address: string, password: string) =>
-    attempt(async () => {
-      setEmail(address);
-      proceed(await authApi.login(address, password));
-    }, "We could not sign you in. Please try again.");
+  const signIn = (address: string, password: string) => {
+    setEmail(address);
+    return attempt(
+      () => authApi.login(address, password),
+      proceed,
+      (err) => toFailure(err, "We could not sign you in. Please try again."),
+    );
+  };
 
   const setNewPassword = (challengeId: string, newPassword: string) =>
     attempt(
-      async () => proceed(await authApi.newPassword(challengeId, newPassword)),
-      "We could not save your password. Please try again.",
-      () => backToSignIn(CHALLENGE_EXPIRED),
+      () => authApi.newPassword(challengeId, newPassword),
+      proceed,
+      stepError("We could not save your password. Please try again."),
     );
 
   const sendCode = (challengeId: string) =>
     attempt(
       () => authApi.sendVerificationCode(challengeId),
-      "We could not send a code. Please try again.",
-      () => backToSignIn(CHALLENGE_EXPIRED),
+      () => undefined,
+      stepError("We could not send a code. Please try again."),
     );
 
   const confirmCode = (challengeId: string, code: string) =>
     attempt(
-      async () => proceed(await authApi.confirmVerificationCode(challengeId, code)),
-      "We could not verify that code. Please try again.",
-      () => backToSignIn(CHALLENGE_EXPIRED),
+      () => authApi.confirmVerificationCode(challengeId, code),
+      proceed,
+      stepError("We could not verify that code. Please try again."),
     );
 
   const requestReset = (address: string) =>
-    attempt(async () => {
-      await authApi.forgotPassword(address);
-      setEmail(address);
-      // The same message for every address: it must not reveal whether an account exists.
-      go({ name: "reset-password" }, {
-        text: `If an account exists for ${address}, we've sent it a verification code.`,
-        tone: "info",
-      });
-    }, "We could not send a code. Please try again.");
+    attempt(
+      () => authApi.forgotPassword(address),
+      () => {
+        setEmail(address);
+        // The same message for every address: it must not reveal whether an account exists.
+        go(
+          { name: "reset-password" },
+          info(`If an account exists for ${address}, we've sent it a verification code.`),
+        );
+      },
+      (err) => toFailure(err, "We could not send a code. Please try again."),
+    );
 
   const resetPassword = (code: string, newPassword: string) =>
-    attempt(async () => {
-      await authApi.resetPassword(email, code, newPassword);
-      backToSignIn({
-        text: "Your password has been changed. Sign in with your new password.",
-        tone: "info",
-      });
-    }, "We could not reset your password. Check the code and try again.");
+    attempt(
+      () => authApi.resetPassword(email, code, newPassword),
+      () =>
+        // Not signed in: the user signs in with the new password.
+        backToSignIn(info("Your password has been changed. Sign in with your new password.")),
+      toResetFailure,
+    );
 
   const common = { focusTitle: navigated, notice: screenNotice };
 
@@ -143,10 +164,14 @@ export function PasswordAuthFlow({
           <SignInForm
             initialEmail={email}
             onSubmit={signIn}
-            onForgotPassword={(address) => {
-              setEmail(address);
-              go({ name: "forgot-password" });
-            }}
+            onForgotPassword={
+              passwordReset
+                ? (address) => {
+                    setEmail(address);
+                    go({ name: "forgot-password" });
+                  }
+                : undefined
+            }
           />
         </AuthCard>
       );
@@ -159,7 +184,6 @@ export function PasswordAuthFlow({
           {...common}
         >
           <NewPasswordForm
-            policy={policy}
             onSubmit={(password) => setNewPassword(screen.challengeId, password)}
             onCancel={() => backToSignIn()}
           />
@@ -170,7 +194,7 @@ export function PasswordAuthFlow({
         <AuthCard
           key={screen.name}
           title="Verify your email"
-          intro="We need to confirm your email address. Enter the code we send you."
+          intro="We need to confirm your email address. Press Send code, then enter the code we email you."
           {...common}
         >
           <VerifyEmailForm
@@ -199,7 +223,6 @@ export function PasswordAuthFlow({
       return (
         <AuthCard key={screen.name} title="Choose a new password" {...common}>
           <ResetPasswordForm
-            policy={policy}
             onSubmit={resetPassword}
             onRequestNewCode={() => go({ name: "forgot-password" })}
             onBack={() => backToSignIn()}

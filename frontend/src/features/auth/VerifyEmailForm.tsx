@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import type { Outcome } from "./errors";
 import { FormError, TextField } from "./fields";
+import { CODE_FORMAT_TEXT, isValidCode, normalizeCode } from "./newPasswordValidation";
 import { useSubmit } from "./useSubmit";
 
 interface Props {
@@ -21,24 +22,41 @@ function useCountdown(): [number, (seconds: number) => void] {
   return [seconds, setSeconds];
 }
 
+type Action = "verify" | "resend";
+
+/**
+ * A code is sent only when the user presses Send/Resend, never by the page itself. Verify and
+ * Resend share one lock, so they can never run at the same time (also not via the Enter key).
+ */
 export function VerifyEmailForm({ onConfirm, onResend, onCancel }: Props) {
   const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState<string | null>(null);
   const [sentOnce, setSentOnce] = useState(false);
+  const [last, setLast] = useState<Action | null>(null);
   const [wait, setWait] = useCountdown();
-  const confirm = useSubmit();
-  const resend = useSubmit();
-  const busy = confirm.pending || resend.pending;
+  const { pending, failure, run } = useSubmit();
+
+  const verifying = pending && last === "verify";
+  const sending = pending && last === "resend";
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    resend.clearFailure();
-    const outcome = await confirm.run(() => onConfirm(code.replace(/\s+/g, "")));
+    if (pending) return;
+    const clean = normalizeCode(code);
+    if (!isValidCode(clean)) {
+      setCodeError(CODE_FORMAT_TEXT);
+      return;
+    }
+    setCodeError(null);
+    setLast("verify");
+    const outcome = await run(() => onConfirm(clean));
     if (outcome && !outcome.keepInput) setCode("");
   };
 
   const sendCode = async () => {
-    confirm.clearFailure();
-    const outcome = await resend.run(() => onResend());
+    if (pending) return;
+    setLast("resend");
+    const outcome = await run(() => onResend());
     if (outcome === undefined) return;
     if (outcome === null) {
       setSentOnce(true);
@@ -57,24 +75,25 @@ export function VerifyEmailForm({ onConfirm, onResend, onCancel }: Props) {
         autoComplete="one-time-code"
         value={code}
         onChange={setCode}
-        disabled={confirm.pending}
+        error={codeError}
+        disabled={verifying}
       />
-      <FormError message={confirm.failure?.message} />
+      {last === "verify" && <FormError message={failure?.message} />}
       <button
         type="submit"
         className="button primary wide"
-        disabled={busy || code.trim() === ""}
+        disabled={pending || code.trim() === ""}
       >
-        {confirm.pending ? "Verifying…" : "Verify email"}
+        {verifying ? "Verifying…" : "Verify email"}
       </button>
 
       <button
         type="button"
         className="button ghost wide"
         onClick={sendCode}
-        disabled={busy || wait > 0}
+        disabled={pending || wait > 0}
       >
-        {resend.pending
+        {sending
           ? "Sending…"
           : wait > 0
             ? `Resend available in ${wait}s`
@@ -82,14 +101,14 @@ export function VerifyEmailForm({ onConfirm, onResend, onCancel }: Props) {
               ? "Resend code"
               : "Send code"}
       </button>
-      <FormError message={resend.failure?.message} />
-      {sentOnce && !resend.failure && !resend.pending && (
+      {last === "resend" && <FormError message={failure?.message} />}
+      {sentOnce && last === "resend" && !failure && !pending && (
         <p className="callout" role="status">
           A code is on its way. It may take a minute to arrive.
         </p>
       )}
 
-      <button type="button" className="link-button" onClick={onCancel} disabled={busy}>
+      <button type="button" className="link-button" onClick={onCancel} disabled={pending}>
         Back to sign in
       </button>
     </form>

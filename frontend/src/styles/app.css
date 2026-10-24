@@ -846,3 +846,16 @@ textarea[aria-invalid="true"] {
 .rules .met {
   color: var(--done);
 }
+
+/* Long emails and long messages wrap inside the card; they never widen it or push controls out. */
+.gate-form,
+.gate-form .stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.gate-form .callout,
+.gate-form .error,
+.gate-form .muted,
+.gate-form h2 {
+  overflow-wrap: anywhere;
+}

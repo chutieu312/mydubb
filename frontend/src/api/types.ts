@@ -26,6 +26,8 @@ export interface AppMeta {
   voices: VoiceOption[];
   timestamp_format: string;
   result_ttl_seconds: number;
+  // How users sign in. Read it with authModeOf(): a missing or unknown value must not be guessed.
+  auth?: { mode?: string; self_registration?: boolean; password_reset?: boolean };
 }
 
 export interface SessionInfo {

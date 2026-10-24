@@ -1,28 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { authApi } from "./api/authApi";
+import type { AuthUser } from "./api/authTypes";
 import { ApiError, api, setCsrfToken } from "./api/client";
 import type { AppMeta, Job } from "./api/types";
 import { AppFooter } from "./components/AppFooter";
 import { AppHeader } from "./components/AppHeader";
 import { AccessGate } from "./features/access/AccessGate";
+import { PasswordAuthFlow } from "./features/auth/PasswordAuthFlow";
 import { DubbingForm } from "./features/dubbing/DubbingForm";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
+import { authModeOf, passwordResetOf } from "./lib/authMode";
 import { azureDisclosure, azureDisclosureShort } from "./lib/providers";
+import { createDraftKeeper, type StudioDraft } from "./lib/studioDraft";
 import { useTheme } from "./lib/useTheme";
 
 type AuthState = "checking" | "anonymous" | "authenticated";
 
+// The sign-in mode comes from GET /api/meta and nowhere else. If it is missing or unknown the
+// page offers no way to sign in rather than guessing one.
+const UNKNOWN_MODE = "We cannot tell how to sign you in right now. Please try again.";
+const SESSION_CHECK_FAILED = "We could not check your session. Please try again.";
+
 export function App() {
   const [meta, setMeta] = useState<AppMeta | null>(null);
   const [auth, setAuth] = useState<AuthState>("checking");
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [loginKey, setLoginKey] = useState(0);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
   const logoutPending = useRef(false);
   const [theme, toggleTheme] = useTheme();
+  const [drafts] = useState(createDraftKeeper);
+
+  const mode = authModeOf(meta);
+  const blockingError = loadError ?? (meta && mode === null ? UNKNOWN_MODE : null);
 
   useEffect(() => {
     let active = true;
@@ -32,37 +49,96 @@ export function App() {
       .catch((err: unknown) => {
         if (active) setLoadError(err instanceof ApiError ? err.message : "Failed to load.");
       });
-    api
-      .getSession()
-      .then((session) => {
-        if (!active) return;
-        setCsrfToken(session.csrf_token);
-        setAuth("authenticated");
-      })
-      .catch(() => active && setAuth("anonymous"));
     return () => {
       active = false;
     };
-  }, []);
+  }, [attempt]);
 
+  // Restore the session once the mode is known. Only the endpoint of that mode is ever called.
+  useEffect(() => {
+    if (mode === null) return;
+    let active = true;
+    const restore = async () => {
+      if (mode === "cognito") {
+        const session = await authApi.me();
+        setCsrfToken(session.csrf_token);
+        return session.user;
+      }
+      const session = await api.getSession();
+      setCsrfToken(session.csrf_token);
+      return null;
+    };
+    restore()
+      .then((restored) => {
+        if (!active) return;
+        if (restored) drafts.reconcile(restored.id);
+        setUser(restored);
+        setAuth("authenticated");
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        const signedOut = err instanceof ApiError && err.isUnauthenticated;
+        if (mode === "cognito" && !signedOut) {
+          // Not "signed out": the server could not be asked, so do not pretend either way.
+          setLoadError(SESSION_CHECK_FAILED);
+        } else {
+          setAuth("anonymous");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [mode, drafts, attempt]);
+
+  const retry = () => {
+    setLoadError(null);
+    setMeta(null);
+    setAuth("checking");
+    setAttempt((n) => n + 1);
+  };
+
+  // The session ended on the server's side (a 401 on a request). The unsent form stays in page
+  // memory; it comes back only if the same user signs in again.
   const handleSessionExpired = useCallback(() => {
     setCsrfToken(null);
     setJobId(null);
+    setUser(null);
     setLogoutError(null);
+    setLoginKey((n) => n + 1);
     setAuth("anonymous");
-    setSessionNotice("Your session has expired or ended. Please enter the Access Code again.");
-  }, []);
+    setSessionNotice(
+      mode === "cognito"
+        ? "Your session has expired or ended. Please sign in again."
+        : "Your session has expired or ended. Please enter the Access Code again.",
+    );
+  }, [mode]);
 
-  const handleAuthenticated = useCallback(() => {
-    setSessionNotice(null);
-    setAuth("authenticated");
-  }, []);
+  const handleAuthenticated = useCallback(
+    (signedIn: AuthUser | null) => {
+      if (signedIn) drafts.reconcile(signedIn.id);
+      setSessionNotice(null);
+      setUser(signedIn);
+      setAuth("authenticated");
+    },
+    [drafts],
+  );
+
+  const rememberDraft = useCallback(
+    (draft: StudioDraft) => {
+      if (user) drafts.remember(user.id, draft);
+    },
+    [user, drafts],
+  );
 
   const handleJobCreated = useCallback((job: Job) => setJobId(job.id), []);
 
   const signedOut = () => {
+    // An explicit sign out (or a session the server confirms is gone) discards the draft.
+    drafts.clear();
     setCsrfToken(null);
     setJobId(null);
+    setUser(null);
+    setLoginKey((n) => n + 1);
     setAuth("anonymous");
   };
 
@@ -73,7 +149,7 @@ export function App() {
     setLoggingOut(true);
     setLogoutError(null);
     try {
-      await api.logout();
+      await (mode === "cognito" ? authApi.logout() : api.logout());
       signedOut();
     } catch (err) {
       if (err instanceof ApiError && err.isUnauthenticated) {
@@ -84,7 +160,8 @@ export function App() {
         // HttpOnly cookie cannot be cleared from JavaScript. Stay signed in, keep the CSRF
         // token, and let the user retry.
         const detail = err instanceof ApiError ? ` ${err.message}` : "";
-        setLogoutError(`Logout failed; you are still signed in.${detail} Please try again.`);
+        const action = mode === "cognito" ? "Sign out" : "Logout";
+        setLogoutError(`${action} failed; you are still signed in.${detail} Please try again.`);
       }
     } finally {
       logoutPending.current = false;
@@ -98,6 +175,7 @@ export function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         signedIn={auth === "authenticated"}
+        user={user}
         loggingOut={loggingOut}
         onLogout={logout}
       />
@@ -112,16 +190,29 @@ export function App() {
         {meta && <ProviderBanner providers={meta.providers} />}
 
         <main className="main">
-          {loadError && (
-            <p className="callout error" role="alert">
-              {loadError}
-            </p>
+          {blockingError && (
+            <div className="stack">
+              <p className="callout error" role="alert">
+                {blockingError}
+              </p>
+              <button type="button" className="button ghost" onClick={retry}>
+                Try again
+              </button>
+            </div>
           )}
-          {auth === "checking" && <p className="muted">Loading…</p>}
-          {auth === "anonymous" && (
-            <AccessGate notice={sessionNotice} onAuthenticated={handleAuthenticated} />
+          {!blockingError && (auth === "checking" || !meta) && <p className="muted">Loading…</p>}
+          {!blockingError && meta && auth === "anonymous" && mode === "access_code" && (
+            <AccessGate notice={sessionNotice} onAuthenticated={() => handleAuthenticated(null)} />
           )}
-          {auth === "authenticated" && meta && (
+          {!blockingError && meta && auth === "anonymous" && mode === "cognito" && (
+            <PasswordAuthFlow
+              key={loginKey}
+              notice={sessionNotice}
+              passwordReset={passwordResetOf(meta)}
+              onAuthenticated={handleAuthenticated}
+            />
+          )}
+          {!blockingError && auth === "authenticated" && meta && (
             <>
               <section className="hero">
                 <p className="eyebrow">Your dubbing studio</p>
@@ -135,6 +226,8 @@ export function App() {
                 disclosure={azureDisclosureShort(meta.providers)}
                 onJobCreated={handleJobCreated}
                 onSessionExpired={handleSessionExpired}
+                initialDraft={user ? drafts.draftFor(user.id) : undefined}
+                onDraftChange={user ? rememberDraft : undefined}
               />
               {jobId && (
                 <JobPanel

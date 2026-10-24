@@ -1,51 +1,78 @@
-// PROVISIONAL types for the email + password sign-in API. The official contract is
-// docs/AUTH_API.md (written with the backend change); until it is merged these types follow the
-// temporary contract in docs/AUTH_UI.md and must be re-checked against it.
+// Types and response guards for the email + password sign-in API. The contract is
+// docs/AUTH_API.md; every guard below mirrors the response models in backend/app/auth/router.py.
 
 export interface AuthUser {
   id: string;
   email: string;
-  display_name: string;
+  // Null when the account has no name: show the email then.
+  display_name: string | null;
 }
 
-/** Result of login, new-password and email-verification confirm. */
-export type AuthStep =
-  | {
-      status: "authenticated";
-      user: AuthUser;
-      // Present only if the backend keeps the CSRF convention of the Access Code session.
-      csrf_token?: string;
-    }
-  // `challenge_id` is an opaque server identifier, never a credential. Keep it in memory only.
-  | { status: "new_password_required"; challenge_id: string }
-  | { status: "email_verification_required"; challenge_id: string };
-
-export interface MeResponse {
+export interface Session {
   user: AuthUser;
-  csrf_token?: string;
+  // Required by the contract for POST /api/jobs and POST /api/auth/logout; kept in memory only.
+  csrf_token: string;
+  expires_at: string;
 }
 
-const STEP_STATUSES = ["authenticated", "new_password_required", "email_verification_required"];
+/** Answer of login, new-password and email-verification/confirm. */
+export type AuthStep =
+  | ({ status: "authenticated" } & Session)
+  // `challenge_id` is an opaque MyDubb identifier, valid only with the browser's challenge cookie.
+  | { status: "new_password_required"; challenge_id: string; challenge_expires_at: string }
+  | { status: "email_verification_required"; challenge_id: string; challenge_expires_at: string };
+
+export interface CodeSent {
+  status: "code_sent";
+  // The masked address the code went to; null when unknown.
+  destination: string | null;
+  challenge_expires_at: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isTimestamp = (value: unknown): value is string =>
+  typeof value === "string" && value !== "" && !Number.isNaN(Date.parse(value));
+
+const isNonEmpty = (value: unknown): value is string => typeof value === "string" && value !== "";
 
 function isUser(value: unknown): value is AuthUser {
-  if (typeof value !== "object" || value === null) return false;
-  const user = value as Record<string, unknown>;
   return (
-    typeof user.id === "string" &&
-    typeof user.email === "string" &&
-    typeof user.display_name === "string"
+    isRecord(value) &&
+    isNonEmpty(value.id) &&
+    isNonEmpty(value.email) &&
+    (value.display_name === null || typeof value.display_name === "string")
   );
 }
 
-/** Runtime check so a contract mismatch fails loudly instead of rendering a half-signed-in UI. */
-export function isAuthStep(value: unknown): value is AuthStep {
-  if (typeof value !== "object" || value === null) return false;
-  const step = value as Record<string, unknown>;
-  if (typeof step.status !== "string" || !STEP_STATUSES.includes(step.status)) return false;
-  if (step.status === "authenticated") return isUser(step.user);
-  return typeof step.challenge_id === "string" && step.challenge_id.length > 0;
+export function isSession(value: unknown): value is Session {
+  return (
+    isRecord(value) &&
+    isUser(value.user) &&
+    isNonEmpty(value.csrf_token) &&
+    isTimestamp(value.expires_at)
+  );
 }
 
-export function isMeResponse(value: unknown): value is MeResponse {
-  return typeof value === "object" && value !== null && isUser((value as MeResponse).user);
+/** A mismatch fails loudly instead of rendering a half signed-in UI. */
+export function isAuthStep(value: unknown): value is AuthStep {
+  if (!isRecord(value)) return false;
+  if (value.status === "authenticated") return isSession(value);
+  if (value.status === "new_password_required" || value.status === "email_verification_required") {
+    return isNonEmpty(value.challenge_id) && isTimestamp(value.challenge_expires_at);
+  }
+  return false;
 }
+
+export function isCodeSent(value: unknown): value is CodeSent {
+  return (
+    isRecord(value) &&
+    value.status === "code_sent" &&
+    (value.destination === null || typeof value.destination === "string") &&
+    isTimestamp(value.challenge_expires_at)
+  );
+}
+
+export const hasStatus = (expected: string) => (value: unknown) =>
+  isRecord(value) && value.status === expected;
