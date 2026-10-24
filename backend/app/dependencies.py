@@ -7,14 +7,19 @@ from collections.abc import Iterator
 from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
-from app.access.models import AccessSession
 from app.access.service import find_active_session
+from app.auth.principal import Principal, UserProfile
+from app.auth.service import find_active_user_session
+from app.config import AuthMode
 from app.errors import ApiError, not_authenticated
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "mydubb_session"
+# Cognito-mode session cookie. A different name from the Access Code cookie, and a different
+# table: neither mode can ever accept the other's session.
+AUTH_COOKIE = "mydubb_auth"
 CSRF_HEADER = "X-CSRF-Token"
 
 
@@ -34,7 +39,24 @@ def get_db(services: AppServices = Depends(get_services)) -> Iterator[Session]:
         db.close()
 
 
-def require_session(request: Request, db: Session = Depends(get_db)) -> AccessSession:
+def require_session(
+    request: Request,
+    db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
+) -> Principal:
+    if services.settings.auth_mode is AuthMode.COGNITO:
+        token = request.cookies.get(AUTH_COOKIE)
+        found = find_active_user_session(db, token) if token else None
+        if found is None:
+            # Expired, revoked, logged out, unknown, or the user is disabled in MyDubb.
+            raise not_authenticated()
+        session, user = found
+        return Principal(
+            session_id=session.id,
+            csrf_token=session.csrf_token,
+            expires_at=session.expires_at,
+            user=UserProfile(id=user.id, email=user.email, display_name=user.display_name),
+        )
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         raise not_authenticated()
@@ -42,17 +64,17 @@ def require_session(request: Request, db: Session = Depends(get_db)) -> AccessSe
     if record is None:
         # Expired, revoked (logged out) or unknown sessions are all rejected the same way.
         raise not_authenticated()
-    return record
+    return Principal(
+        session_id=record.id, csrf_token=record.csrf_token, expires_at=record.expires_at
+    )
 
 
-def require_csrf(
-    request: Request, session: AccessSession = Depends(require_session)
-) -> AccessSession:
+def require_csrf(request: Request, principal: Principal = Depends(require_session)) -> Principal:
     """Synchronizer-token CSRF check for state-changing requests made with a session."""
     submitted = request.headers.get(CSRF_HEADER, "")
-    if not submitted or not hmac.compare_digest(submitted, session.csrf_token):
+    if not submitted or not hmac.compare_digest(submitted, principal.csrf_token):
         raise ApiError(status.HTTP_403_FORBIDDEN, "csrf_failed", "CSRF validation failed.")
-    return session
+    return principal
 
 
 _missing_ip_header_logged = False

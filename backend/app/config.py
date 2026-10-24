@@ -4,6 +4,7 @@ All settings come from the environment (optionally a local `.env` file in develo
 Invalid or unsafe combinations fail at startup instead of silently degrading.
 """
 
+import base64
 import re
 import tempfile
 from enum import StrEnum
@@ -40,6 +41,13 @@ class AudioProcessorChoice(StrEnum):
     FFMPEG = "ffmpeg"
 
 
+class AuthMode(StrEnum):
+    # The Private Beta Access Code (default) or Amazon Cognito email/password accounts. The two are
+    # exclusive: each mode serves only its own login endpoints and accepts only its own sessions.
+    ACCESS_CODE = "access_code"
+    COGNITO = "cognito"
+
+
 DEFAULT_AZURE_TRANSLATOR_ENDPOINT = "https://api.cognitive.microsofttranslator.com"
 # Azure Translator limit per request is 50,000 characters (service-limits documentation).
 AZURE_TRANSLATOR_MAX_REQUEST_CHARS = 50_000
@@ -59,6 +67,11 @@ _REGION = re.compile(r"[A-Za-z0-9-]{1,64}")
 # Speech region identifiers (e.g. westus2) become part of the host name, so they stay strict.
 _SPEECH_REGION = re.compile(r"[a-z0-9]{2,30}")
 _SUPPORTED_DB_SCHEMES = ("postgresql+psycopg://", "postgresql://", "postgres://")
+# AWS region names (e.g. us-west-2) become part of the Cognito host name, so they stay strict.
+_AWS_REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-\d")
+# Patterns from the Cognito API reference (UserPoolId, ClientId).
+_USER_POOL_ID = re.compile(r"([a-z]{2}(?:-[a-z]+)+-\d)_[0-9a-zA-Z]+")
+_CLIENT_ID = re.compile(r"[\w+]{1,128}")
 
 
 def to_sqlalchemy_url(url: str) -> str:
@@ -78,7 +91,34 @@ class Settings(BaseSettings):
     database_url: SecretStr
     # Allows for serverless Postgres cold starts (e.g. Neon) without hanging indefinitely.
     db_connect_timeout_seconds: int = Field(default=10, ge=2, le=60)
-    access_code: SecretStr
+
+    auth_mode: AuthMode = AuthMode.ACCESS_CODE
+    # Required with AUTH_MODE=access_code; ignored with AUTH_MODE=cognito.
+    access_code: SecretStr | None = None
+
+    # Amazon Cognito user pool (only validated and used when AUTH_MODE=cognito). The backend
+    # calls the public user pool API operations only, so it needs no AWS credentials.
+    cognito_region: str | None = None
+    cognito_user_pool_id: str | None = None
+    cognito_client_id: str | None = None
+    # Secret of a confidential app client; requests then carry a SECRET_HASH.
+    cognito_client_secret: SecretStr | None = None
+    # Total time allowed for one request to Cognito. Nothing is retried.
+    cognito_timeout_seconds: float = Field(default=10, ge=2, le=30)
+    # 32-byte key (URL-safe base64) that encrypts the Cognito session/access token kept in the
+    # database while a sign-in step (new password, email verification) is pending.
+    auth_token_encryption_key: SecretStr | None = None
+    # Lifetime of a pending sign-in step. The new-password step uses Cognito's own sign-in
+    # session, so keep it at or below the app client's "authentication flow session duration"
+    # (3 minutes by default). Email verification uses the access token (60 minutes by default).
+    auth_new_password_challenge_ttl_seconds: int = Field(default=180, ge=60, le=900)
+    auth_email_verification_challenge_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    # Password recovery and verification-code requests per sliding window (every request
+    # counts, failed or not): per client, per email address and overall.
+    auth_recovery_max_per_client: int = Field(default=5, ge=1)
+    auth_recovery_max_per_email: int = Field(default=3, ge=1)
+    auth_recovery_max_global: int = Field(default=50, ge=1)
+    auth_recovery_window_seconds: int = Field(default=900, ge=1)
 
     provider_mode: ProviderMode
     # Explicit opt-in to run mock providers with APP_ENV=production (online mock beta).
@@ -174,13 +214,21 @@ class Settings(BaseSettings):
 
     @field_validator("access_code")
     @classmethod
-    def _access_code_strength(cls, value: SecretStr) -> SecretStr:
-        if len(value.get_secret_value()) < 8:
+    def _access_code_strength(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value()) < 8:
             raise ValueError("ACCESS_CODE must be at least 8 characters")
         return value
 
     @model_validator(mode="after")
     def _check_environment_rules(self) -> "Settings":
+        if self.auth_mode is AuthMode.ACCESS_CODE:
+            if self.access_code is None:
+                raise ValueError("ACCESS_CODE is required when AUTH_MODE=access_code")
+            code = self.access_code.get_secret_value()
+            if self.app_env is AppEnv.PRODUCTION and len(code) < 16:
+                raise ValueError("ACCESS_CODE must be at least 16 characters in production")
+        else:
+            self._check_cognito()
         if self.provider_mode is ProviderMode.AZURE:
             # Everything real, or it does not start: no component silently stays a mock.
             missing = [
@@ -238,9 +286,44 @@ class Settings(BaseSettings):
                 )
             if self.mock_fail_stage is not MockFailStage.NONE:
                 raise ValueError("MOCK_FAIL_STAGE is not allowed when APP_ENV=production")
-            if len(self.access_code.get_secret_value()) < 16:
-                raise ValueError("ACCESS_CODE must be at least 16 characters in production")
         return self
+
+    def _check_cognito(self) -> None:
+        region = self.cognito_region or ""
+        if not _AWS_REGION.fullmatch(region):
+            raise ValueError(
+                "COGNITO_REGION is required when AUTH_MODE=cognito and must be a region name "
+                "such as us-west-2"
+            )
+        pool = _USER_POOL_ID.fullmatch(self.cognito_user_pool_id or "")
+        if pool is None:
+            raise ValueError(
+                "COGNITO_USER_POOL_ID is required when AUTH_MODE=cognito and must look like "
+                "us-west-2_AbC123"
+            )
+        if pool.group(1) != region:
+            raise ValueError("COGNITO_USER_POOL_ID must belong to COGNITO_REGION")
+        if not _CLIENT_ID.fullmatch(self.cognito_client_id or ""):
+            raise ValueError(
+                "COGNITO_CLIENT_ID is required when AUTH_MODE=cognito (the app client ID)"
+            )
+        if self.cognito_client_secret is not None and not _HEADER_VALUE.fullmatch(
+            self.cognito_client_secret.get_secret_value()
+        ):
+            raise ValueError("COGNITO_CLIENT_SECRET must be printable ASCII without spaces")
+        key = self.auth_token_encryption_key
+        if key is None or decode_encryption_key(key.get_secret_value()) is None:
+            raise ValueError(
+                "AUTH_TOKEN_ENCRYPTION_KEY is required when AUTH_MODE=cognito and must be "
+                "32 random bytes in URL-safe base64 (44 characters)"
+            )
+
+    @property
+    def cognito_issuer(self) -> str:
+        """Issuer of the user pool's tokens; with `sub` it identifies a user."""
+        return (
+            f"https://cognito-idp.{self.cognito_region}.amazonaws.com/{self.cognito_user_pool_id}"
+        )
 
     def _check_azure_translator(self) -> None:
         key = self.azure_translator_key.get_secret_value() if self.azure_translator_key else ""
@@ -301,6 +384,15 @@ class Settings(BaseSettings):
             "speech": self.speech_provider.value,
             "audio": self.audio_processor.value,
         }
+
+
+def decode_encryption_key(value: str) -> bytes | None:
+    """The 32-byte key encoded in AUTH_TOKEN_ENCRYPTION_KEY, or None if it is not one."""
+    try:
+        key = base64.urlsafe_b64decode(value.encode("ascii"))
+    except (ValueError, UnicodeEncodeError):
+        return None
+    return key if len(key) == 32 else None
 
 
 class ConfigurationError(RuntimeError):

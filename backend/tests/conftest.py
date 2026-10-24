@@ -5,6 +5,7 @@ The suite drops and recreates the `public` schema of that database, so never poi
 at a database whose data matters.
 """
 
+import base64
 import os
 import time
 from collections.abc import Callable, Iterator
@@ -20,9 +21,20 @@ from sqlalchemy import Engine, create_engine, text
 from app.audio.ffmpeg import AudioTools, locate_tools
 from app.config import Settings, to_sqlalchemy_url
 from app.main import create_app
+from app.services import build_services
+from tests.fake_cognito import FakeCognito
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 ACCESS_CODE = "correct-access-code"
+TEST_ENCRYPTION_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
+COGNITO_SETTINGS: dict[str, Any] = {
+    "auth_mode": "cognito",
+    "access_code": None,
+    "cognito_region": "us-west-2",
+    "cognito_user_pool_id": "us-west-2_TestPool1",
+    "cognito_client_id": "testclientid123",
+    "auth_token_encryption_key": TEST_ENCRYPTION_KEY,
+}
 
 VALID_JOB = {
     "transcript": "Spring Boot uses Dependency Injection to automatically manage objects.",
@@ -69,7 +81,12 @@ def engine(database_url: str) -> Iterator[Engine]:
 def db_engine(engine: Engine) -> Engine:
     """A migrated database with empty tables."""
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE jobs, access_sessions, glossary_candidates"))
+        conn.execute(
+            text(
+                "TRUNCATE jobs, access_sessions, glossary_candidates, users, user_sessions, "
+                "auth_challenges, password_reset_events"
+            )
+        )
     return engine
 
 
@@ -114,6 +131,46 @@ def make_client(
 @pytest.fixture
 def client(make_client: Callable[..., TestClient]) -> TestClient:
     return make_client()
+
+
+@pytest.fixture
+def fake_cognito() -> FakeCognito:
+    return FakeCognito()
+
+
+@pytest.fixture
+def make_cognito_client(
+    db_engine: Engine, make_settings: Callable[..., Settings], fake_cognito: FakeCognito
+) -> Iterator[Callable[..., TestClient]]:
+    """App instances in AUTH_MODE=cognito sharing one fake user pool and the test database."""
+    clients: list[TestClient] = []
+
+    def factory(**overrides: Any) -> TestClient:
+        settings = make_settings(**{**COGNITO_SETTINGS, **overrides})
+        client = TestClient(
+            create_app(services=build_services(settings, cognito_client=fake_cognito))
+        )
+        client.__enter__()
+        clients.append(client)
+        return client
+
+    yield factory
+    for client in reversed(clients):
+        client.__exit__(None, None, None)
+
+
+@pytest.fixture
+def cognito_client(make_cognito_client: Callable[..., TestClient]) -> TestClient:
+    return make_cognito_client()
+
+
+def sign_in(client: TestClient, email: str, password: str) -> dict:
+    """Sign in a verified, confirmed user; returns the `authenticated` body."""
+    response = client.post("/api/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "authenticated", body
+    return body
 
 
 def login(client: TestClient, code: str = ACCESS_CODE) -> str:

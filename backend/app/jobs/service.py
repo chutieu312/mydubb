@@ -22,7 +22,7 @@ INTERRUPTED_MESSAGE = (
 def create_job(
     db: Session,
     *,
-    session_id: uuid.UUID,
+    session_id: uuid.UUID | None,
     voice: str,
     first_sentence_start_seconds: int,
     last_sentence_start_seconds: int,
@@ -32,10 +32,12 @@ def create_job(
     audio_processor: str,
     runner_id: str,
     audio_speed: AudioSpeed = DEFAULT_SPEED,
+    user_id: uuid.UUID | None = None,
 ) -> Job:
     now = datetime.now(UTC)
     job = Job(
         session_id=session_id,
+        user_id=user_id,
         status=JobStatus.QUEUED,
         runner_id=runner_id,
         heartbeat_at=now,
@@ -58,12 +60,20 @@ def create_job(
     return job
 
 
-def get_owned_job(db: Session, job_id: uuid.UUID, session_id: uuid.UUID) -> Job | None:
-    """Return the job only if it belongs to the given session.
+def get_owned_job(
+    db: Session, job_id: uuid.UUID, *, session_id: uuid.UUID, user_id: uuid.UUID | None
+) -> Job | None:
+    """Return the job only if it belongs to the caller.
 
-    A job ID alone never grants access; other sessions' jobs look like missing jobs.
+    Cognito mode (`user_id` set): jobs of that user, from any of their sessions. Access Code
+    mode: jobs of that session that belong to no user. A job ID alone never grants access;
+    other callers' jobs look like missing jobs.
     """
-    return db.scalar(select(Job).where(Job.id == job_id, Job.session_id == session_id))
+    if user_id is not None:
+        owner = Job.user_id == user_id
+    else:
+        owner = (Job.session_id == session_id) & Job.user_id.is_(None)
+    return db.scalar(select(Job).where(Job.id == job_id, owner))
 
 
 def transition(

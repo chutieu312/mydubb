@@ -5,6 +5,7 @@ import logging
 import time
 
 from app.access.service import delete_stale_sessions
+from app.auth.service import delete_stale_auth_rows
 from app.db import session_scope
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
@@ -78,8 +79,16 @@ def run_cleanup(services: AppServices) -> None:
     removed = services.result_store.purge_expired()
     with session_scope(services.session_factory) as db:
         sessions = delete_stale_sessions(db)
-    if removed or sessions:
-        logger.info("Cleanup removed %d result(s) and %d stale session(s)", removed, sessions)
+        # Cognito sessions, finished sign-in steps and old reset events (empty in Access Code
+        # mode); cleaned in both modes so nothing lingers after switching back.
+        auth_rows = delete_stale_auth_rows(db)
+    if removed or sessions or auth_rows:
+        logger.info(
+            "Cleanup removed %d result(s), %d stale session(s) and %d auth row(s)",
+            removed,
+            sessions,
+            auth_rows,
+        )
 
 
 async def cleanup_loop(services: AppServices) -> None:

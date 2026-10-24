@@ -60,6 +60,11 @@ class Job(Base):
     session_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("access_sessions.id", ondelete="SET NULL"), index=True
     )
+    # Owner user in Cognito mode (then `session_id` is NULL). Access Code jobs keep NULL here,
+    # so they are never visible to a Cognito user.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     status: Mapped[str] = mapped_column(String(20), index=True)
     # Instance (process) that accepted and runs the job, and its last liveness signal.
     # Nullable so the schema change stays backward compatible with older code.
