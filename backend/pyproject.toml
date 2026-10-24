@@ -13,6 +13,8 @@ dependencies = [
     "python-dotenv>=1.2,<2",
     # Azure Translator client (production code); also used by the test client.
     "httpx>=0.28,<0.29",
+    # AES-GCM for the short-lived Cognito material kept server-side during a sign-in step.
+    "cryptography>=50.0.2,<51",
 ]
 
 [dependency-groups]

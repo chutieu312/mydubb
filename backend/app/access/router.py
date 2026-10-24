@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.access.models import AccessSession
 from app.access.service import access_code_matches, create_session, revoke_session
+from app.auth.principal import Principal
 from app.dependencies import (
     SESSION_COOKIE,
     client_key,
@@ -50,6 +51,8 @@ def login(
             extra={"retry_after_seconds": retry_after},
         )
     settings = services.settings
+    # This router is only mounted with AUTH_MODE=access_code, where the code is required.
+    assert settings.access_code is not None
     if not access_code_matches(body.access_code, settings.access_code.get_secret_value()):
         limiter.record_failure(client)
         raise ApiError(
@@ -72,21 +75,23 @@ def login(
 
 
 @router.get("", response_model=SessionResponse)
-def current_session(session: AccessSession = Depends(require_session)) -> SessionResponse:
+def current_session(principal: Principal = Depends(require_session)) -> SessionResponse:
     return SessionResponse(
-        authenticated=True, csrf_token=session.csrf_token, expires_at=session.expires_at
+        authenticated=True, csrf_token=principal.csrf_token, expires_at=principal.expires_at
     )
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
     response: Response,
-    session: AccessSession = Depends(require_csrf),
+    principal: Principal = Depends(require_csrf),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> None:
-    # `session` was loaded through the same request-scoped DB session as `db`.
-    revoke_session(db, session)
+    # The row was loaded through the same request-scoped DB session as `db`.
+    session = db.get(AccessSession, principal.session_id)
+    if session is not None:
+        revoke_session(db, session)
     response.delete_cookie(
         SESSION_COOKIE,
         path="/",

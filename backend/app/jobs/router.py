@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.access.models import AccessSession
 from app.audio.speed import AudioSpeed, DurationTarget
+from app.auth.principal import Principal
 from app.dependencies import get_db, get_services, require_csrf, require_session
 from app.errors import ApiError
 from app.jobs import service
@@ -62,7 +62,7 @@ GLOSSARY_NOTICE = (
 def create_job(
     body: CreateJobRequest,
     response: Response,
-    session: AccessSession = Depends(require_csrf),
+    principal: Principal = Depends(require_csrf),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResponse:
@@ -80,7 +80,9 @@ def create_job(
     try:
         job = service.create_job(
             db,
-            session_id=session.id,
+            # The owner comes from the session, never from the request body.
+            session_id=principal.session_id if principal.user is None else None,
+            user_id=principal.user_id,
             voice=body.voice.value,
             first_sentence_start_seconds=parse_timestamp(body.first_sentence_start),
             last_sentence_start_seconds=parse_timestamp(body.last_sentence_start),
@@ -107,8 +109,10 @@ def create_job(
     return JobResponse.from_job(job)
 
 
-def _owned_job_or_404(db: Session, job_id: uuid.UUID, session: AccessSession) -> Job:
-    job = service.get_owned_job(db, job_id, session.id)
+def _owned_job_or_404(db: Session, job_id: uuid.UUID, principal: Principal) -> Job:
+    job = service.get_owned_job(
+        db, job_id, session_id=principal.session_id, user_id=principal.user_id
+    )
     if job is None:
         raise ApiError(status.HTTP_404_NOT_FOUND, "job_not_found", "Job not found.")
     return job
@@ -140,20 +144,20 @@ def _available_result(job: Job, services: AppServices) -> StoredResult:
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: uuid.UUID,
-    session: AccessSession = Depends(require_session),
+    principal: Principal = Depends(require_session),
     db: Session = Depends(get_db),
 ) -> JobResponse:
-    return JobResponse.from_job(_owned_job_or_404(db, job_id, session))
+    return JobResponse.from_job(_owned_job_or_404(db, job_id, principal))
 
 
 @router.get("/{job_id}/result", response_model=JobResultResponse)
 def get_result(
     job_id: uuid.UUID,
-    session: AccessSession = Depends(require_session),
+    principal: Principal = Depends(require_session),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResultResponse:
-    job = _owned_job_or_404(db, job_id, session)
+    job = _owned_job_or_404(db, job_id, principal)
     stored = _available_result(job, services)
     speed = AudioSpeed(job.audio_speed_percent)
     notices = []
@@ -203,11 +207,11 @@ def get_result(
 def get_result_audio(
     job_id: uuid.UUID,
     download: bool = False,
-    session: AccessSession = Depends(require_session),
+    principal: Principal = Depends(require_session),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> FileResponse:
-    job = _owned_job_or_404(db, job_id, session)
+    job = _owned_job_or_404(db, job_id, principal)
     stored = _available_result(job, services)
     return FileResponse(
         stored.audio_path,
