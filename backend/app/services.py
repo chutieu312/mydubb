@@ -13,13 +13,17 @@ from app.audio.base import AudioProcessor
 from app.audio.ffmpeg import AudioToolError, check_capabilities, locate_tools
 from app.audio.fitter import FfmpegAudioProcessor
 from app.audio.mock import MockAudioProcessor
+from app.auth.cognito import CognitoClient, HttpCognitoClient
+from app.auth.crypto import TokenCipher
 from app.config import (
     AudioProcessorChoice,
+    AuthMode,
     ConfigurationError,
     MockFailStage,
     Settings,
     SpeechProviderChoice,
     TranslationProviderChoice,
+    decode_encryption_key,
 )
 from app.db import create_db_engine, create_session_factory
 from app.jobs.executor import BoundedThreadJobExecutor, JobExecutor
@@ -42,6 +46,7 @@ class AppServices:
     instance_id: str
     engine: Engine
     session_factory: sessionmaker[Session]
+    # Failed sign-ins (Access Code, or Cognito email/password).
     access_limiter: FailedAttemptLimiter
     result_store: ResultStore
     executor: JobExecutor
@@ -50,6 +55,13 @@ class AppServices:
     audio: AudioProcessor
     # Request-rate limiter shared by all jobs when speech uses Azure; closed at shutdown.
     speech_limiter: RequestRateLimiter | None = None
+    # AUTH_MODE=cognito only: the user pool client, the cipher for pending sign-in steps, and the
+    # limiter for password recovery and verification-code requests (every request counts).
+    cognito: CognitoClient | None = None
+    token_cipher: TokenCipher | None = None
+    recovery_limiter: FailedAttemptLimiter | None = None
+    # Same, keyed by the (hashed) email address of forgot/reset-password requests.
+    recovery_email_limiter: FailedAttemptLimiter | None = None
 
 
 def build_translator(
@@ -132,13 +144,53 @@ def build_audio(settings: Settings) -> AudioProcessor:
     )
 
 
+def build_auth(
+    settings: Settings, cognito_client: CognitoClient | None
+) -> tuple[
+    CognitoClient | None,
+    TokenCipher | None,
+    FailedAttemptLimiter | None,
+    FailedAttemptLimiter | None,
+]:
+    if settings.auth_mode is not AuthMode.COGNITO:
+        return None, None, None, None
+    # Settings validation guarantees these; never fall back to the Access Code.
+    assert settings.cognito_region is not None and settings.cognito_client_id is not None
+    assert settings.auth_token_encryption_key is not None
+    key = decode_encryption_key(settings.auth_token_encryption_key.get_secret_value())
+    assert key is not None
+    if cognito_client is None:
+        # The HTTP client library logs every request URL at INFO; keep it out of the logs.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        cognito_client = HttpCognitoClient(
+            region=settings.cognito_region,
+            client_id=settings.cognito_client_id,
+            client_secret=settings.cognito_client_secret,
+            timeout_seconds=settings.cognito_timeout_seconds,
+        )
+    limiter = FailedAttemptLimiter(
+        max_per_client=settings.auth_recovery_max_per_client,
+        max_global=settings.auth_recovery_max_global,
+        window_seconds=settings.auth_recovery_window_seconds,
+    )
+    email_limiter = FailedAttemptLimiter(
+        max_per_client=settings.auth_recovery_max_per_email,
+        # The overall limit is enforced by `limiter`; this one only counts per address.
+        max_global=2**31,
+        window_seconds=settings.auth_recovery_window_seconds,
+    )
+    return cognito_client, TokenCipher(key), limiter, email_limiter
+
+
 def build_services(
     settings: Settings,
     *,
     translation_transport: httpx.BaseTransport | None = None,
     speech_transport: httpx.BaseTransport | None = None,
+    cognito_client: CognitoClient | None = None,
 ) -> AppServices:
-    """The transports replace the network for Azure Translator / Azure Speech (tests only)."""
+    """The transports replace the network for Azure Translator / Azure Speech, and
+    `cognito_client` replaces Amazon Cognito (tests only)."""
     engine = create_db_engine(settings.sqlalchemy_url, settings.db_connect_timeout_seconds)
     session_factory = create_session_factory(engine)
     result_store = LocalFileResultStore(settings.result_storage_dir)
@@ -152,6 +204,9 @@ def build_services(
         else None
     )
     audio = build_audio(settings)
+    cognito, token_cipher, recovery_limiter, recovery_email_limiter = build_auth(
+        settings, cognito_client
+    )
     pipeline = JobPipeline(
         session_factory=session_factory,
         translator=build_translator(settings, translation_transport),
@@ -180,4 +235,8 @@ def build_services(
         pipeline=pipeline,
         audio=audio,
         speech_limiter=speech_limiter,
+        cognito=cognito,
+        token_cipher=token_cipher,
+        recovery_limiter=recovery_limiter,
+        recovery_email_limiter=recovery_email_limiter,
     )

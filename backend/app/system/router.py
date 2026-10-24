@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.config import AuthMode
 from app.db import check_database
 from app.dependencies import get_services
 from app.services import AppServices
@@ -45,4 +46,10 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
         ],
         "timestamp_format": "HH:MM:SS",
         "result_ttl_seconds": settings.result_ttl_seconds,
+        # Which login UI to show. Accounts are created by an administrator: no sign-up.
+        "auth": {
+            "mode": settings.auth_mode.value,
+            "self_registration": False,
+            "password_reset": settings.auth_mode is AuthMode.COGNITO,
+        },
     }

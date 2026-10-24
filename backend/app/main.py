@@ -15,7 +15,8 @@ from fastapi.responses import FileResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.access.router import router as access_router
-from app.config import AppEnv, Settings, load_settings
+from app.auth.router import router as auth_router
+from app.config import AppEnv, AuthMode, Settings, load_settings
 from app.errors import error_response, install_error_handlers
 from app.jobs.router import router as jobs_router
 from app.maintenance import (
@@ -151,6 +152,8 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             "(ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true)",
             ", ".join(mocked),
         )
+    if settings.auth_mode is AuthMode.COGNITO and settings.access_code is not None:
+        logger.warning("ACCESS_CODE is set but ignored because AUTH_MODE=cognito")
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -179,6 +182,9 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
                 await asyncio.to_thread(interrupt_unfinished_jobs, services)
             except Exception:
                 logger.exception("Could not mark unfinished jobs at shutdown")
+            close = getattr(services.cognito, "close", None)
+            if close is not None:
+                close()
             services.engine.dispose()
 
     app = FastAPI(
@@ -198,7 +204,11 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     )
     install_error_handlers(app)
     app.include_router(system_router)
-    app.include_router(access_router)
+    # The two login modes are exclusive: only the active mode's endpoints exist.
+    if settings.auth_mode is AuthMode.COGNITO:
+        app.include_router(auth_router)
+    else:
+        app.include_router(access_router)
     app.include_router(jobs_router)
     if settings.frontend_dist_dir is not None:
         _install_frontend(app, settings.frontend_dist_dir)

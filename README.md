@@ -17,7 +17,9 @@ the architecture document). See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design and the roadmap,
 [docs/API.md](docs/API.md) for API contracts, [docs/WORKFLOW.md](docs/WORKFLOW.md) for the
 branch/CI workflow and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Render/Neon/domain setup and
-operations.
+operations. Sign-in uses the Private Beta Access Code by default; invited email/password accounts
+with Amazon Cognito (`AUTH_MODE=cognito`, not enabled in production yet) are described in
+[docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) and [docs/AUTH_API.md](docs/AUTH_API.md).
 
 ## Quick start (end to end, Docker)
 
