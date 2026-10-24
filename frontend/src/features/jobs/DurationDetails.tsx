@@ -51,7 +51,7 @@ function paddingText(duration: AudioDuration): string {
 /** Baseline, speed, target and measured durations of the real audio, side by side, unrounded. */
 export function DurationDetails({ duration }: Props) {
   return (
-    <div className="duration" aria-label="Audio duration">
+    <div className="duration" role="group" aria-label="Audio duration">
       <p>
         <strong>Baseline</strong> {seconds(duration.baseline_seconds)} · <strong>Speed</strong>{" "}
         {speedLabel(duration.speed)} · <strong>Target {seconds(duration.target_seconds)}</strong> ·{" "}

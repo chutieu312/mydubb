@@ -30,3 +30,18 @@ export function azureDisclosure(providers: Providers): string | null {
   }
   return null;
 }
+
+/**
+ * One line shown next to the submit button: the same fact as azureDisclosure(), without the
+ * detail. Null when nothing leaves the server (all mock).
+ */
+export function azureDisclosureShort(providers: Providers): string | null {
+  const translator = providers.translation === "azure";
+  const speech = providers.speech === "azure";
+  if (translator && speech) {
+    return "Your text is sent to Microsoft Azure to translate it and create the audio.";
+  }
+  if (translator) return "Your text is sent to Microsoft Azure to be translated.";
+  if (speech) return "Your text is sent to Microsoft Azure to create the audio.";
+  return null;
+}

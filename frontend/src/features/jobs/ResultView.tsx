@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { JobResult } from "../../api/types";
-import { formatOutputDuration, speedLabel } from "../../lib/speed";
-import { DurationDetails } from "./DurationDetails";
+import { formatClock, speedLabel } from "../../lib/speed";
+import { AudioDetails } from "./AudioDetails";
 
 type ResultState =
   | { kind: "loading" }
@@ -13,10 +13,12 @@ type ResultState =
 
 interface Props {
   jobId: string;
+  // The voice of this job, as the server stored it (not the voice picked on the form now).
+  voiceLabel: string;
   onSessionExpired: () => void;
 }
 
-export function ResultView({ jobId, onSessionExpired }: Props) {
+export function ResultView({ jobId, voiceLabel, onSessionExpired }: Props) {
   const [state, setState] = useState<ResultState>({ kind: "loading" });
   const onExpiredRef = useRef(onSessionExpired);
 
@@ -45,79 +47,124 @@ export function ResultView({ jobId, onSessionExpired }: Props) {
     return () => controller.abort();
   }, [jobId]);
 
-  if (state.kind === "loading") return <p>Loading result…</p>;
+  if (state.kind === "loading") return <p className="muted">Loading result…</p>;
   if (state.kind === "expired") {
     return (
-      <div className="notice expired" role="status">
-        <strong>Result expired.</strong> {state.message}
+      <div className="callout warning" role="status">
+        <strong>Result expired.</strong> {state.message} You can generate the audio again from the
+        form above.
       </div>
     );
   }
   if (state.kind === "error") {
     return (
-      <p className="error" role="alert">
+      <p className="callout error" role="alert">
         {state.message}
       </p>
     );
   }
 
   const { result } = state;
+  const { audio, translation } = result;
+  const duration = audio.duration;
+  const relation = result.speed > 1 ? "shorter" : "longer";
+
   return (
-    <div className="stack">
-      {result.notices.length > 0 && (
-        <ul className="notice">
-          {result.notices.map((notice) => (
-            <li key={notice}>{notice}</li>
-          ))}
-        </ul>
+    <div className="result stack">
+      <p className="success">
+        <span aria-hidden="true">✓ </span>
+        {audio.is_fixture ? "Mock sample ready" : "Audio ready"}
+        {!audio.duration_adjusted && <span className="chip">Duration not adjusted</span>}
+      </p>
+
+      {audio.is_fixture && (
+        <div className="callout warning">
+          <strong>Sample audio, not your dubbing.</strong> This audio is a fixed development sample.
+          It was NOT generated from your transcript and does NOT match the target duration.
+        </div>
       )}
 
-      <h3>
-        Vietnamese translation
-        {result.translation.is_illustrative ? (
-          <span className="badge">Illustrative mock</span>
-        ) : (
-          result.translation.provider === "azure-translator" && (
-            <span className="badge">Azure Translator</span>
-          )
-        )}
-      </h3>
-      {/* Rendered as text: React escapes it, never interpreted as HTML. */}
-      <div className="translation">{result.translation.text}</div>
-
-      <h3>
-        Audio
-        {result.audio.is_fixture && <span className="badge">Mock fixture</span>}
-        {!result.audio.is_fixture && result.audio.provider === "azure-speech" && (
-          <span className="badge">Azure Speech</span>
-        )}
-        {result.audio.duration_adjusted ? (
-          <span className="badge">Duration adjusted</span>
-        ) : (
-          <span className="badge">Duration not adjusted</span>
-        )}
-      </h3>
-      <audio controls preload="metadata" src={result.audio.url} className="player">
+      {/* The file is already processed at the chosen speed, so the player stays at 1x. */}
+      <audio controls preload="metadata" src={audio.url} className="player">
         Your browser does not support audio playback.
       </audio>
-      {/* The file is already processed at the chosen speed, so the player stays at 1x. */}
-      {result.audio.duration ? (
-        <DurationDetails duration={result.audio.duration} />
-      ) : (
-        <p className="muted" aria-label="Audio speed">
+
+      <div className="result-actions">
+        <dl className="facts">
+          <div>
+            <dt>Voice</dt>
+            <dd>{voiceLabel}</dd>
+          </div>
+          <div>
+            <dt>Speed</dt>
+            <dd>{speedLabel(result.speed)}</dd>
+          </div>
+          {duration ? (
+            <>
+              <div>
+                <dt>Target length</dt>
+                <dd>{formatClock(duration.target_seconds)}</dd>
+              </div>
+              <div>
+                <dt>Actual length</dt>
+                <dd>{formatClock(duration.mp3_decoded_seconds)}</dd>
+              </div>
+            </>
+          ) : (
+            <div>
+              <dt>Planned length</dt>
+              <dd>{formatClock(result.output_duration_seconds)}</dd>
+            </div>
+          )}
+        </dl>
+        <a className="button primary" href={audio.download_url} download>
+          Download MP3
+        </a>
+      </div>
+
+      {!audio.duration_adjusted && (
+        <p className="callout warning small" aria-label="Audio speed">
           Selected speed {speedLabel(result.speed)} · baseline{" "}
-          {formatOutputDuration(result.baseline_duration_seconds)} · planned length{" "}
-          {formatOutputDuration(result.output_duration_seconds)}. This audio was not adjusted, so
-          it does not have that length.
+          {formatClock(result.baseline_duration_seconds)} · planned length{" "}
+          {formatClock(result.output_duration_seconds)}. This audio was not adjusted, so it does not
+          have that length.
         </p>
       )}
-      <a className="button" href={result.audio.download_url} download>
-        Download MP3
-      </a>
-      <p className="muted">
-        <small>
-          Temporary result, available until {new Date(result.expires_at).toLocaleString()}.
-        </small>
+      {audio.duration_adjusted && result.speed !== 1 && (
+        <p className="callout warning small">
+          At {speedLabel(result.speed)} this audio is {relation} than the time between your two
+          timestamps, so it will not match the video&apos;s length for that stretch.
+        </p>
+      )}
+      {!audio.is_fixture && (
+        <p className="small muted">
+          English terms outside our glossary can occasionally be pronounced imperfectly.
+        </p>
+      )}
+
+      <details className="disclosure" open>
+        <summary>
+          Vietnamese translation
+          {translation.is_illustrative && <span className="chip">Illustrative mock</span>}
+        </summary>
+        <div className="disclosure-body">
+          {translation.is_illustrative && (
+            <p className="small muted">This is placeholder text, not a real translation.</p>
+          )}
+          {/* Rendered as text: React escapes it, never interpreted as HTML. */}
+          <div className="translation">{translation.text}</div>
+        </div>
+      </details>
+
+      <AudioDetails result={result} />
+
+      <p className="small muted">
+        Available until{" "}
+        {new Date(result.expires_at).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })}
+        . Download a copy to keep it.
       </p>
     </div>
   );

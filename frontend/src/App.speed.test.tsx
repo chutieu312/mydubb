@@ -144,52 +144,56 @@ describe("audio speed choice", () => {
     expect(new Set(radios.map((r) => r.name))).toEqual(new Set(["speed"]));
   });
 
-  it("explains that other speeds change the file, below the timestamps", async () => {
-    await openForm();
+  it("puts the speed choice after the timestamps and explains that other speeds change the file", async () => {
+    const user = await openForm();
     const group = speedGroup();
-    expect(group.textContent).toContain("the downloaded file itself changes");
     const last = screen.getByLabelText("Last Sentence Start Time");
     expect(last.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await fillTimes(user);
+    expect(preview().textContent).not.toContain("downloaded file itself changes");
+    await user.click(screen.getByLabelText("1.5x"));
+    expect(preview().textContent).toContain("The downloaded file itself changes.");
   });
 
   it("shows nothing computed until both timestamps are valid", async () => {
     const user = await openForm();
-    expect(preview().textContent).toContain("Expected audio length—");
+    expect(preview().textContent).toContain("Enter both start times");
+    expect(preview().textContent).toContain("—");
     await user.type(screen.getByLabelText("First Sentence Start Time"), "00:00:05");
     await user.type(screen.getByLabelText("Last Sentence Start Time"), "00:00:05"); // not later
-    expect(preview().textContent).toContain("Expected audio length—");
-    expect(preview().textContent).not.toContain("(0 s)");
+    expect(preview().textContent).toContain("Enter both start times");
+    expect(preview().textContent).not.toContain("00:00:00");
   });
 
   it("updates the preview at once when the timestamps or the speed change", async () => {
     const user = await openForm();
     await fillTimes(user);
-    expect(preview().textContent).toContain("Duration at 1x (Last Start − First Start)00:00:20 (20 s)");
-    expect(preview().textContent).toContain("Selected speed1x");
-    expect(preview().textContent).toContain("Expected audio length00:00:20 (20 s)");
+    const length = () => preview().querySelector(".length-value")?.textContent;
+    expect(preview().textContent).toContain("00:00:20 at 1x");
+    expect(length()).toBe("00:00:20");
     expect(preview().textContent).not.toContain("shorter");
 
     await user.click(screen.getByLabelText("1.25x"));
-    expect(preview().textContent).toContain("Selected speed1.25x");
-    expect(preview().textContent).toContain("Expected audio length00:00:16 (16 s)");
+    expect(length()).toBe("00:00:16");
     expect(preview().textContent).toContain("the audio will be shorter than the time between");
 
     await user.click(screen.getByLabelText("0.75x"));
-    expect(preview().textContent).toContain("Expected audio length00:00:26.67 (26.67 s)");
+    expect(length()).toBe("00:00:26.67");
     expect(preview().textContent).toContain("the audio will be longer than the time between");
 
     // Changing a timestamp recomputes with the speed kept.
     await user.clear(screen.getByLabelText("Last Sentence Start Time"));
     await user.type(screen.getByLabelText("Last Sentence Start Time"), "00:00:35");
-    expect(preview().textContent).toContain("Duration at 1x (Last Start − First Start)00:00:30 (30 s)");
-    expect(preview().textContent).toContain("Expected audio length00:00:40 (40 s)");
+    expect(preview().textContent).toContain("00:00:30 at 1x");
+    expect(length()).toBe("00:00:40");
   });
 
   it("does not put FFmpeg or sample details in the input flow", async () => {
     const user = await openForm();
     await fillTimes(user);
     await user.click(screen.getByLabelText("1.75x"));
-    const form = screen.getByRole("button", { name: "Generate Dubbing" }).closest("form");
+    const form = screen.getByRole("button", { name: "Generate audio" }).closest("form");
     expect(form?.textContent).not.toMatch(/ffmpeg|atempo|samples|tempo/i);
   });
 
@@ -211,7 +215,7 @@ describe("audio speed choice", () => {
   it("sends 1 when the user did not touch the speed", async () => {
     const user = await openForm();
     await fillTimes(user);
-    await user.click(screen.getByRole("button", { name: "Generate Dubbing" }));
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
     await screen.findByText(/Planned audio length/);
     expect(created).toHaveLength(1);
     expect(created[0]?.speed).toBe(1);
@@ -222,7 +226,7 @@ describe("audio speed choice", () => {
     const user = await openForm();
     await fillTimes(user);
     await user.click(screen.getByLabelText(speedLabel(speed)));
-    await user.click(screen.getByRole("button", { name: "Generate Dubbing" }));
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
     await screen.findByText(/Planned audio length/);
     expect(created[0]?.speed).toBe(speed);
     // Only the choice is sent; the output length is the server's to calculate.
@@ -239,14 +243,14 @@ describe("audio speed choice", () => {
     const user = await openForm();
     await fillTimes(user);
     await user.click(screen.getByLabelText("1.5x"));
-    await user.click(screen.getByRole("button", { name: "Generate Dubbing" }));
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
 
     const status = await screen.findByText(/Planned audio length/);
     expect(status.textContent).toContain("Speed 1.5x");
-    expect(status.textContent).toContain("Planned audio length 00:00:13.33 (13.33 s)");
+    expect(status.textContent).toContain("Planned audio length 00:00:13.33");
 
     await user.click(screen.getByLabelText("2x"));
-    expect(preview().textContent).toContain("Selected speed2x");
+    expect((screen.getByLabelText("2x") as HTMLInputElement).checked).toBe(true);
     // The job panel shows what the server stored for that job, not the form.
     const after = screen.getByText(/Planned audio length/);
     expect(after.textContent).toContain("Speed 1.5x");
@@ -310,7 +314,7 @@ function stubResult(result: unknown) {
 describe("result of a job with a speed", () => {
   it("shows baseline, speed, target and the verified actual duration", async () => {
     stubResult(adjustedResult(1.75, 274286));
-    render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+    render(<ResultView jobId="j1" voiceLabel="Andrew Multilingual" onSessionExpired={() => {}} />);
     await screen.findByText("Vietnamese translation");
 
     const text = screen.getByLabelText("Audio duration").textContent ?? "";
@@ -323,7 +327,7 @@ describe("result of a job with a speed", () => {
 
   it("a speed of 1x also shows its baseline and speed", async () => {
     stubResult(adjustedResult(1, 480000));
-    render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+    render(<ResultView jobId="j1" voiceLabel="Andrew Multilingual" onSessionExpired={() => {}} />);
     await screen.findByText("Vietnamese translation");
     const text = screen.getByLabelText("Audio duration").textContent ?? "";
     expect(text).toContain("Baseline 20.000000 s · Speed 1x · Target 20.000000 s");
@@ -331,7 +335,7 @@ describe("result of a job with a speed", () => {
 
   it("does not speed the player up a second time: the file is already processed", async () => {
     stubResult(adjustedResult(2, 240000));
-    const { container } = render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+    const { container } = render(<ResultView jobId="j1" voiceLabel="Andrew Multilingual" onSessionExpired={() => {}} />);
     await screen.findByText("Vietnamese translation");
 
     const player = container.querySelector("audio") as HTMLAudioElement;
@@ -350,22 +354,22 @@ describe("result of a job with a speed", () => {
       duration: null as never,
     };
     stubResult(mock);
-    render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+    render(<ResultView jobId="j1" voiceLabel="Andrew Multilingual" onSessionExpired={() => {}} />);
     await screen.findByText("Vietnamese translation");
 
     expect(screen.queryByLabelText("Audio duration")).toBeNull();
     const note = screen.getByLabelText("Audio speed").textContent ?? "";
     expect(note).toContain("Selected speed 1.5x");
-    expect(note).toContain("planned length 00:00:13.33 (13.33 s)");
+    expect(note).toContain("planned length 00:00:13.33");
     expect(note).toContain("This audio was not adjusted");
-    expect(screen.getByText("Duration not adjusted", { selector: ".badge" })).toBeTruthy();
+    expect(screen.getByText("Duration not adjusted", { selector: ".chip" })).toBeTruthy();
   });
 
   it("reports a corrected MP3 header when there was one", async () => {
     const result = adjustedResult(1.75, 68571, 5);
     result.audio.duration.mp3_padding_adjusted_samples = 20;
     stubResult(result);
-    render(<ResultView jobId="j1" onSessionExpired={() => {}} />);
+    render(<ResultView jobId="j1" voiceLabel="Andrew Multilingual" onSessionExpired={() => {}} />);
     await screen.findByText("Vietnamese translation");
     const text = screen.getByLabelText("Audio duration").textContent ?? "";
     expect(text).toContain("20 samples added to the end padding");

@@ -1,0 +1,765 @@
+/* Components and layout. Colours come from tokens.css only, so both themes share this file. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 0.875rem;
+}
+
+.block {
+  display: block;
+}
+
+/* ---- Header ---- */
+
+.header {
+  background: var(--surface);
+  border-top: 5px solid var(--brand);
+  border-bottom: 1px solid var(--line);
+}
+
+.header-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--brand);
+  color: var(--on-brand);
+  box-shadow: 3px 3px 0 var(--sand);
+}
+
+.brand-mark b {
+  display: block;
+  width: 3px;
+  height: 9px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.brand-mark b:nth-child(2) {
+  height: 18px;
+}
+
+.brand-mark b:nth-child(3) {
+  height: 13px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.signed-in {
+  font-size: 0.875rem;
+}
+
+/* ---- Page ---- */
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px 40px;
+  display: grid;
+  gap: 16px;
+}
+
+.main {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.hero {
+  display: grid;
+  gap: 6px;
+}
+
+.eyebrow {
+  font-size: 0.8rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.hero h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+  letter-spacing: -0.6px;
+}
+
+/* ---- Studio: transcript on the left, settings on the right ---- */
+
+.studio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (min-width: 860px) {
+  .hero h1 {
+    font-size: 2.1rem;
+  }
+
+  .studio {
+    grid-template-columns: minmax(0, 1fr) 320px;
+    align-items: stretch;
+  }
+
+  /* The transcript box takes the height the settings panel needs, so both cards end together. */
+  .studio > .panel-sky {
+    grid-template-rows: auto minmax(190px, 1fr);
+  }
+
+  .studio > .panel-sky textarea {
+    height: 100%;
+  }
+}
+
+.panel {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+@media (min-width: 520px) {
+  .panel {
+    padding: 20px;
+  }
+}
+
+.panel-sky {
+  border-top: 3px solid var(--sky);
+}
+
+.panel-sand {
+  border-top: 3px solid var(--sand);
+}
+
+.panel-coral {
+  border-top: 3px solid var(--coral);
+}
+
+.panel h2 {
+  font-size: 1.15rem;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.panel-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+/* ---- Fields ---- */
+
+.field {
+  display: grid;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+label,
+legend {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+legend {
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+input,
+textarea,
+button,
+.button,
+select {
+  font: inherit;
+}
+
+/* 16px text keeps iOS from zooming the page when a field gets focus. */
+input:not([type="radio"]),
+textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 1rem;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 190px;
+  line-height: 1.6;
+}
+
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--error);
+  border-width: 2px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 3px;
+}
+
+.times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.error {
+  color: var(--error);
+  font-size: 0.9rem;
+}
+
+/* ---- Buttons ---- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 9px 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.button.primary {
+  background: var(--coral);
+  color: var(--on-coral);
+  box-shadow: 0 3px 0 color-mix(in srgb, var(--coral) 60%, var(--on-coral));
+}
+
+.button.ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+  font-weight: 500;
+}
+
+.button.pill {
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: var(--brand);
+}
+
+.button.wide {
+  width: 100%;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  box-shadow: none;
+}
+
+/* ---- Voice ---- */
+
+.voice-list {
+  display: grid;
+  gap: 8px;
+}
+
+.voice-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.voice-option:has(input:checked) {
+  background: var(--tint);
+  border-color: var(--brand);
+  box-shadow: inset 4px 0 0 var(--brand);
+}
+
+.voice-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--brand);
+}
+
+.voice-option strong {
+  font-weight: 600;
+}
+
+/* ---- Speed: a radio group drawn as boxes. The native radio stays in the page (invisible but
+   focusable and clickable), so keyboard and screen readers behave as for any radio group. ---- */
+
+.speed-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 8px;
+}
+
+.speed-option {
+  position: relative;
+  display: block;
+  font-weight: 400;
+}
+
+.speed-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.speed-option span {
+  display: block;
+  min-height: 44px;
+  padding: 10px 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.speed-option input:checked + span {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+  font-weight: 700;
+}
+
+/* The selected box also carries a mark, so the choice is not shown by colour alone. */
+.speed-option input:checked + span::before {
+  content: "\2713\00a0";
+}
+
+.speed-option input:focus-visible + span {
+  outline: 3px solid var(--brand);
+  outline-offset: 3px;
+}
+
+.speed-option input:not(:checked):hover + span {
+  border-color: var(--brand);
+}
+
+/* ---- Length preview ---- */
+
+.length {
+  display: grid;
+  gap: 8px;
+}
+
+.length-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--tint);
+}
+
+.length-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- Callouts and chips ---- */
+
+.callout {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--tint);
+}
+
+.callout.warning {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-color: var(--warn-border);
+}
+
+.callout.error {
+  color: var(--error);
+  border-color: var(--error);
+  background: var(--surface);
+}
+
+.mock-banner {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border: 1px solid var(--warn-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.provider-list {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+/* ---- Progress ---- */
+
+.stages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stage {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.stage.active {
+  border: 2px solid var(--brand);
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.stage.active::before {
+  content: "\25CF\00a0";
+}
+
+.stage.done {
+  border-color: var(--done);
+  color: var(--done);
+}
+
+.stage.done::before {
+  content: "\2713\00a0";
+}
+
+.stage.failed {
+  border-color: var(--error);
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* ---- Result ---- */
+
+.result {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.success {
+  color: var(--done);
+  font-weight: 600;
+}
+
+.player {
+  width: 100%;
+  accent-color: var(--brand);
+}
+
+.result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+}
+
+.facts dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.disclosure {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.disclosure.plain {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.disclosure summary {
+  cursor: pointer;
+  min-height: 32px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.disclosure.plain summary {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.disclosure-body {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.notes {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.translation {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.facts-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.facts-list dt {
+  color: var(--muted);
+}
+
+.facts-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.duration {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+}
+
+.duration p {
+  margin: 0 0 8px;
+}
+
+.duration-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.duration-list dt {
+  color: var(--muted);
+}
+
+.duration-list dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+  .duration-list,
+  .facts-list {
+    grid-template-columns: 1fr;
+  }
+
+  .result-actions .button {
+    width: 100%;
+  }
+}
+
+/* ---- Access Code screen ---- */
+
+.gate {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+@media (min-width: 760px) {
+  .gate {
+    grid-template-columns: 1fr 1fr;
+    min-height: 420px;
+  }
+}
+
+.gate-story {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 28px 22px;
+  background: var(--tint);
+  border-bottom: 4px solid var(--sand);
+}
+
+@media (min-width: 760px) {
+  .gate-story {
+    padding: 48px 36px;
+    border-bottom: 0;
+    border-right: 4px solid var(--sand);
+  }
+}
+
+.gate-story h1 {
+  font-size: 1.9rem;
+  line-height: 1.2;
+  letter-spacing: -0.8px;
+  max-width: 14em;
+  text-wrap: balance;
+}
+
+.gate-form {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+  padding: 28px 22px;
+}
+
+@media (min-width: 760px) {
+  .gate-form {
+    padding: 48px 36px;
+  }
+}
+
+.gate-form h2 {
+  font-size: 1.5rem;
+  letter-spacing: -0.4px;
+}
+
+/* ---- Footer ---- */
+
+.footer {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.footer .disclosure-body {
+  max-width: 60ch;
+}

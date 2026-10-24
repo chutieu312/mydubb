@@ -92,7 +92,7 @@ async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText("English Transcript"), "Spring Boot uses JSON.");
   await user.type(screen.getByLabelText("First Sentence Start Time"), "00:00:10");
   await user.type(screen.getByLabelText("Last Sentence Start Time"), "00:06:10");
-  await user.click(screen.getByRole("button", { name: "Generate Dubbing" }));
+  await user.click(screen.getByRole("button", { name: "Generate audio" }));
 }
 
 describe("voice selection", () => {
