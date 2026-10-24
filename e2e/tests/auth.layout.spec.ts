@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createUser, fillSignIn, overflow, signInAs, studio, theme } from "./authHelpers";
+import { createUser, escapes, fillSignIn, overflow, signInAs, studio, theme } from "./authHelpers";
 import { borderContrast, textContrast } from "./contrast";
 
 // Browser checks of every email + password screen: no sideways overflow at phone and desktop
@@ -9,29 +9,6 @@ import { borderContrast, textContrast } from "./contrast";
 
 const WIDTHS = [320, 390, 412, 1280];
 const LONG_WORD = "x".repeat(140);
-
-/**
- * Elements that stick out of the sign-in card or the header. The card hides what overflows it, so
- * the page itself can look fine (no sideways scroll) while an input or button is cut off.
- */
-const escapes = (page: Page) =>
-  page.evaluate(() => {
-    const out: string[] = [];
-    const check = (root: Element | null) => {
-      if (!root) return;
-      const limit = root.getBoundingClientRect().right + 1;
-      for (const el of Array.from(root.querySelectorAll("*"))) {
-        if (el.closest(".sr-only")) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 0 && rect.right > limit) {
-          out.push(`${el.tagName.toLowerCase()}.${String((el as HTMLElement).className)} ends at ${Math.round(rect.right)}, edge ${Math.round(limit)}`);
-        }
-      }
-    };
-    check(document.querySelector(".gate"));
-    check(document.querySelector(".header-inner"));
-    return out;
-  });
 
 async function setTheme(page: Page, wanted: "light" | "dark") {
   if ((await theme(page)) !== wanted) await page.locator(".header .pill").click();

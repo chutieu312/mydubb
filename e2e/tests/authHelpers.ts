@@ -109,3 +109,26 @@ export const overflow = (page: Page) =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 export const theme = (page: Page) => page.evaluate(() => document.documentElement.dataset.theme);
+
+/**
+ * Elements that stick out of the sign-in card or the header. The card hides what overflows it, so
+ * the page itself can look fine (no sideways scroll) while an input or button is cut off.
+ */
+export const escapes = (page: Page) =>
+  page.evaluate(() => {
+    const out: string[] = [];
+    const check = (root: Element | null) => {
+      if (!root) return;
+      const limit = root.getBoundingClientRect().right + 1;
+      for (const el of Array.from(root.querySelectorAll("*"))) {
+        if (el.closest(".sr-only")) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.right > limit) {
+          out.push(`${el.tagName.toLowerCase()}.${String((el as HTMLElement).className)} ends at ${Math.round(rect.right)}, edge ${Math.round(limit)}`);
+        }
+      }
+    };
+    check(document.querySelector(".gate"));
+    check(document.querySelector(".header-inner"));
+    return out;
+  });
