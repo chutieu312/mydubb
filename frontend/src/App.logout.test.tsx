@@ -24,6 +24,7 @@ const META = {
   ],
   timestamp_format: "HH:MM:SS",
   result_ttl_seconds: 3600,
+  auth: { mode: "access_code", self_registration: false, password_reset: false },
 };
 const SESSION = {
   authenticated: true,

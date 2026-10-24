@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { Job, VoiceOption } from "../../api/types";
 import { DEFAULT_SPEED } from "../../lib/speed";
+import type { StudioDraft } from "../../lib/studioDraft";
 import { previewTargetDuration } from "../../lib/timestamps";
 import { FieldMessage } from "./FieldMessage";
 import { LengthSummary } from "./LengthSummary";
@@ -15,19 +16,38 @@ interface Props {
   disclosure: string | null;
   onJobCreated: (job: Job) => void;
   onSessionExpired: () => void;
+  // An unsent draft of the same signed-in user, kept in page memory by the caller.
+  initialDraft?: StudioDraft;
+  onDraftChange?: (draft: StudioDraft) => void;
 }
 
 type FieldErrors = Partial<Record<string, string>>;
 
-export function DubbingForm({ voices, disclosure, onJobCreated, onSessionExpired }: Props) {
-  const [transcript, setTranscript] = useState("");
-  const [firstStart, setFirstStart] = useState("");
-  const [lastStart, setLastStart] = useState("");
-  const [voice, setVoice] = useState(voices[0]?.id ?? "");
-  const [speed, setSpeed] = useState<number>(DEFAULT_SPEED);
+export function DubbingForm({
+  voices,
+  disclosure,
+  onJobCreated,
+  onSessionExpired,
+  initialDraft,
+  onDraftChange,
+}: Props) {
+  const [transcript, setTranscript] = useState(initialDraft?.transcript ?? "");
+  const [firstStart, setFirstStart] = useState(initialDraft?.firstStart ?? "");
+  const [lastStart, setLastStart] = useState(initialDraft?.lastStart ?? "");
+  const [voice, setVoice] = useState(() => {
+    const drafted = initialDraft?.voice;
+    return drafted !== undefined && voices.some((v) => v.id === drafted)
+      ? drafted
+      : (voices[0]?.id ?? "");
+  });
+  const [speed, setSpeed] = useState<number>(initialDraft?.speed ?? DEFAULT_SPEED);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onDraftChange?.({ transcript, firstStart, lastStart, voice, speed });
+  }, [onDraftChange, transcript, firstStart, lastStart, voice, speed]);
 
   const preview = previewTargetDuration(firstStart, lastStart);
 

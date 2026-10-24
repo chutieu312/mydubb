@@ -42,10 +42,16 @@ export function setCsrfToken(token: string | null): void {
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-async function request<T>(
+export async function request<T>(
   method: string,
   path: string,
-  options: { body?: unknown; signal?: AbortSignal } = {},
+  options: {
+    body?: unknown;
+    signal?: AbortSignal;
+    // Success statuses the contract allows. Any other 2xx is treated as an unexpected answer
+    // instead of being trusted (used by the sign-in API, where a wrong guess matters).
+    accept?: readonly number[];
+  } = {},
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -65,6 +71,9 @@ async function request<T>(
     throw new ApiError(0, "network_error", "Cannot reach the server. Check your connection.");
   }
 
+  if (response.ok && options.accept && !options.accept.includes(response.status)) {
+    throw new ApiError(502, "unexpected_response", "The server sent an unexpected response.");
+  }
   if (response.status === 204) return undefined as T;
 
   let payload: unknown = null;

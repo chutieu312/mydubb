@@ -27,12 +27,25 @@ export E2E_ACCESS_CODE
 export E2E_PORT="${E2E_PORT:-8001}"
 export E2E_BASE_URL="http://127.0.0.1:${E2E_PORT}"
 
-compose() { docker compose -f docker-compose.e2e.yml "$@"; }
+# Email + password stack (real backend, in-memory stand-in for the user pool). A random key for
+# every run; it protects nothing outside this throwaway stack.
+export E2E_COGNITO_PORT="${E2E_COGNITO_PORT:-8003}"
+export E2E_CONTROL_PORT="${E2E_CONTROL_PORT:-8004}"
+export E2E_COGNITO_BASE_URL="http://127.0.0.1:${E2E_COGNITO_PORT}"
+export E2E_CONTROL_URL="http://127.0.0.1:${E2E_CONTROL_PORT}"
+if [ -z "${E2E_AUTH_KEY:-}" ]; then
+  E2E_AUTH_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n')"
+fi
+export E2E_AUTH_KEY
+
+# Another checkout can run its own stack at the same time with E2E_COMPOSE_PROJECT=<unique name>
+# and its own ports. The default is the name used by CI.
+compose() { docker compose -p "${E2E_COMPOSE_PROJECT:-mydubb-e2e}" -f docker-compose.e2e.yml "$@"; }
 
 # shellcheck disable=SC2317  # invoked via trap
 cleanup() {
   if [ "${E2E_KEEP_STACK:-0}" = "1" ]; then
-    echo "E2E stack left running at ${E2E_BASE_URL} (remove: docker compose -f e2e/docker-compose.e2e.yml down -v)"
+    echo "E2E stack left running at ${E2E_BASE_URL} and ${E2E_COGNITO_BASE_URL} (remove: docker compose -p ${E2E_COMPOSE_PROJECT:-mydubb-e2e} -f e2e/docker-compose.e2e.yml down -v)"
   else
     compose down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
@@ -40,11 +53,11 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building the application image..."
-compose build --quiet app
-echo "Starting isolated E2E stack on ${E2E_BASE_URL}..."
+compose build --quiet app app-cognito
+echo "Starting isolated E2E stack on ${E2E_BASE_URL} and ${E2E_COGNITO_BASE_URL}..."
 if ! compose up -d --wait; then
   echo "Error: the E2E stack did not become healthy. Recent app logs:" >&2
-  compose logs --tail 60 app >&2 || true
+  compose logs --tail 60 app app-cognito >&2 || true
   exit 1
 fi
 
@@ -52,6 +65,6 @@ status=0
 npx playwright test "$@" || status=$?
 if [ "$status" -ne 0 ]; then
   echo "E2E tests failed. Recent app logs:" >&2
-  compose logs --tail 60 app >&2 || true
+  compose logs --tail 60 app app-cognito >&2 || true
 fi
 exit "$status"
