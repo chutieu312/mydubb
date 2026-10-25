@@ -245,8 +245,9 @@ fake HTTP do not replace this check. To see the request in the app too, start it
 backend log line `Azure Translator request ok: ... metered_chars=N` shows how many characters
 Microsoft charged. Measured on 2026-10-22 (F0, Global endpoint, region `westus2`):
 `metered_chars` equals `sent_chars`, i.e. the no-translate markup **is billed**. Each protected
-term occurrence adds 31 characters to the usage counted against the 2 million characters per
-month of F0, so term-dense transcripts use noticeably more quota than their plain length.
+term occurrence adds 33 characters (`<span class="notranslate">` and `</span>`) to the usage
+counted against the 2 million characters per month of F0, so term-dense transcripts use
+noticeably more quota than their plain length.
 
 ### 3. Enable on Render (done for production on 2026-10-22)
 
@@ -408,6 +409,10 @@ table in the existing Neon database (migration `0004`). Speech reads the English
 kept with `en-US` (see [ARCHITECTURE.md](ARCHITECTURE.md#english-left-in-the-translation-and-glossary-candidates)),
 and every completed job with a real translation adds its new terms to `glossary_candidates`.
 Nothing there is used at runtime until a term is added to `glossary.txt` by a pull request.
+
+> **Legacy.** The glossary is now maintained as a static list through pull requests
+> ([GLOSSARY.md](GLOSSARY.md)); the candidate review below is not part of that process. The
+> code, table and migration are still in place and have not been removed.
 
 ### Listen before accepting
 

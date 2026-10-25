@@ -1,97 +1,2141 @@
-# MyDubb glossary: English terms that stay in English in the Vietnamese translation.
-#
-# Only terms listed here are protected. A term that is missing here may be translated (or
-# left alone) by the translation service, depending on the service. When the translation
-# leaves an unlisted English word in place, speech still reads it in English and the job adds
-# it to the glossary *candidates* (database) for a batch review; that never changes this file.
-# This file only changes through a reviewed pull request (see docs/DEPLOYMENT.md, "Glossary
-# candidates").
-#
-# Format (one term per line, reviewed through Git):
-#   * Lines starting with "#" and blank lines are ignored.
-#   * Matching ignores capitalization, and the text keeps its own spelling: "Neural Network"
-#     in the transcript stays "Neural Network"; "neural network" stays lowercase.
-#   * A line starting with "=" matches that exact capitalization only. Use it for terms that
-#     are also ordinary words in another case (REST vs "rest").
-#   * Terms match whole words only ("API" is not matched inside "capital"). A plural "s" is
-#     part of the match ("APIs", "neural networks"), so list the singular form.
-#   * Words in a multi-word term may be separated by any whitespace.
-#   * When terms overlap, the longest match wins ("convolutional neural network" beats
-#     "neural network").
-#
-# What belongs here (policy for ambiguous words):
-#   * Add specific terms: acronyms, product and language names, and multi-word phrases.
-#   * Do NOT add everyday words that have a normal meaning outside the field, such as
-#     class, model, cell, function, table, key, value, string, object, field, layer, node,
-#     tree, thread, memory, spring, go, rust, swift, ruby, java (island), transformer or
-#     "it". Keeping them in English in every context would damage ordinary sentences. When
-#     such a word is needed, add the specific phrase instead ("Spring Boot", "loss
-#     function").
-#   * Prefer the phrase over its parts: "gradient descent", not "gradient".
-
-# --- Software ---------------------------------------------------------------------------
+.gitignore
+.NET
+.NET Core
+.NET Framework
+.NET MAUI
+2FA
+A* search
+A/B testing
+A100
+a11y
+ABAC
+abstract class
+abstract factory
+abstract syntax tree
+acceptance criteria
+acceptance test
+access control list
+access modifier
+access token
+=ACID
+ACL
+activation function
+Active Directory
+ActiveMQ
+actor model
+actor-critic
+AdaBoost
+Adam optimizer
+AdamW
+adapter pattern
+adjacency list
+adjacency matrix
+AES
+agentic AI
+agentic workflow
+aggregate root
+AGI
+=Agile
+ahead-of-time compilation
+AI agent
+AI alignment
+AI hallucination
+AI safety
+Airbyte
+=AJAX
+AKS
+AlexNet
+AlloyDB
+AlphaFold
+Alpine Linux
+alt text
+alternative hypothesis
+Amazon API Gateway
+Amazon Athena
+Amazon Aurora
+Amazon Bedrock
+Amazon Bedrock AgentCore
+Amazon CloudFront
+Amazon CloudWatch
+Amazon Cognito
+Amazon Comprehend
+Amazon Data Firehose
+Amazon DocumentDB
+Amazon DynamoDB
+Amazon EBS
+Amazon EC2
+Amazon ECR
+Amazon ECS
+Amazon EFS
+Amazon EKS
+Amazon ElastiCache
+Amazon EMR
+Amazon EventBridge
+Amazon GuardDuty
+Amazon Inspector
+Amazon Kinesis
+Amazon Lex
+Amazon Lightsail
+Amazon Linux
+Amazon Machine Image
+Amazon Managed Streaming for Apache Kafka
+Amazon MQ
+Amazon MSK
+Amazon Neptune
+Amazon OpenSearch Service
+Amazon Polly
+Amazon Q Developer
+Amazon QuickSight
+Amazon RDS
+Amazon Redshift
+Amazon Rekognition
+Amazon Route 53
+Amazon S3
+Amazon S3 Glacier
+Amazon SageMaker
+Amazon SES
+Amazon SNS
+Amazon SQS
+Amazon Textract
+Amazon Transcribe
+Amazon Translate
+Amazon VPC
+Amazon Web Services
+=AMI
+amortized analysis
+AMQP
+Android
+Android Studio
+=Angular
+AngularJS
+anomaly detection
+anonymous function
+ANOVA
+Ansible
+Anthos
+=Anthropic
+anti-pattern
+Apache Airflow
+Apache Arrow
+Apache Avro
+Apache Beam
+Apache Cassandra
+Apache Flink
+Apache Hadoop
+Apache HBase
+Apache Hive
+Apache HTTP Server
+Apache Hudi
+Apache Iceberg
+Apache Kafka
+Apache Lucene
+Apache Maven
+Apache ORC
+Apache Parquet
+Apache Pulsar
+Apache Solr
+Apache Spark
+Apache Superset
+Apache Tomcat
+Apache ZooKeeper
 API
-=REST
-=REST API
-JSON
-YAML
-HTTP
-HTTPS
-SQL
-NoSQL
+API endpoint
+API gateway
+API key
+Apigee
+APM
+App Engine
+Application Insights
+Application Load Balancer
+application performance monitoring
+application server
+approximate nearest neighbor
+apt-get
+Arch Linux
+architecture decision record
+area under the curve
+Argo CD
+Argon2
+=ARIA
+ARIMA
+ARM architecture
+ARM template
+ARM64
+Artifact Registry
+artificial general intelligence
+artificial intelligence
+ASCII
+ASGI
+ASIC
+ASP.NET
+ASP.NET Core
+ASR
+asymmetric encryption
+async/await
+asyncio
+at-least-once delivery
+at-most-once delivery
+atomic operation
+ATP
+attention mechanism
+attribute-based access control
+=AUC
+Auth0
+authorization code flow
+auto scaling
+Auto Scaling group
+autoencoder
+AutoGen
+autograd
+automatic differentiation
+automatic speech recognition
+AutoML
+autoregressive model
+autoscaling
+availability zone
+average pooling
+AVL tree
+AWS
+AWS Amplify
+AWS App Runner
+AWS AppSync
+AWS Backup
+AWS Batch
+AWS CDK
+AWS Certificate Manager
+AWS CLI
+AWS Cloud Development Kit
+AWS CloudFormation
+AWS CloudTrail
+AWS Config
+AWS Control Tower
+AWS Database Migration Service
+AWS Direct Connect
+AWS DMS
+AWS Elastic Beanstalk
+AWS Fargate
+AWS Glue
+AWS Identity and Access Management
+AWS Key Management Service
+AWS KMS
+AWS Lake Formation
+AWS Lambda
+AWS Management Console
+AWS Organizations
+AWS PrivateLink
+AWS SAM
+AWS SDK
+AWS Secrets Manager
+AWS Security Hub
+AWS Security Token Service
+AWS Serverless Application Model
+AWS Shield
+AWS Step Functions
+AWS Systems Manager
+AWS Transit Gateway
+AWS WAF
+AWS Well-Architected Framework
+AWS X-Ray
+Axios
+=Azure
+Azure Active Directory
+Azure AD
+Azure Advisor
+Azure AI Foundry
+Azure AI Search
+Azure AI services
+Azure AI Speech
+Azure AI Vision
+Azure API Management
+Azure App Service
+Azure Application Gateway
+Azure Arc
+Azure Artifacts
+Azure Backup
+Azure Bastion
+Azure Blob Storage
+Azure Boards
+Azure Cache for Redis
+Azure CLI
+Azure Cloud Shell
+Azure Cognitive Search
+Azure Cognitive Services
+Azure Container Apps
+Azure Container Instances
+Azure Container Registry
+Azure Content Delivery Network
+Azure Cosmos DB
+Azure Data Explorer
+Azure Data Factory
+Azure Data Lake Storage
+Azure Database for MySQL
+Azure Database for PostgreSQL
+Azure Databricks
+Azure DevOps
+Azure DNS
+Azure Document Intelligence
+Azure Event Grid
+Azure Event Hubs
+Azure ExpressRoute
+Azure Files
+Azure Firewall
+Azure Front Door
+Azure Functions
+Azure IoT Hub
+Azure Key Vault
+Azure Kubernetes Service
+Azure Load Balancer
+Azure Logic Apps
+Azure Machine Learning
+Azure Managed Redis
+Azure Migrate
+Azure Monitor
+Azure OpenAI
+Azure Pipelines
+Azure Policy
+Azure portal
+Azure Private Link
+Azure Repos
+Azure Resource Manager
+Azure Service Bus
+Azure SignalR Service
+Azure Site Recovery
+Azure SQL Database
+Azure SQL Managed Instance
+Azure Static Web Apps
+Azure Storage
+Azure Stream Analytics
+Azure Synapse Analytics
+Azure Traffic Manager
+Azure Translator
+Azure Virtual Machines
+Azure Virtual Network
+Azure VPN Gateway
+B+ tree
+B-tree
+back-end
+backend
+backpressure
+backpropagation
+backward pass
+bag of words
+Base64
+Bash script
+batch normalization
+batch processing
+batch size
+Bayes theorem
+Bayes' theorem
+Bayesian inference
+Bayesian optimization
+Bayesian statistics
+bcrypt
+BDD
+beam search
+bearer token
+behavior-driven development
+Bellman equation
+Bellman-Ford algorithm
+Bernoulli distribution
+=BERT
+BF16
+bfloat16
+BFS
+bias-variance tradeoff
+Big O notation
+big-endian
+BigLake
+BigQuery
+BigQuery ML
+Bigtable
+binary cross-entropy
+binary heap
+binary search
+binary search tree
+binary tree
+binomial distribution
+BIOS
+Bitbucket
+black-box testing
+Blazor
+=BLEU
+Blob Storage
+block storage
+Bloom filter
+blue-green deployment
+boilerplate code
+Boolean algebra
+bootloader
+borrow checker
+bounded context
+box plot
+Boyce-Codd normal form
+breadth-first search
+breaking change
+breakpoint
+bridge pattern
+brute-force attack
+bubble sort
+builder pattern
+bulkhead pattern
+business intelligence
+byte-pair encoding
+bytecode
+Byzantine fault tolerance
+C#
+C++
+C++11
+C++17
+C++20
+C4 model
+cache eviction
+cache hit
+cache invalidation
+cache miss
+cache stampede
+cache-aside
+call stack
+callback function
+callback hell
+canary deployment
+Canvas API
+CAP theorem
+CAPTCHA
+Cargo.toml
+CatBoost
+CDN
+CentOS
+central limit theorem
+certificate authority
+chain of responsibility
+chain rule
+chain-of-thought
+change data capture
+changelog
+chaos engineering
+Chaos Monkey
+ChatGPT
+chi-squared test
+ChromaDB
 CI/CD
+CIDR
+CircleCI
+circuit breaker pattern
+circular buffer
+CISC
+=Clang
+class diagram
+class imbalance
+Claude
+Claude Code
+clean architecture
+clean code
+CLI
+ClickHouse
+clickjacking
+client credentials flow
+client-server architecture
+client-side
+client-side rendering
+=CLIP
+Cloud Armor
+Cloud Bigtable
+Cloud Build
+Cloud CDN
+Cloud Composer
+cloud computing
+Cloud Deploy
+Cloud DNS
+Cloud Functions
+Cloud HSM
+Cloud KMS
+Cloud Load Balancing
+=Cloud Logging
+=Cloud Monitoring
+Cloud NAT
+Cloud Natural Language API
+Cloud Run
+Cloud Run functions
+Cloud Scheduler
+Cloud Shell
+Cloud Spanner
+Cloud SQL
+=Cloud Storage
+Cloud Tasks
+Cloud TPU
+Cloud Trace
+Cloud Translation API
+Cloud Vision API
+Cloud VPN
+cloud-native
+Cloudflare
+CloudFormation
+CloudFront
+CloudTrail
+CloudWatch
+CloudWatch Logs
+clustered index
+CMake
+CNAME
+CNN
+COBOL
+CockroachDB
+code coverage
+code formatter
+code review
+code smell
+code splitting
+CodeArtifact
+CodeBuild
+CodeCommit
+CodeDeploy
+CodePipeline
+Cognito
+collaborative filtering
+columnar storage
+command pattern
+command-line interface
+commit hash
+commit message
+common table expression
+CommonJS
+compare-and-swap
+composite key
+composite pattern
+computational graph
+Compute Engine
+computer vision
+concept drift
+Conda
+conditional probability
+confidence interval
+ConfigMap
+confusion matrix
+connection pool
+connection pooling
+consensus algorithm
+consistent hashing
+Constitutional AI
+consumer group
+container image
+container orchestration
+container registry
+container runtime
+containerd
+containerization
+content delivery network
+Content Security Policy
+Content-Type
+context length
+context switch
+context window
+context-free grammar
+continuous delivery
+continuous deployment
+continuous integration
+contract testing
+contrastive learning
+control plane
+convex function
+convex optimization
+convolution
+convolutional layer
+convolutional neural network
+core dump
+Core ML
+Core Web Vitals
+coroutine
+correlation coefficient
+CORS
+cosine similarity
+Cosmos DB
+cost function
+CouchDB
+counting sort
+covalent bond
+covariance
+covariance matrix
+CPU
+CPU scheduling
+CPython
+CQRS
+crates.io
+credential stuffing
+CrewAI
+CRISPR
+critical rendering path
+critical section
+cron job
+CronJob
+crontab
+cross join
+cross product
+cross-attention
+cross-entropy
+cross-entropy loss
+cross-site request forgery
+cross-site scripting
+cross-validation
+=CRUD
+cryptographic hash function
+CSRF
+CSS
+CSS Grid
+CSS Modules
+CSS-in-JS
+CSS3
+CSV
+CUDA
+cuDNN
+cumulative distribution function
+Cumulative Layout Shift
+currying
+custom resource definition
+CVE
+cybersecurity
+cyclomatic complexity
+DaemonSet
+DAG
+Dagster
+daily stand-up
+DALL-E
+Dask
+DAST
+data augmentation
+data drift
+data engineering
+data governance
+data lake
+data lakehouse
+data leakage
+data lineage
+data mart
+data mesh
+data parallelism
+data pipeline
+data plane
+data race
+data structure
+data warehouse
+database index
+database migration
+database normalization
+database trigger
+Databricks
+Datadog
+Dataflow
+Dataplex
+Dataproc
+DBSCAN
+dbt
+DDD
+DDL
+DDoS
+dead code
+dead-letter queue
+deadlock
+Debian
+debugger
+debugging
+decision tree
+declarative programming
+decoder-only
+decorator pattern
+deep learning
+deep neural network
+deep reinforcement learning
+DeepMind
+DeepSeek
+DeepSpeed
+definition of done
+Delta Lake
+denial-of-service attack
+Deno
+denormalization
+dense layer
+Dependency Injection
+dependency inversion principle
+depth-first search
+deque
+descriptive statistics
+design pattern
+deterministic finite automaton
+device driver
+DevOps
+DevSecOps
+DFS
+DHCP
+Dialogflow
+Dialogflow CX
+Diffie-Hellman
+diffusion model
+digital signature
+Dijkstra's algorithm
+dimension table
+dimensionality reduction
+direct preference optimization
+directed acyclic graph
+dirty read
+discrete mathematics
+disjoint set
+distributed system
+distributed tracing
+distributed training
+distributed transaction
+Django
+Django REST framework
+DLQ
+DML
+DNA
+DNN
+DNS
+DNS record
 Docker
+Docker Compose
+Docker Hub
+Dockerfile
+Document AI
+document database
+Document Object Model
+=DOM
+domain event
+domain model
+domain-driven design
+dot product
+doubly linked list
+DPO
+DQN
+Drizzle ORM
+dropout layer
+=DRY
+DSPy
+duck typing
+DuckDB
+Durable Functions
+dynamic array
+dynamic programming
+dynamic typing
+DynamoDB
+E2E
+early stopping
+EBS
+EC2
+Eclipse IDE
+ECMAScript
+ECR
+ECS
+edge computing
+edge location
+EFS
+eigendecomposition
+eigenvalue
+eigenvector
+EKS
+Elastic Beanstalk
+Elastic Load Balancing
+Elastic Stack
+ElastiCache
+Elasticsearch
+ELK stack
+ELT
+Emacs
+embedding
+embedding layer
+embedding model
+encoder-decoder
+encryption at rest
+encryption in transit
+end-to-end encryption
+end-to-end test
+endianness
+ensemble learning
+Entity Framework
+Entity Framework Core
+entity-relationship diagram
+Envoy proxy
+ER diagram
+Erlang
+error budget
+ES modules
+ES2015
+ES6
+esbuild
+ESLint
+etcd
+ETL
+Euclidean distance
+event bubbling
+event bus
+event delegation
+event handler
+Event Hubs
+event listener
+event loop
+event sourcing
+event streaming
+event-driven architecture
+Eventarc
+EventBridge
+eventual consistency
+exactly-once delivery
+exception handling
+execution plan
+expectation-maximization
+expected value
+experiment tracking
+explainable AI
+exploding gradient
+exploration-exploitation tradeoff
+exploratory data analysis
+exponential distribution
+Express.js
+F#
+F1 score
+FaaS
+facade pattern
+facial recognition
+fact table
+factory pattern
+failover
+FAISS
+false negative
+false positive
+Fargate
+fast Fourier transform
+FastAPI
+Faster R-CNN
+Fastify
+fault tolerance
+feature branch
+feature engineering
+feature extraction
+feature flag
+feature map
+feature selection
+feature store
+feature vector
+federated learning
+feedforward neural network
+Fenwick tree
+Fetch API
+few-shot learning
+few-shot prompting
+FFT
+Figma
+file descriptor
+fine-tuned
+fine-tuning
+finite automaton
+finite state machine
+Firebase
+Firebase Authentication
+Firestore
+First Contentful Paint
+first normal form
+first-class function
+first-order logic
+Fivetran
+Flake8
+flaky test
+FlashAttention
+Flexbox
+Flink
+Floyd-Warshall algorithm
+Fluentd
+=Flutter
+Flyway
+flyweight pattern
+foreign key
+forward pass
+foundation model
+Fourier transform
+FP16
+FP32
+FPGA
+front-end
+frontend
+frontier model
+FTP
+full outer join
+full-stack
+full-text search
+fullstack
+fully connected layer
+function calling
+functional programming
+functional requirement
+fuzz testing
+fuzzing
+=GAN
+Gang of Four
+garbage collection
+garbage collector
+gated recurrent unit
+Gaussian distribution
+Gaussian mixture model
+Gaussian process
+GCC
+gcloud
+GCP
+GDB
+GELU
+Gemini API
+Gemini Code Assist
+Gemini Enterprise
+Gemini Enterprise Agent Platform
+Gemma
+GenAI
+generative adversarial network
+generative AI
+genetic algorithm
+ggplot2
+GGUF
+Gini impurity
+Git
+Git LFS
+Git repository
+Git submodule
+Gitflow
+GitHub
+GitHub Actions
+GitHub Copilot
+GitLab
+GitLab CI
+GitOps
+GKE
+GKE Autopilot
+global minimum
+GloVe
+GNN
+gofmt
+Golang
+Google Cloud
+Google Cloud Armor
+Google Cloud console
+Google Cloud Platform
+Google Cloud SDK
+Google Cloud Storage
+Google Colab
+Google DeepMind
+Google Gemini
+Google Kubernetes Engine
+goroutine
+gossip protocol
+GPT
+GPT-3
+GPT-4
+GPT-4o
+GPT-5
+GPU
+GraalVM
+gradient accumulation
+gradient boosting
+gradient clipping
+gradient descent
+Gradio
+Gradle
+Grafana
+Grafana Loki
+graph database
+graph neural network
+graph theory
+graph traversal
+GraphQL
+GraphRAG
+greedy algorithm
+greedy decoding
+grep
+grid search
+GROUP BY
+gRPC
+GRPO
+GRU
+GuardDuty
+=GUI
+GUID
+Gunicorn
+H100
+Hadoop
+halting problem
+HAProxy
+hardware security module
+hash collision
+hash function
+hash map
+hash table
+HashiCorp
+HashiCorp Vault
+Haskell
+HATEOAS
+HBase
+HDD
+HDFS
+HDInsight
+health check
+heap memory
+heap sort
+Helm chart
+Hessian matrix
+hexagonal architecture
+Hibernate ORM
+hidden layer
+hidden Markov model
+high availability
+high cohesion
+higher-order function
+hill climbing
+HiveQL
+HMAC
+HMR
+HNSW
+=Homebrew
+Horizontal Pod Autoscaler
+horizontal scaling
+hot module replacement
+HSM
+HTML
+HTML5
+htmx
+HTTP
+HTTP header
+HTTP method
+HTTP status code
+HTTP/2
+HTTP/3
+HTTPS
+Hugging Face
+Hugging Face Transformers
+human-in-the-loop
+HumanEval
+hybrid cloud
+hybrid search
+hyperparameter
+hyperparameter tuning
+hypervisor
+hypothesis testing
+I/O
+i18n
+IaaS
+=IaC
+=IAM
+IAM Identity Center
+IAM policy
+IAM role
+ICMP
+ID token
+IDE
+idempotency
+idempotency key
+idempotent
+identity matrix
+identity provider
+Identity-Aware Proxy
+IdP
+IEEE 754
+image captioning
+image classification
+image segmentation
+immutable infrastructure
+imperative programming
+in-context learning
+in-memory database
+incremental static regeneration
+IndexedDB
+inferential statistics
+InfluxDB
+information gain
+infrastructure as code
+Ingress controller
+inner join
+inode
+input layer
+insertion sort
+instance segmentation
+instruction set architecture
+instruction tuning
+INT8
+integer programming
+integrated development environment
+integration test
+IntelliJ IDEA
+inter-process communication
+Interaction to Next Paint
+interface segregation principle
+interquartile range
+interrupt handler
+Intersection Observer
+intersection over union
+intrusion detection system
+inverse matrix
+inversion of control
+inverted index
+iOS
+IP address
+IPv4
+IPv6
+isolation level
+Istio
+iterator pattern
+Jacobian matrix
+Jaeger
+Jakarta EE
+Java EE
+Java SE
+Java Virtual Machine
+JavaScript
+JAX
+JDK
+Jenkins
+Jenkinsfile
+=Jest
+JetBrains
+Jetpack Compose
+JIT compiler
+joint probability
+JPA
+jQuery
+JRE
+JSON
+JSON Schema
+JSON Web Token
+JSON-RPC
+JSX
+JUnit
+Jupyter
+Jupyter Notebook
+JupyterLab
+just-in-time compilation
+JVM
+JWT
+k-fold cross-validation
+k-means
+k-means clustering
+k-nearest neighbors
+K8s
+Kafka
+Kafka Connect
+Kafka Streams
+Kaggle
+Kalman filter
+Kanban
+Keras
+Kerberos
+kernel space
+kernel trick
+key management service
+Key Vault
+key-value store
+Keycloak
+Kibana
+Kinesis Data Firehose
+Kinesis Data Streams
+KISS principle
+KL divergence
+KMS
+KNN
+knowledge distillation
+knowledge graph
+Kotlin
+KPI
+Krebs cycle
+Kruskal's algorithm
+kubectl
+Kubeflow
+kubelet
 Kubernetes
+Kubernetes Operator
+Kullback-Leibler divergence
+Kustomize
+KV cache
+L1 cache
+L1 norm
+L1 regularization
+l10n
+L2 cache
+L2 norm
+L2 regularization
+L3 cache
+Lagrange multiplier
+lambda calculus
+lambda expression
+=LAN
+landing zone
+LangChain
+LangGraph
+language model
+Laravel
+large language model
+Largest Contentful Paint
+lasso regression
+latent space
+law of large numbers
+layer normalization
+layered architecture
+lazy loading
+LDAP
+leader election
+leader-follower replication
+Leaky ReLU
+learning rate
+learning rate schedule
+learning rate scheduler
+left join
+legacy code
+lemmatization
+Let's Encrypt
+Levenshtein distance
+lexer
+lift and shift
+LightGBM
+likelihood function
+linear algebra
+linear programming
+linear regression
+linear search
+linked list
+Linkerd
+LINQ
+linter
+linting
 Linux
 Linux kernel
-# "container" and "kernel" alone have everyday meanings; the phrases are specific.
-container runtime
-Git
-GitHub
-PostgreSQL
-Redis
-GraphQL
-JavaScript
-TypeScript
-Python
-Spring Boot
-Dependency Injection
-microservice
-pipeline
-pull request
-unit test
-load balancer
-race condition
-garbage collection
-
-# --- Artificial intelligence and machine learning ---------------------------------------
-neural network
-convolutional neural network
-recurrent neural network
-gradient descent
-loss function
-activation function
-backpropagation
-overfitting
-learning rate
-hyperparameter
-machine learning
-deep learning
-reinforcement learning
-large language model
+Liquibase
+Liskov substitution principle
+list comprehension
+little-endian
+liveness probe
+=Llama
+llama.cpp
+LlamaIndex
 LLM
-GPU
-
-# --- Science -----------------------------------------------------------------------------
-DNA
-RNA
-mRNA
-ATP
-CRISPR
+LLM-as-a-judge
+LLMOps
+LLVM
+load balancer
+load balancing
+load test
+local minimum
+localhost
+localStorage
+lock-free
+Lodash
+Log Analytics
+log level
+log-likelihood
+Logic Apps
+logistic regression
+logit
+Logstash
+long polling
+long short-term memory
+=Looker
+Looker Studio
+loose coupling
+=LoRA
+loss function
+LRU
+LRU cache
+LSM tree
+LSTM
+MAC address
+machine learning
+machine translation
+macOS
+Makefile
+malware
+man-in-the-middle attack
+MapReduce
+marginal probability
+MariaDB
+Markov chain
+Markov chain Monte Carlo
+Markov decision process
+Mask R-CNN
+Material UI
+materialized view
+MATLAB
+Matplotlib
+matrix multiplication
+max pooling
+max-heap
+maximum a posteriori
+maximum likelihood estimation
+MCMC
+MCP
+MCP server
+MD5
+mean average precision
+mean squared error
+media query
+mediator pattern
+Memcached
+memento pattern
+memoization
+memory leak
+memory management unit
+Memorystore
+merge conflict
+merge request
+merge sort
+message broker
+message queue
+Meta AI
+method overloading
+method overriding
+MFA
+microservice
+microservice architecture
+Microsoft Azure
+Microsoft Copilot
+Microsoft Defender for Cloud
+Microsoft Entra ID
+Microsoft Excel
+Microsoft Fabric
+Microsoft Foundry
+Microsoft Graph
+Microsoft Purview
+Microsoft Sentinel
+Microsoft SQL Server
+Midjourney
+Milvus
+MIME type
+min-heap
+mini-batch
+minification
+Minikube
+minimum spanning tree
+minimum viable product
+Mistral AI
 mitochondria
-photosynthesis
+mixed precision
+mixture of experts
+MLE
+MLflow
+MLOps
+MLP
+MMLU
+MMU
+mobile-first
+MobX
+mock object
+Mockito
+model card
+Model Context Protocol
+model parallelism
+model pruning
+model quantization
+model registry
+model serving
+Model-View-Controller
+Model-View-ViewModel
+modular arithmetic
+modular monolith
+module bundler
+=MoE
+MongoDB
+monolithic architecture
+monorepo
+Monte Carlo method
+Monte Carlo simulation
+Monte Carlo tree search
+Moore's law
+MQTT
+mRNA
+MSE
+mTLS
+MTTR
+multi-agent system
+multi-armed bandit
+multi-cloud
+multi-factor authentication
+multi-head attention
+multi-page application
+multicollinearity
+multilayer perceptron
+multimodal model
+multithreading
+mutex
+mutual information
+mutual TLS
+MVC
+MVCC
+MVVM
+mypy
+MySQL
+N+1 problem
+N+1 query
+n-gram
+naive Bayes
+named entity recognition
+namespace
+naming convention
+=NAT
+natural language processing
+natural language understanding
 natural selection
-covalent bond
-Krebs cycle
+Neo4j
+Neovim
+NestJS
+network address translation
+Network Load Balancer
+neural architecture search
+neural network
+New Relic
+Newton's method
+Next.js
+Nginx
+NLP
+NLTK
+NLU
+Node.js
+non-blocking I/O
+non-convex optimization
+non-functional requirement
+normal distribution
+NoSQL
+NP-complete
+NP-hard
+npm
+NPU
+NuGet
+null hypothesis
+null pointer exception
+null safety
+NullPointerException
+NumPy
+Nuxt
+NVIDIA
+OAuth
+OAuth 2.0
+object detection
+object storage
+object-oriented programming
+object-relational mapping
+objective function
+Objective-C
+observability
+observer pattern
+OCR
+off-by-one error
+OIDC
+Okta
+OLAP
+OLAP cube
+Ollama
+OLTP
+on-demand instance
+one-hot encoding
+one-time password
+ONNX
+ONNX Runtime
+=OOP
+open-closed principle
+OpenAI
+OpenAI API
+OpenAPI
+OpenAPI Specification
+OpenCV
+OpenID Connect
+OpenJDK
+OpenSearch
+OpenShift
+OpenTelemetry
+OpenTofu
+operator overloading
+optical character recognition
+optimistic locking
+Oracle Database
+ORDER BY
+ORM
+orthogonal matrix
+OSI model
+OTP
+outbox pattern
+outer join
+output layer
+overfitting
+OWASP
+OWASP Top 10
+P versus NP
+p-value
+PaaS
+package manager
+page fault
+page table
+PagedAttention
+pair programming
+parameter-efficient fine-tuning
+=Parquet
+partial derivative
+pass by reference
+pass by value
+passkey
+password hashing
+path parameter
+pattern matching
+Paxos
+PCA
+Pearson correlation
+PEFT
+penetration testing
+perceptron
+Perl
+PersistentVolume
+PersistentVolumeClaim
+pessimistic locking
+pgAdmin
+pgvector
+phantom read
+photosynthesis
+PHP
+pip
+pipeline
+pivot table
+PKCE
+PKI
+PL/pgSQL
+PL/SQL
+platform engineering
+=Playwright
+Plotly
+pnpm
+Podman
+Poisson distribution
+policy gradient
+polyfill
+polynomial regression
+polynomial time
+pooling layer
+port forwarding
+positional encoding
+positive definite matrix
+POSIX
+post-training quantization
+PostCSS
+posterior distribution
+Postgres
+PostgreSQL
+=Postman
+Power BI
+PowerShell
+PPO
+pre-training
+Preact
+precision and recall
+prefix tree
+preflight request
+pretrained model
+pretraining
+Prim's algorithm
+primary key
+principal component analysis
+principle of least privilege
+prior distribution
+priority queue
+Prisma
+private cloud
+private key
+privilege escalation
+probability density function
+probability distribution
+probability mass function
+procedural programming
+producer-consumer
+product backlog
+product owner
+progressive web app
+Prometheus
+prompt engineering
+prompt injection
+prompt template
+PromQL
+proof of concept
+property-based testing
+propositional logic
+protobuf
+Protocol Buffers
+prototype pattern
+proximal policy optimization
+proxy pattern
+psql
+Pub/Sub
+public cloud
+public key
+public-key cryptography
+publish-subscribe
+pull request
+Pulumi
+pure function
+PWA
+PyCharm
+Pydantic
+Pylint
+PyPI
+PySpark
+pytest
+Python
+PyTorch
+PyTorch Lightning
+Q-learning
+=QA
+Qdrant
+QLoRA
+quadratic programming
 quantum entanglement
+Quarkus
+query optimizer
+query parameter
+query plan
+query string
+question answering
+=QUIC
+quicksort
+Qwen
+R-CNN
+R-squared
+RabbitMQ
+race condition
+radix sort
+Raft consensus algorithm
+=RAG
+RAII
+=RAM
+random forest
+random search
+random variable
+ransomware
+rate limiting
+RBAC
+RDBMS
+RDS
+=ReAct
+=React
+React Hooks
+React Native
+React Query
+React Router
+React Testing Library
+React.js
+reactive programming
+read committed
+read replica
+read-write lock
+readiness probe
+rebase
+reCAPTCHA
+recommendation system
+recommender system
+recurrent neural network
+Red Hat Enterprise Linux
+red teaming
+red-black tree
+Redis
+Redux
+Redux Toolkit
+refactoring
+reference counting
+refresh token
+regex
+regression analysis
+regression test
+regular expression
+reinforcement learning
+reinforcement learning from human feedback
+relational database
+ReLU
+repeatable read
+REPL
+ReplicaSet
+repository pattern
+request body
+requestAnimationFrame
+reranker
+reserved instance
+residual connection
+ResNet
+response body
+responsible AI
+responsive design
+=REST
+=REST API
+RESTful
+RESTful API
+retrieval-augmented generation
+reverse proxy
+reward function
+reward model
+RHEL
+ridge regression
+right join
+ring buffer
+RISC
+RISC-V
+RLHF
+RMSE
+RMSprop
+RNA
+RNN
+RoBERTa
+ROC curve
+role-based access control
+rolling update
+=ROM
+root cause analysis
+=ROUGE
+round-robin scheduling
+round-trip time
+Route 53
+RPC
+RSA
+RStudio
+rubber duck debugging
+Ruby on Rails
+RubyGems
+runbook
+rustc
+RxJS
+S3
+S3 Glacier
+SaaS
+saddle point
+saga pattern
+SageMaker
+SageMaker AI
+same-origin policy
+SAML
+=Sass
+SAST
+SBOM
+Scala
+scaled dot-product attention
+scaling laws
+scatter plot
+schema evolution
+schema migration
 Schrödinger equation
+scikit-learn
+SciPy
+screen reader
+=Scrum
+Scrum Master
+SCSS
+SDK
+SDLC
+seaborn
+second normal form
+Secret Manager
+secrets management
+Security Command Center
+security group
+segfault
+segment tree
+segmentation fault
+SELECT statement
+selection sort
+Selenium WebDriver
+self-attention
+self-supervised learning
+semantic HTML
+Semantic Kernel
+semantic search
+semantic segmentation
+semantic versioning
+semaphore
+semi-supervised learning
+SemVer
+SentencePiece
+sentiment analysis
+separation of concerns
+seq2seq
+Sequelize
+sequence diagram
+sequence-to-sequence
+Server-Sent Events
+server-side
+server-side rendering
+server-side request forgery
+serverless
+service discovery
+service level agreement
+service level indicator
+service level objective
+service mesh
+service worker
+service-oriented architecture
+session hijacking
+sessionStorage
+SFT
+SFTP
+SGD
+SHA-256
+shadcn/ui
+shadow DOM
+Shannon entropy
+sharding
+shared responsibility model
+shell script
+sidecar container
+=SIEM
+sigmoid function
+SignalR
+SIMD
+simulated annealing
+single point of failure
+single responsibility principle
+single sign-on
+single source of truth
+single-page application
+singleton pattern
+singular value decomposition
+site reliability engineering
+skip connection
+skip list
+sklearn
+SLA
+SLI
+SLO
+slowly changing dimension
+small language model
+smart pointer
+smoke test
+SMOTE
+SMTP
+snapshot testing
+snowflake schema
+SNS
+=SOA
+=SOAP
+Socket.IO
+softmax
+software architecture
+software bill of materials
+software development life cycle
+software engineering
+=SOLID
+SOLID principles
+SolidJS
+sorting algorithm
+source map
+=SPA
+space complexity
+spaCy
+spaghetti code
+=Spark
+Spark SQL
+Spark Streaming
+speculative decoding
+speech recognition
+speech synthesis
+speech-to-text
+spinlock
+split-brain
+Splunk
+spot instance
+Spring Boot
+Spring Cloud
+Spring Data JPA
+Spring Framework
+Spring MVC
+Spring Security
+sprint planning
+sprint retrospective
+SQL
+SQL injection
+SQL Server
+SQLAlchemy
+SQLite
+SQS
+SRE
+SSD
+SSG
+SSH
+SSH key
+SSL
+SSL certificate
+SSO
+SSR
+SSRF
+Stable Diffusion
+stack frame
+stack memory
+stack overflow
+stack trace
+standard deviation
+standard error
+Standard Template Library
+star schema
+state pattern
+state space model
+StatefulSet
+static analysis
+static site generation
+static typing
+statistical significance
+STL
+stochastic gradient descent
+stop words
+stored procedure
+story point
+strangler fig pattern
+strategy pattern
+stream processing
+Streamlit
+string interpolation
+strong consistency
+structured logging
+structured output
+subnet
+subquery
+sudo
+suffix array
+suffix tree
+Supabase
+supervised fine-tuning
+supervised learning
+supply chain attack
+support vector machine
+surrogate key
+SVD
+=Svelte
+SvelteKit
+SVM
+SVN
+=Swagger
+Swagger UI
+SWE-bench
+SwiftUI
+Symfony
+symmetric encryption
+syntactic sugar
+synthetic data
+syscall
+system call
+system design
+system prompt
+systemd
+t-distribution
+t-SNE
+T-SQL
+t-test
+T5
+=Tableau
+tail recursion
+Tailwind CSS
+TanStack Query
+Taylor series
+TCP
+TCP/IP
+TDD
+technical debt
+template method pattern
+Tensor Core
+Tensor Processing Unit
+TensorBoard
+TensorFlow
+TensorFlow Lite
+TensorRT
+Terraform
+test coverage
+test double
+test fixture
+test pyramid
+test set
+test suite
+test-driven development
+text classification
+text summarization
+text-to-image
+text-to-speech
+TF-IDF
+third normal form
+thread pool
+thread safety
+thread-safe
+threat modeling
+three-way handshake
+thundering herd
+tidyverse
+tight coupling
+time complexity
+time series
+time series forecasting
+Time to First Byte
+time to first token
+time-series database
+TimescaleDB
+TLB
+TLS
+TLS handshake
+tmux
+tokenization
+tokenizer
+TOML
+tool calling
+top-k sampling
+top-p sampling
+topological sort
+TPU
+traceroute
+Traefik
+train-test split
+training set
+transaction isolation
+transfer learning
+Transformer architecture
+transformer model
+translation lookaside buffer
+transpilation
+transpiler
+Travis CI
+tree shaking
+Trino
+Triton Inference Server
+true negative
+true positive
+trunk-based development
+TSX
+TTL
+TTS
+Turbopack
+Turing complete
+Turing machine
+twelve-factor app
+two's complement
+two-factor authentication
+two-phase commit
+Type I error
+Type II error
+type inference
+TypeORM
+TypeScript
+U-Net
+ubiquitous language
+Ubuntu
+UDP
+UEFI
+=UI
+UI/UX
+UIKit
+UMAP
+UML
+UML diagram
+underfitting
+Unicode
+uniform distribution
+union-find
+unique constraint
+unit of work
+unit test
+Unix
+unsupervised learning
+URI
+URL
+useEffect
+user agent
+user space
+user story
+useState
+UTF-8
+UUID
+Uvicorn
+UX
+VAE
+validation set
+value function
+value object
+vanishing gradient
+variational autoencoder
+vector clock
+vector database
+vector search
+vector space
+venv
+version control
+version control system
+Vertex AI
+vertical scaling
+=Vim
+virtual DOM
+virtual machine
+Virtual Machine Scale Sets
+virtual memory
+virtual private cloud
+virtualenv
+virtualization
+Vision Transformer
+vision-language model
+visitor pattern
+Visual Studio
+Visual Studio Code
+=ViT
+Vite
+Vitest
+VLAN
+vLLM
+VLM
+VM
+VNet
+von Neumann architecture
+VPC
+VPC Service Controls
+VPN
+VS Code
+=Vue
+Vue.js
+vulnerability scanning
+WAF
+WAI-ARIA
+=WAN
+Wasm
+waterfall model
+WCAG
+Weaviate
+web application firewall
+Web Components
+web server
+Web Worker
+WebAssembly
+WebAuthn
+WebDriver
+WebGL
+WebGPU
+webhook
+webpack
+WebRTC
+WebSocket
+weight decay
+white-box testing
+wide-column store
+window function
+Windows Subsystem for Linux
+Wireshark
+word embedding
+word error rate
+Word2Vec
+WordPress
+worker thread
+write-ahead log
+write-through cache
+WSGI
+WSL
+x86
+x86-64
+Xcode
+XGBoost
+XML
+XMLHttpRequest
+XSS
+YAGNI
+YAML
+=YOLO
+z-score
+zero trust
+zero-day vulnerability
+zero-downtime deployment
+zero-shot learning
+zero-shot prompting
+ZeroMQ
+zombie process
+=ZooKeeper
+Zsh
+Zustand

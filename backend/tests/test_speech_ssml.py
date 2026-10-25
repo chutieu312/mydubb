@@ -103,8 +103,8 @@ def test_text_without_terms_is_one_vietnamese_span_and_empty_text_has_none():
 
 def test_terms_outside_the_glossary_get_no_english_span():
     # The documented limit: no automatic detection of other English terms.
-    spans = language_spans("Dùng Kafka và Terraform.", GLOSSARY)
-    assert spans == [("vi-VN", "Dùng Kafka và Terraform.")]
+    spans = language_spans("Dùng Flask và Buildah.", GLOSSARY)
+    assert spans == [("vi-VN", "Dùng Flask và Buildah.")]
 
 
 @pytest.mark.parametrize(

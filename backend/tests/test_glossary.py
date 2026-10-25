@@ -136,7 +136,7 @@ def test_invalid_glossary_files_are_rejected(content):
         Glossary.from_text(content)
 
 
-# Everyday words that must not be protected in every context (see the policy in glossary.txt).
+# Everyday words that must not be protected in every context (see the policy in docs/GLOSSARY.md).
 AMBIGUOUS_WORDS = {
     "class",
     "model",

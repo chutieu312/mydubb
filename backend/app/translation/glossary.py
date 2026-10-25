@@ -1,7 +1,7 @@
 """Glossary of English terms that must stay in English in the Vietnamese translation.
 
 Pure text matching: no HTTP, no provider knowledge. The data file is
-`data/glossary.txt` (format and policy for ambiguous words are documented at its top).
+`data/glossary.txt` (format, selection policy and maintenance: `docs/GLOSSARY.md`).
 
 How a text is searched (`Glossary.find_matches`):
 
