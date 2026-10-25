@@ -11,6 +11,7 @@ Each test runs in two Playwright projects: `desktop` (Desktop Chrome) and `mobil
 | Spec | Scenarios |
 |---|---|
 | `workflow.spec.ts` | Wrong Access Code rejected; session cookie and code not readable by JavaScript; server-side validation errors (empty transcript, last <= first); full mock job: 202 response, 360 s target, intermediate stages observed, transcript/result rendered as text only (HTML payload inert), timestamp-like spoken content ("10:30 is our meeting time.") preserved in order, mock notices, audio metadata loads, MP3 download (`attachment`, `audio/mpeg`), polling stops after completion; no horizontal overflow at phone width |
+| `timestamps.spec.ts` | Start time fields in a real browser: colons added while typing six digits with no completion, caret position after typing and edits in the middle, selection replacement, Backspace/Delete next to a colon, paste of `000001`/`00:00:01`/long hours/invalid text (clipboard permission granted to Chromium), preview and submitted payload, incomplete value reported by the server and tied to the field |
 | `logout.spec.ts` | Successful logout ends the server session (reload stays signed out); network failure and HTTP 500 during logout keep the user signed in with an error, the real session stays valid, and a retry succeeds |
 
 ### Email + password sign-in (`auth.*.spec.ts`)

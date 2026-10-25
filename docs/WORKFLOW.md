@@ -11,6 +11,10 @@
    (e.g. `fix/cleanup-race`, `docs/handoff`).
 2. Commit focused changes; never commit `.env`, real Access Codes, keys or user data
    (`.gitignore` covers the usual cases; check `git diff --cached` before committing).
+   Update the affected documentation and `docs/context.md` in the same pull request (no separate
+   documentation pull request afterwards). `docs/context.md` records what the change does, the
+   decisions to keep, what was actually verified and the limits; it does not track merge, deployment
+   or production acceptance.
 3. Push the branch and open a pull request into `main`: `gh pr create --base main`.
 4. Merge only when the **CI success** check is green and the Product Owner approves. Use
    **Squash and merge**: one commit per pull request on `main`. Once continuous deployment is

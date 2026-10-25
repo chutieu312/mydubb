@@ -89,6 +89,8 @@ Requires session + CSRF.
 Validation (backend is authoritative):
 - Timestamps: `HH:MM:SS`; hours ≥ 2 digits (may be more), minutes/seconds `00–59`.
 - `last_sentence_start` must be later than `first_sentence_start`.
+- How the UI helps to fill these fields: [Timestamp fields in the UI](#timestamp-fields-in-the-ui).
+  It never changes what the backend accepts.
 - Transcript must contain text after removing timing markup. Formats are recognized from
   the structure of the whole transcript and ambiguous tokens are kept as spoken content:
   - WebVTT: header, NOTE/STYLE/REGION blocks, cue identifiers, timing lines, inline tags.
@@ -106,6 +108,32 @@ Validation (backend is authoritative):
   existed. `null`, booleans, strings (`"1.5"`), lists, other numbers (`1.1`, `1.2500001`, `0`,
   `3`) and non-finite values are rejected with `422 validation_error` (field `speed`). The output
   length is never taken from the client; a field such as `output_duration_seconds` is ignored.
+
+### Timestamp fields in the UI
+
+The API and its validation are unchanged; the two start time fields only help to type the format.
+The request still carries the text of the field as `HH:MM:SS`, and the server decides what is valid.
+
+- The user types digits and the UI groups them in pairs: `000001` -> `00:00:01`, `010530` ->
+  `01:05:30`. While typing, `00`, `000`, `0000`, `00000` show `00`, `00:0`, `00:00`, `00:00:0`.
+  Nothing is padded, completed, clamped or reordered, and `00:75:00` or `00:01:75` is not turned
+  into an hour or a minute: it stays as typed and the server rejects it. An incomplete value is sent
+  as it is and reported through the usual field error.
+- The field is a text input with `inputmode="numeric"` (not `type="number"`, which would drop the
+  leading zeros and the colons). A typed colon is ignored because colons are automatic; letters and a
+  seventh digit are not accepted.
+- Backspace and Delete next to a colon remove the neighbouring digit, so a colon that reappears can
+  never trap the caret. The caret stays at the edit, also for edits in the middle and selections.
+- Paste accepts `000001` and `00:00:01` (surrounding whitespace is ignored). Any other pasted text,
+  for example `abc00:00:01`, `1:02:03`, `00.00.01` or seven digits without colons, is kept exactly
+  as pasted, never repaired into a timestamp, and is reported by the server on submit.
+- Hours with more than two digits are valid (see Validation above), and a digit string cannot say
+  where the hours end, so such values are not split automatically. They can be pasted as
+  `100:05:30`, or made by typing a digit into the hours of a complete timestamp. A value that is not
+  in the auto format is edited exactly as typed (no regrouping) until only digits are left in the
+  field, when the auto format applies again.
+- The code is `frontend/src/lib/timestampInput.ts` (rules, no DOM) and
+  `frontend/src/features/dubbing/TimestampInput.tsx` (the field).
 
 ### Audio speed
 
