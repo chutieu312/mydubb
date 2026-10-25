@@ -31,6 +31,8 @@ import logging
 import shutil
 import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,10 +60,12 @@ from app.audio.mp3_header import (
     read_gapless_info,
     set_exact_padding,
 )
-from app.audio.speed import DurationTarget
+from app.audio.speed import DurationTarget, TimelinePlan
+from app.audio.timeline import MAX_TEMPO_PASSES as MAX_BLOCK_TEMPO_PASSES
+from app.audio.timeline import TimelineNotReached, TimelineReport, fit_timeline
 from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info
 from app.processing_errors import ProcessingError
-from app.speech.base import SpeechAudio
+from app.speech.base import SpeechAudio, TimedSpeechAudio
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +114,14 @@ def _failure(code: str) -> ProcessingError:
 
 
 @dataclass(frozen=True)
+class _VerifiedMp3:
+    decoded_samples: int
+    header_samples: int
+    container_seconds: float
+    padding_adjusted_samples: int
+
+
+@dataclass(frozen=True)
 class _Candidate:
     path: Path
     info: WavInfo
@@ -132,30 +144,8 @@ class FfmpegAudioProcessor:
         if speech.lossless_path is None:
             raise _failure("audio_source_missing")
         output = work_dir / "final.mp3"
-        scratch = Path(tempfile.mkdtemp(prefix="audio-", dir=work_dir))
-        try:
+        with self._failures(work_dir, output) as scratch:
             report = self._fit(speech.lossless_path, target, scratch, output)
-        except ProcessingError:
-            output.unlink(missing_ok=True)
-            raise
-        except AudioToolCancelled:
-            output.unlink(missing_ok=True)
-            raise _failure("audio_cancelled") from None
-        except AudioToolTimeout:
-            output.unlink(missing_ok=True)
-            raise _failure("audio_timeout") from None
-        except InvalidAudioError:
-            output.unlink(missing_ok=True)
-            raise _failure("audio_input_invalid") from None
-        except (AudioToolError, OSError):
-            output.unlink(missing_ok=True)
-            raise _failure("audio_processing_failed") from None
-        except BaseException:
-            # No partial audio is left behind, whatever happened.
-            output.unlink(missing_ok=True)
-            raise
-        finally:
-            shutil.rmtree(scratch, ignore_errors=True)
         # Counts only; never content.
         logger.info(
             "Audio fitted: source_samples=%d target_samples=%d tempo=%s passes=%d "
@@ -168,6 +158,119 @@ class FfmpegAudioProcessor:
             report.trimmed_samples,
         )
         return ProcessedAudio(path=output, duration_adjusted=True, duration_report=report)
+
+    def fit_timeline(
+        self,
+        speech: TimedSpeechAudio,
+        plan: TimelinePlan,
+        work_dir: Path,
+        *,
+        grouping: bool = True,
+        relative: bool = False,
+    ) -> ProcessedAudio:
+        """Each block's clip in its own frame of the timeline (see audio/timeline.py)."""
+        if len(speech.clips) != len(plan.ratios):
+            raise _failure("audio_source_missing")
+        output = work_dir / "final.mp3"
+        with self._failures(work_dir, output) as scratch:
+            report, timeline = self._fit_timeline(speech, plan, scratch, output, grouping, relative)
+        sped_up = [f.tempo_factor for f in timeline.frames if f.tempo_factor is not None]
+        logger.info(
+            "Timeline fitted: blocks=%d frames=%d removed_boundaries=%d sped_up=%d max_tempo=%s "
+            "over_warning=%d target_samples=%d padded=%d trimmed=%d",
+            len(plan.ratios),
+            len(timeline.frames),
+            len(timeline.removed),
+            len(sped_up),
+            f"{max(sped_up):.6f}" if sped_up else "none",
+            len(timeline.unresolved),
+            report.target_samples,
+            report.padded_samples,
+            report.trimmed_samples,
+        )
+        return ProcessedAudio(
+            path=output, duration_adjusted=True, duration_report=report, timeline=timeline
+        )
+
+    @contextmanager
+    def _failures(self, work_dir: Path, output: Path) -> Iterator[Path]:
+        """A scratch directory; maps failures to safe codes and never leaves partial audio."""
+        scratch = Path(tempfile.mkdtemp(prefix="audio-", dir=work_dir))
+        try:
+            yield scratch
+        except ProcessingError:
+            output.unlink(missing_ok=True)
+            raise
+        except AudioToolCancelled:
+            output.unlink(missing_ok=True)
+            raise _failure("audio_cancelled") from None
+        except AudioToolTimeout:
+            output.unlink(missing_ok=True)
+            raise _failure("audio_timeout") from None
+        except InvalidAudioError:
+            output.unlink(missing_ok=True)
+            raise _failure("audio_input_invalid") from None
+        except TimelineNotReached:
+            output.unlink(missing_ok=True)
+            logger.warning(
+                "A timeline block did not fit its frame in %d passes", MAX_BLOCK_TEMPO_PASSES
+            )
+            raise _failure("audio_duration_not_reached") from None
+        except (AudioToolError, OSError):
+            output.unlink(missing_ok=True)
+            raise _failure("audio_processing_failed") from None
+        except BaseException:
+            # No partial audio is left behind, whatever happened.
+            output.unlink(missing_ok=True)
+            raise
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def _fit_timeline(
+        self,
+        speech: TimedSpeechAudio,
+        plan: TimelinePlan,
+        scratch: Path,
+        output: Path,
+        grouping: bool,
+        relative: bool,
+    ) -> tuple[DurationReport, TimelineReport]:
+        rate = read_wav_info(speech.clips[0]).format.sample_rate
+        target_frames = plan.target.samples(rate)
+        if target_frames * 2 > MAX_PCM_BYTES:
+            raise _failure("audio_duration_unsupported")
+        boundaries = plan.boundaries(rate)
+        fitted = scratch / "timeline.wav"
+        timeline = fit_timeline(
+            self._tools,
+            list(speech.clips),
+            boundaries,
+            scratch,
+            fitted,
+            grouping=grouping,
+            relative=relative,
+            cancel=self._cancel,
+        )
+        blocks = timeline.frames
+        mp3 = self._encode_verified(fitted, target_frames, rate, scratch, output)
+        report = DurationReport(
+            sample_rate=rate,
+            baseline_seconds=plan.target.baseline_seconds,
+            speed=plan.target.speed,
+            target_samples=target_frames,
+            source_samples=sum(block.source_samples for block in blocks),
+            processed_samples=target_frames,
+            # No single factor: each block has its own (see `blocks`).
+            tempo_factor=None,
+            tempo_passes=max(block.tempo_passes for block in blocks),
+            padded_samples=sum(block.padded_samples for block in blocks),
+            trimmed_samples=sum(block.trimmed_samples for block in blocks),
+            mp3_decoded_samples=mp3.decoded_samples,
+            mp3_header_samples=mp3.header_samples,
+            mp3_container_seconds=mp3.container_seconds,
+            mp3_padding_adjusted_samples=mp3.padding_adjusted_samples,
+        )
+        return report, timeline
 
     def _fit(
         self, lossless: Path, target: DurationTarget, scratch: Path, output: Path
@@ -184,6 +287,28 @@ class FfmpegAudioProcessor:
         fitted = scratch / "fitted.wav"
         padded, trimmed = conform_wav(processed.path, processed.info, fitted, target_frames)
 
+        mp3 = self._encode_verified(fitted, target_frames, rate, scratch, output)
+        return DurationReport(
+            sample_rate=rate,
+            baseline_seconds=target.baseline_seconds,
+            speed=target.speed,
+            target_samples=target_frames,
+            source_samples=source.frames,
+            processed_samples=target_frames,
+            tempo_factor=factor,
+            tempo_passes=passes,
+            padded_samples=padded,
+            trimmed_samples=trimmed,
+            mp3_decoded_samples=mp3.decoded_samples,
+            mp3_header_samples=mp3.header_samples,
+            mp3_container_seconds=mp3.container_seconds,
+            mp3_padding_adjusted_samples=mp3.padding_adjusted_samples,
+        )
+
+    def _encode_verified(
+        self, fitted: Path, target_frames: int, rate: int, scratch: Path, output: Path
+    ) -> _VerifiedMp3:
+        """Encode the exact-length PCM to MP3 once and verify the real file (see module doc)."""
         # The PCM handed to the encoder, measured: the header repair works from this count, never
         # from the wished-for target.
         encoded_frames = read_wav_info(fitted).frames
@@ -217,21 +342,11 @@ class FfmpegAudioProcessor:
                 container_seconds,
             )
             raise _failure("audio_verification_failed")
-        return DurationReport(
-            sample_rate=rate,
-            baseline_seconds=target.baseline_seconds,
-            speed=target.speed,
-            target_samples=target_frames,
-            source_samples=source.frames,
-            processed_samples=target_frames,
-            tempo_factor=factor,
-            tempo_passes=passes,
-            padded_samples=padded,
-            trimmed_samples=trimmed,
-            mp3_decoded_samples=decoded.frames,
-            mp3_header_samples=header.playable_samples,
-            mp3_container_seconds=container_seconds,
-            mp3_padding_adjusted_samples=padding_adjusted,
+        return _VerifiedMp3(
+            decoded_samples=decoded.frames,
+            header_samples=header.playable_samples,
+            container_seconds=container_seconds,
+            padding_adjusted_samples=padding_adjusted,
         )
 
     def _repair_padding_cap(

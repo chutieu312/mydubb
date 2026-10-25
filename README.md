@@ -172,6 +172,23 @@ uv run python -m scripts.duration_smoke --wav speech.wav --target-seconds 360   
 uv run python -m scripts.duration_smoke --azure            # LIVE: 2 Azure Speech requests
 ```
 
+### Timed transcripts
+
+A transcript in the YouTube transcript-panel format (a timestamp alone on a line above each
+caption) can be dubbed in timed mode: the UI recognizes it, fills the two start times from the
+first and last caption and sends `timing_mode: "timed"`; the speech is then placed near the caption
+times (estimated, group-level timing, not exact per sentence). Plain mode is unchanged and remains
+the default. Rules, checks and limits: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#timed-dubbing).
+Measurement tools (Azure is called only by the smoke script, with a request and character budget):
+
+```bash
+cd backend
+uv run python -m scripts.timed_benchmark --words 1000 [--audio]   # parse cost, request model, FFmpeg
+uv run python -m scripts.timed_speech_smoke --output-dir DIR       # LIVE: 4 Azure Speech requests
+uv run python -m scripts.timed_speech_smoke --output-dir DIR --replay DIR/responses   # no network
+uv run python -m scripts.timed_grouping_samples --clips main=DIR --output-dir OUT    # no network
+```
+
 ## Tests and checks
 
 ```bash

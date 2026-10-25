@@ -28,12 +28,12 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `db.py` | Engine (with connect timeout), session factory, declarative base | — |
 | `access/` | Access Code check, server-side sessions, brute-force limiter, session router | db |
 | `auth/` | Amazon Cognito mode (`AUTH_MODE=cognito`): user pool HTTP client, users keyed by issuer + `sub`, user sessions, encrypted pending sign-in steps, password-reset revocation, `/api/auth` router, the `Principal` both modes resolve to (see [AUTHENTICATION.md](AUTHENTICATION.md)) | db, `access.rate_limit` |
-| `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning (pure functions) | — |
+| `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning, timed transcripts (captions, sentence units, estimated block starts: `timed.py`) (pure functions) | `audio.speed` |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
-| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter | `processing_errors`, `audio`, `translation.glossary` |
+| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter, timed-mode block requests and their split checks (`blocks.py`), spoken-syllable estimate (`spoken_length.py`) | `processing_errors`, `audio`, `translation.glossary` |
 | `pronunciation/` | English left in a translation (pure functions): Vietnamese-syllable check, detection of English words/phrases/code against the source, the per-job `SpeechTerms` matcher, candidate keys | `translation.glossary` |
 | `glossary_candidates/` | Candidate table, counting per job, review/export/promote operations (used by `scripts/glossary_candidates.py`) | db, `jobs.models`, `pronunciation` |
-| `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture | `processing_errors`, `speech.base` |
+| `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture; timed mode: frame grouping (`grouping.py`) and placement of block clips on the timeline (`timeline.py`) | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
 | `jobs/` | Job model, guarded status transitions, executor, pipeline, HTTP router | all of the above via protocols |
 | `system/` | Health, readiness, public meta | db |
@@ -427,7 +427,8 @@ before submit.
 `AUDIO_PROCESSOR=ffmpeg` selects `FfmpegAudioProcessor` (`audio/fitter.py`). The contract: the
 target is `last_sentence_start - first_sentence_start` at speed 1x; the audio speed option (see
 "Audio speed" below) divides that baseline by the chosen speed. Either way, with no time added for
-reading the last sentence, no duration inferred from word counts, no per-sentence alignment.
+reading the last sentence, no duration inferred from word counts, no per-sentence alignment. (This
+is plain mode; timed mode places blocks near their caption times, see "Timed dubbing".)
 
 **What it does** (to the lossless WAV Azure Speech produced, `SpeechAudio.lossless_path`):
 
@@ -599,6 +600,133 @@ more than the target, as before. Extreme speeds relative to the natural speech (
 audio that was already much shorter than the baseline) mean large tempo factors, and quality drops
 well beyond roughly 0.5-2x overall, as described under "Duration fitting". At 0.5x the filter's
 window rounding can add up to about 85 ms of silence at the end (reported as `padded_samples`).
+
+### Timed dubbing
+
+`timing_mode: "timed"` (API.md) uses the timestamps of a YouTube-style transcript (a timestamp
+alone on a line, then the caption text) to place the Vietnamese speech near the caption times,
+instead of removing them and fitting the whole audio. Plain mode is unchanged and stays the
+default. Timed mode gives an **estimated, group-level** synchronization, not exact sentence timing.
+
+```
+raw transcript --timed.py--> captions -> sentence units -> blocks (estimated starts, exact fractions)
+blocks --translate_lines--> one translation per block (Azure array elements; count verified)
+translations --synthesize_blocks--> one lossless clip per block (several blocks per request,
+                                    cut at inserted breaks, speech/blocks.py)
+clips + TimelinePlan --fit_timeline--> frame grouping (grouping.py) -> fit/pad per frame
+                                    (timeline.py) -> one PCM of exactly target_samples -> MP3 once
+```
+
+**Parsing and blocks** (`transcript/timed.py`, pure). Two or more standalone timestamp lines make
+the timed structure, and then the whole document must be valid (otherwise `422`, never a guess
+and never a silent plain job). Caption texts are joined with single spaces (words, punctuation,
+fillers and repetitions unchanged) and split into sentence units at `.`, `!`, `?`, `…` unless the
+next word is lower case, the word is a known abbreviation (`Dr.`, `e.g.`), a single letter or a
+dotted acronym (`U.S.`); decimals and `Node.js` have no space after the dot. A run without
+punctuation is closed at the first caption start after 30 words (a bounded caption group, not an
+identified sentence). A unit that starts inside a caption gets a start interpolated by word count
+between that caption and the next (`3 + 2 x 4/7` s in the story's example), an estimate, not forced
+alignment. Units with equal starts merge (a frame must be positive), and anything starting at or
+after the last caption's time joins the block before it, because the last caption starts exactly
+where the baseline ends. Each block keeps the caption indices it covers.
+
+**Baseline and timeline.** `source_first` / `source_last` are the first and last caption
+timestamps and never come from blocks, so merging the last caption into an earlier block does not
+change the baseline, and no time is added for the last words. The baseline used is the one the two
+time fields select (the UI fills them from the captions; the user may change them): every block
+start is `round_half_up(ratio x selected_baseline x rate / speed)` with
+`ratio = (start - source_first) / source_baseline`, computed in exact fractions
+(`audio/speed.py: TimelinePlan`). The last boundary is exactly plain mode's target, and each frame is
+the difference of two rounded boundaries, so nothing accumulates over many blocks.
+
+**Translation.** One line per block in the existing segmenter (`translate_lines`): blocks are whole
+sentences or sentence groups, so caption fragments are never translated alone, and the translated
+lines are mapped back by position (the count is checked; a mismatch fails the job). Requests are
+batched as before (about one request for 1,000 words).
+
+**Speech: several blocks per request, cut at inserted breaks** (`speech/blocks.py`). The REST
+endpoint returns audio only (word and bookmark offsets need the Speech SDK; the batch synthesis API
+was not chosen: asynchronous, documented p50 10-20 s / p95 120 s, F0 support depends on the region).
+Consecutive blocks are sent in one request (up to 2,000 characters and 40 blocks) separated by
+`<break time="3000ms"/>`, and the response is cut in those silences. A response is used only when all
+checks hold, otherwise the job fails (`speech_block_split_failed`, no retry, no fallback):
+
+1. a silent run (10 ms windows, every sample at most 100, about -50 dBFS) is a break only within
+   2.9-4.3 s; any other run must be under 1.2 s, anything else is ambiguous;
+2. exactly one break per block boundary;
+3. only silence is removed (100 ms kept before and after each block's sound): the clips plus the
+   dropped stretches equal the response sample for sample, and every dropped sample is at most 100,
+   so no audible sample is lost or repeated;
+4. every clip has sound, and a clip of at least 6 estimated syllables is spoken at 0.5-2x the
+   syllables per second of the whole request (`spoken_length.py`: one syllable per Vietnamese word,
+   vowel groups for English words, a Vietnamese reading estimate for numbers, letters for acronyms);
+5. the cumulative difference between the time spoken so far and the time the estimate predicts
+   stays within max(3 s, 10% of the request's speech) at every break.
+
+Measured on the live prototype (6 Azure Speech requests on the F0 resource, Andrew and Emma, two
+synthetic texts with punctuation, ellipses, numbers, English terms and one-word blocks): the 3 s
+breaks were rendered as 3,380-3,830 ms of silence with low-level noise (peaks 33-99: the first
+attempt with a -60 dBFS threshold failed safely as ambiguous, and the threshold was then set to
+-50 dBFS); natural pauses were at most 820 ms; in the 4 break responses every check passed. As
+independent evidence each clip was located by envelope correlation in a rendering of the same text
+without breaks: all clips long enough to locate were found in order (Andrew 0.79-0.98, Emma
+0.93-1.00 correlation). The threshold was calibrated on those responses and then checked on two
+responses of a new text. Checks 4 and 5 replaced a character count, which rejected number lists
+and acronym lists that were cut correctly (now covered by tests with hand-written readings).
+
+**Known limits of the mapping.** The checks are consistency checks on the audio; they do not hear
+words, and passing them is not proof. A wrong mapping can pass when Azure leaves out an inserted
+break **and** a natural pause lasts as long as a break **and** the moved speech stays within the
+tolerance of checks 4 and 5. Then some speech lands in a neighbouring block's frame; the content is
+still complete and in order. In the tested cases what passed was the last words of a block moving
+to the next one; that is an observation, not a bound (in a long request a shift under 10% of its
+speech is within check 5). Neither fault was observed live. `test_speech_blocks.py` keeps a test
+that reproduces this accepted wrong mapping. An alternating break signature (e.g. 3 s / 5 s) could
+narrow it further but needs live validation and was not done.
+
+**Grouping** (`audio/grouping.py`). Some frames are far too short for their speech (the last block,
+which also holds the last caption, often has well under a second; a one-word sentence between two
+captions too): alone they would need 4-12x tempo. After synthesis, `ratio = audible clip samples /
+frame samples`; a frame above 2x is a candidate, the highest first. A frame under 1 s joins the frame
+before it (the first one joins the next); another frame joins the neighbour that lowers its ratio
+more. A merge must lower the candidate's ratio; a merge for tempo alone may not make a frame longer
+than 12 s (short frames are exempt); the transcript is never merged into a single frame. 2x is a
+target, not a limit: frames still above it are reported (`frames_over_warning_level`, a notice), not
+failed. The selected baseline, `source_first` / `source_last` and `target_samples` never change. The
+Product Owner chose this fixed 2x rule after listening, over a variant that groups only local peaks
+(more frames kept, faster speech).
+
+**Fit and pad per frame** (`audio/timeline.py`). A clip shorter than its frame keeps its natural
+speed and is followed by silence (never slowed down). A longer one first loses its silent tail if
+that is enough; otherwise its tempo is raised with `atempo` (pitch kept) aiming 1,024 samples short
+of the frame, then silence fills the frame; a result still too long (unless the excess is silent) or
+far too short is redone from the original clip with a corrected factor, up to 6 passes, otherwise
+`audio_duration_not_reached`. Speech is never cut, every frame starts exactly at its boundary, and
+nothing spills into the next frame. All tempo changes of a pass run in one FFmpeg process (64 clips
+per process at most). The joined PCM is exactly `target_samples`; it is encoded to MP3 once and
+verified like plain mode (decoded samples and gapless header). There is no second tempo pass over
+the whole file. Inside a group, a block starts where the speech before it ends: how far that is from
+its own caption time is **estimated** from the tempo factor (`estimated_max_displacement_seconds`),
+not measured.
+
+**Performance** (local Docker, FFmpeg 7.1.5; not Render Free). Parsing, blocks and timeline: 2-4 ms
+for a synthetic 1,000-word transcript, once, in memory. Speech: about 5 requests for 1,000 words
+(several blocks per request; the 3 s breaks add audio but no billed characters). The F0 limiter of
+20 requests per 60 s stays global: about four such jobs at once reach it and later requests wait.
+Live block requests took 2.6-4.3 s each, against 2.6-3.8 s for the same text without breaks.
+Cutting a response took 0.14-0.25 s. FFmpeg for 1,000 synthetic words (67 blocks, 397 s of audio):
+4.2 s with one tempo process per pass, 5.9 s with one process per block; the MP3 encode dominates.
+
+**What was listened to.** The Product Owner listened to before/after grouping samples made from the
+live clips (no new Azure calls) at 1x/1.25x/1.5x/1.75x and accepted two:
+`main-AndrewMultilingual-1.5x-grouped` and `main-EmmaMultilingual-1.75x-grouped`. That acceptance
+covers those two samples only, not every voice, speed or transcript.
+
+**Other limits.** Timing is estimated: word counts inside captions, sentence detection without a
+model, groups that share a frame. Vietnamese speech is about 1.7x longer than the English source
+timing in the samples, so at 1.25x-1.75x grouping leaves few frames and some still above 2x.
+SRT/WebVTT timing is not used yet (plain mode). Timed mode was tested with synthetic transcripts and
+fakes; it has not been run on production or with a long real course transcript.
 
 ### English left in the translation, and glossary candidates
 

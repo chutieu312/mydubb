@@ -1,5 +1,11 @@
 """The dubbing pipeline: translate -> synthesize -> process audio -> store result.
 
+Plain mode translates the cleaned transcript, synthesizes it and fits the whole audio to the
+target. Timed mode (`JobInput.timed`) translates one line per block, synthesizes one clip per block
+(speech/blocks.py) and places each in its frame of the timeline (audio/timeline.py); the stages and
+statuses are the same, and a failure in any block fails the job (no partial audio, no plain
+fallback).
+
 Runs in a worker thread (see executor.py), never on the event loop. Each status change is
 a short committed transaction so pollers see progress. The transcript is held in memory
 only for the duration of the run.
@@ -22,7 +28,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.audio.base import AudioProcessor
+from app.audio.base import AudioProcessor, ProcessedAudio
 from app.audio.speed import AudioSpeed, DurationTarget
 from app.db import session_scope
 from app.glossary_candidates.store import record_job_candidates
@@ -34,6 +40,7 @@ from app.pronunciation.detector import Detection, detect_english
 from app.speech.base import SpeechProvider
 from app.speech.voices import Voice
 from app.storage.result_store import ResultContent, ResultStore
+from app.transcript.timed import TimedTranscript
 from app.translation.base import TranslationProvider, TranslationResult
 from app.translation.glossary import Glossary, default_glossary
 
@@ -43,10 +50,33 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class JobInput:
     job_id: uuid.UUID
-    transcript: str  # cleaned English text; never persisted
+    transcript: str  # cleaned English text (timed mode: the blocks, one per line); never persisted
     voice: Voice
-    baseline_seconds: int  # last - first sentence start
+    baseline_seconds: int  # last - first sentence start, as the user selected it
     speed: AudioSpeed
+    # Timed mode: captions and blocks, in memory only; None in plain mode.
+    timed: TimedTranscript | None = None
+
+
+def timing_summary(
+    timed: TimedTranscript, selected_baseline: int, requests: int, processed: ProcessedAudio
+) -> dict:
+    """What the result reports about timed mode (no transcript text)."""
+    summary = {
+        "mode": "timed",
+        "captions": len(timed.captions),
+        "blocks": len(timed.blocks),
+        "source_first_seconds": timed.source_first,
+        "source_last_seconds": timed.source_last,
+        "source_baseline_seconds": timed.source_baseline,
+        "selected_baseline_seconds": selected_baseline,
+        "estimated_block_starts": [b.estimated_start for b in timed.blocks],
+        "speech_requests": requests,
+        "timeline": None,
+    }
+    if processed.timeline is not None:
+        summary["timeline"] = processed.timeline.as_dict()
+    return summary
 
 
 class _Superseded(Exception):
@@ -135,21 +165,30 @@ class JobPipeline:
     def _run_stages(self, job: JobInput, work_dir: Path) -> None:
         now = datetime.now(UTC)
         self._advance(job.job_id, JobStatus.QUEUED, JobStatus.TRANSLATING, started_at=now)
-        translation = self._translator.translate(job.transcript)
+        if job.timed is None:
+            translation = self._translator.translate(job.transcript)
+        else:
+            translation = self._translator.translate_lines([b.text for b in job.timed.blocks])
 
         detection = self._detect(job, translation)
+        terms = detection.speech_terms if detection is not None else None
 
         self._advance(job.job_id, JobStatus.TRANSLATING, JobStatus.SYNTHESIZING)
-        speech = self._speech.synthesize(
-            translation.text,
-            job.voice,
-            work_dir,
-            terms=detection.speech_terms if detection is not None else None,
-        )
-
-        self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
-        target = DurationTarget(job.baseline_seconds, job.speed)
-        processed = self._audio.fit_to_duration(speech, target, work_dir)
+        if job.timed is None:
+            speech = self._speech.synthesize(translation.text, job.voice, work_dir, terms=terms)
+            self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
+            target = DurationTarget(job.baseline_seconds, job.speed)
+            processed = self._audio.fit_to_duration(speech, target, work_dir)
+            timing = None
+        else:
+            # Timed mode: one clip per block, each placed in its frame of the timeline. Any
+            # failure fails the job; there is no fallback to the plain flow.
+            blocks = self._speech.synthesize_blocks(translation.lines, job.voice, work_dir, terms)
+            self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
+            plan = job.timed.plan(job.baseline_seconds, job.speed)
+            processed = self._audio.fit_timeline(blocks, plan, work_dir)
+            speech = blocks
+            timing = timing_summary(job.timed, job.baseline_seconds, blocks.requests, processed)
 
         completed_at = datetime.now(UTC)
         expires_at = completed_at + self._result_ttl
@@ -164,6 +203,7 @@ class JobPipeline:
                 duration_report=(
                     processed.duration_report.as_dict() if processed.duration_report else None
                 ),
+                timing=timing,
             ),
             expires_at,
         )

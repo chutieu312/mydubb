@@ -115,3 +115,12 @@ def concat_wavs(sources: Sequence[Path], output: Path, expected: PcmFormat) -> f
                     target.writeframes(block)
                     remaining -= len(block)
     return sum(info.frames for info in infos) / expected.sample_rate
+
+
+def write_silence(output: Path, pcm: PcmFormat, frames: int) -> None:
+    """A WAV of `frames` silent frames in format `pcm`."""
+    with wave.open(str(output), "wb") as target:
+        target.setnchannels(pcm.channels)
+        target.setsampwidth(pcm.sample_width)
+        target.setframerate(pcm.sample_rate)
+        target.writeframes(bytes(frames * pcm.frame_bytes))

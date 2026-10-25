@@ -86,6 +86,10 @@ Requires session + CSRF.
 `baseline / speed`, where the baseline is `last_sentence_start - first_sentence_start`. See
 [Audio speed](#audio-speed).
 
+`timing_mode` is optional: `"plain"` (the default, the behaviour before the option existed) or
+`"timed"`, which uses the caption times of a timestamped transcript to place the speech on the
+timeline. See [Timed transcripts](#timed-transcripts-timing_mode-timed).
+
 Validation (backend is authoritative):
 - Timestamps: `HH:MM:SS`; hours ≥ 2 digits (may be more), minutes/seconds `00–59`.
 - `last_sentence_start` must be later than `first_sentence_start`.
@@ -101,7 +105,8 @@ Validation (backend is authoritative):
     non-decreasing order.
   - Preserved: unbracketed `M:SS`/`HH:MM` prefixes such as `10:30 is our meeting time.` or
     `16:30 is the aspect ratio.`, single or out-of-order timestamps, and numeric lines.
-  See `backend/app/transcript/cleaning.py` for the authoritative rules.
+  See `backend/app/transcript/cleaning.py` for the authoritative rules. These cleaning rules
+  apply to plain mode; timed mode parses the timestamps instead (see below).
 - Baseline duration = last start − first start (e.g. `00:00:10` → `00:06:10` = **360 s**).
 - `speed`: exactly one of the JSON numbers `0.5`, `0.75`, `1`, `1.25`, `1.5`, `1.75`, `2`
   (`1` and `1.0` are the same). Omitted means `1`, which is the behaviour before the option
@@ -166,6 +171,33 @@ The request still carries the text of the field as `HH:MM:SS`, and the server de
 - Players must keep `playbackRate = 1`: the file is already processed, so applying the speed
   again would play it twice as fast/slow.
 
+### Timed transcripts (`timing_mode: "timed"`)
+
+With `"timed"`, the transcript must have the YouTube transcript-panel structure: a timestamp alone
+on a line (`M:SS`, `MM:SS`, `H:MM:SS` or `HH:MM:SS`, whole seconds) followed by the caption text,
+repeated. The rules are in `backend/app/transcript/timed.py` and ARCHITECTURE.md ("Timed dubbing").
+
+- **Validation** (`422 validation_error`, field `transcript`, with the reason): fewer than two
+  standalone timestamps, a malformed one (`0:75`, `1:2:03`, `0:05.5`), text before the first
+  timestamp, a timestamp without caption text, timestamps that go backwards, or a last caption that
+  starts at the first one's time. Nothing is guessed and the request is **not** processed as plain
+  text instead; the client sends `"plain"` (or omits the field) to do that.
+- **Baseline.** The two time fields are still required and validated as above. The UI fills them
+  from the first and last **caption** timestamps (`source_first`, `source_last`), whatever block
+  the last caption ends up in; no time is added for the last words. The baseline used is what the
+  fields say: if the user changes them, every caption position is scaled into that span
+  (`position_ratio = (source_position - source_first) / source_baseline`,
+  `output_position = position_ratio * selected_baseline / speed`). Changing the fields never drops
+  text. The output length is the same as in plain mode: `round_half_up(baseline * rate / speed)`.
+- **Estimated timing.** Captions are joined into sentences; a sentence that starts inside a caption
+  gets a time interpolated by word count. Sentences whose speech needs more than 2x tempo in their
+  span are grouped with a neighbour and share one span. Timing is therefore estimated and
+  group-level, not exact per sentence; see the limits in ARCHITECTURE.md.
+- **SRT and WebVTT** are accepted only in plain mode for now (their timing is removed by cleaning,
+  as before); with `"timed"` they are rejected like any transcript without the structure.
+- With mock speech or the mock audio processor, a timed job completes with the fixture and the
+  `timing` summary, but nothing is placed on a timeline (`timing.frames` is `null`).
+
 Responses:
 - `202` + `Location: /api/jobs/{id}` + a Job body (status `queued`). Returned immediately; work
   runs in the background.
@@ -215,7 +247,9 @@ Translator: `translation_auth_failed`, `translation_quota_exceeded`, `translatio
 `translation_input_unsupported`; and for Azure Speech: `speech_auth_failed`,
 `speech_quota_exceeded`, `speech_timeout`, `speech_network_error`, `speech_service_error`,
 `speech_rejected`, `speech_invalid_audio`, `speech_audio_failed`, `speech_cancelled`,
-`speech_input_unsupported`, `speech_no_speakable_text`; and for FFmpeg audio processing:
+`speech_input_unsupported`, `speech_no_speakable_text`, `speech_block_split_failed` (timed mode:
+a speech response did not pass the checks used to cut it into sentence blocks); and for FFmpeg
+audio processing:
 `audio_source_missing`, `audio_input_invalid`, `audio_duration_unsupported`,
 `audio_duration_not_reached`, `audio_verification_failed`, `audio_timeout`, `audio_cancelled`,
 `audio_processing_failed`. Messages are safe to show (no keys, transcript text or raw
@@ -283,6 +317,31 @@ Requires session and ownership.
   fractional targets; see ARCHITECTURE.md); 0 means the encoder's header was already exact.
   A stored result written before `speed` existed (no `speed` in its report) is returned with
   `speed: 1` and `baseline_seconds` equal to its target.
+
+  A timed job's result also has `timing` (`null` for plain jobs and older results); it holds
+  numbers only, no transcript text:
+  ```json
+  "timing": {
+    "mode": "timed", "captions": 7, "blocks": 3,
+    "source_first_seconds": 0, "source_last_seconds": 11, "source_baseline_seconds": 11,
+    "selected_baseline_seconds": 11, "speech_requests": 1,
+    "frames": 2, "removed_boundaries": 1, "tempo_warning_level": 2.0,
+    "max_tempo_factor": 1.84, "frames_over_warning_level": 0,
+    "estimated_max_displacement_seconds": 0.41,
+    "frame_details": [
+      { "first_block": 0, "last_block": 0, "start_seconds": 0.0, "frame_seconds": 4.142875,
+        "audio_seconds": 6.9, "tempo_factor": 1.72, "padded_seconds": 0.04 }
+    ]
+  }
+  ```
+  `frames` are the spans of the output timeline after grouping (`removed_boundaries` block starts
+  were merged into a neighbour's span); `tempo_factor` per frame is `null` when the speech fitted at
+  its natural speed (then `padded_seconds` of silence follow it). `frames_over_warning_level`
+  counts spans still above 2x after grouping (a warning, not a failure).
+  `estimated_max_displacement_seconds` is how far a merged block's speech is estimated to start
+  from its own caption time, computed from the tempo factors, not measured. In timed mode
+  `audio.duration.tempo_factor` is `null` (each frame has its own) and `padded_samples` /
+  `trimmed_samples` are sums over the frames.
 - `409 result_not_ready` (still running) or `409 job_failed` (with `job_error_code`).
 - `410 result_expired` — the job completed but its temporary result expired or was removed
   (TTL elapsed, cleanup, or restart on an ephemeral disk).

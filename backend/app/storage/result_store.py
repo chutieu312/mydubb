@@ -27,6 +27,8 @@ class ResultContent:
     duration_adjusted: bool
     # Measured durations of the final audio (see DurationReport.as_dict); None if not adjusted.
     duration_report: dict | None = None
+    # Timed mode summary (pipeline.timing_summary; no transcript text); None in plain mode.
+    timing: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class StoredResult:
     duration_adjusted: bool
     expires_at: datetime
     duration_report: dict | None = None
+    timing: dict | None = None
 
 
 class ResultStore(Protocol):
@@ -108,6 +111,7 @@ class LocalFileResultStore:
             "audio_is_fixture": content.audio_is_fixture,
             "duration_adjusted": content.duration_adjusted,
             "duration_report": content.duration_report,
+            "timing": content.timing,
             "expires_at": expires_at.isoformat(),
         }
         # Metadata is written last; a directory without it is never treated as a result.
@@ -135,6 +139,7 @@ class LocalFileResultStore:
             duration_adjusted=bool(meta["duration_adjusted"]),
             expires_at=expires_at,
             duration_report=meta.get("duration_report"),
+            timing=meta.get("timing"),
         )
 
     def delete(self, job_id: uuid.UUID) -> None:

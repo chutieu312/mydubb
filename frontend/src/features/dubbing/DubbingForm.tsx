@@ -1,14 +1,16 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { Job, VoiceOption } from "../../api/types";
 import { DEFAULT_SPEED } from "../../lib/speed";
 import type { StudioDraft } from "../../lib/studioDraft";
-import { previewTargetDuration } from "../../lib/timestamps";
+import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
+import { analyzeTranscriptTiming, type TranscriptTiming } from "../../lib/transcriptTiming";
 import { FieldMessage } from "./FieldMessage";
 import { LengthSummary } from "./LengthSummary";
 import { SpeedField } from "./SpeedField";
 import { TimestampInput } from "./TimestampInput";
+import { TranscriptTimingPanel } from "./TranscriptTimingPanel";
 import { VoiceField } from "./VoiceField";
 
 interface Props {
@@ -23,6 +25,11 @@ interface Props {
 }
 
 type FieldErrors = Partial<Record<string, string>>;
+
+// The caption pair the two time fields were last filled from.
+function captionKey(timing: TranscriptTiming): string | null {
+  return timing.kind === "timed" ? `${timing.first}-${timing.last}` : null;
+}
 
 export function DubbingForm({
   voices,
@@ -42,15 +49,46 @@ export function DubbingForm({
       : (voices[0]?.id ?? "");
   });
   const [speed, setSpeed] = useState<number>(initialDraft?.speed ?? DEFAULT_SPEED);
+  const [ignoreTimestamps, setIgnoreTimestamps] = useState(initialDraft?.ignoreTimestamps ?? false);
+  // A restored draft keeps its own field values: its captions count as already filled.
+  const filledFrom = useRef<string | null>(
+    captionKey(analyzeTranscriptTiming(initialDraft?.transcript ?? "")),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
-    onDraftChange?.({ transcript, firstStart, lastStart, voice, speed });
-  }, [onDraftChange, transcript, firstStart, lastStart, voice, speed]);
+    onDraftChange?.({ transcript, firstStart, lastStart, voice, speed, ignoreTimestamps });
+  }, [onDraftChange, transcript, firstStart, lastStart, voice, speed, ignoreTimestamps]);
 
+  const timing = useMemo(() => analyzeTranscriptTiming(transcript), [transcript]);
   const preview = previewTargetDuration(firstStart, lastStart);
+  const usesTimestamps =
+    (timing.kind === "timed" || timing.kind === "invalid") && !ignoreTimestamps;
+  const overridden =
+    timing.kind === "timed" &&
+    (firstStart !== formatSeconds(timing.first) || lastStart !== formatSeconds(timing.last));
+
+  // Fill the two fields from the first and last caption once per detected pair (a new
+  // transcript), never on later renders, so the user's own edits stay.
+  const fillFromCaptions = (next: TranscriptTiming, force = false) => {
+    const key = captionKey(next);
+    if (next.kind !== "timed" || key === null || (!force && filledFrom.current === key)) return;
+    filledFrom.current = key;
+    setFirstStart(formatSeconds(next.first));
+    setLastStart(formatSeconds(next.last));
+  };
+
+  const changeTranscript = (value: string) => {
+    setTranscript(value);
+    if (!ignoreTimestamps) fillFromCaptions(analyzeTranscriptTiming(value));
+  };
+
+  const changeIgnore = (ignore: boolean) => {
+    setIgnoreTimestamps(ignore);
+    if (!ignore) fillFromCaptions(timing);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -64,6 +102,8 @@ export function DubbingForm({
         last_sentence_start: lastStart,
         voice,
         speed,
+        // Only sent for timed transcripts; a plain request is unchanged (the server's default).
+        ...(usesTimestamps ? { timing_mode: "timed" as const } : {}),
       });
       onJobCreated(job);
     } catch (err) {
@@ -93,11 +133,19 @@ export function DubbingForm({
           id="transcript"
           rows={10}
           value={transcript}
-          onChange={(e) => setTranscript(e.target.value)}
+          onChange={(e) => changeTranscript(e.target.value)}
           placeholder="Paste the English transcript (with or without timestamps)…"
           aria-invalid={Boolean(fieldErrors.transcript)}
         />
         <FieldMessage message={fieldErrors.transcript} />
+        <TranscriptTimingPanel
+          timing={timing}
+          ignore={ignoreTimestamps}
+          onIgnoreChange={changeIgnore}
+          overridden={overridden}
+          selectedBaseline={preview}
+          onUseTranscriptTimes={() => fillFromCaptions(timing, true)}
+        />
 
         <div className="times">
           <TimestampInput
@@ -121,6 +169,12 @@ export function DubbingForm({
           <p className="small muted">
             The audio length is the time between the two start times. At 1x the audio fits that
             time; another speed makes the audio file shorter or longer.
+          </p>
+          <p className="small muted">
+            With a timestamped transcript (a time such as 0:05 above each caption), each sentence
+            is placed near its caption time. Times inside a caption are estimated from word
+            counts, and sentences whose speech is too long for their time are grouped with a
+            neighbour, so the timing is approximate, not exact per sentence.
           </p>
         </details>
       </section>

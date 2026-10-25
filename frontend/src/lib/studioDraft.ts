@@ -7,6 +7,8 @@ export interface StudioDraft {
   lastStart: string;
   voice: string;
   speed: number;
+  // The user chose to process a timestamped transcript as plain text.
+  ignoreTimestamps?: boolean;
 }
 
 export interface DraftKeeper {
