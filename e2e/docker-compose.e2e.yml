@@ -35,6 +35,8 @@ services:
       PROVIDER_MODE: mock
       # Long enough for the UI to observe intermediate stages.
       MOCK_STAGE_DELAY_SECONDS: "1.0"
+      # Fixed captions instead of Supadata (no network, no key); the delay above applies too.
+      YOUTUBE_IMPORT_PROVIDER: mock
       COOKIE_SECURE: "false"
       # Each test signs in separately; one test deliberately uses a wrong code.
       ACCESS_MAX_FAILURES_PER_CLIENT: "20"

@@ -36,6 +36,7 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
 | `jobs/` | Job model, guarded status transitions, executor, pipeline, HTTP router | all of the above via protocols |
+| `youtube_import/` | YouTube caption import into the form (no job): strict link parsing and the canonical URL, `CaptionProvider` protocol, Supadata provider (`mode=native`, polling of asynchronous jobs, shared rate limiter), mock, caption checks and the [timestamped transcript format](API.md#timestamped-transcript-format), admission control, `/api/transcripts` router | `speech.rate_limit`, `transcript.timestamps` |
 | `system/` | Health, readiness, public meta | db |
 | `services.py` | Composition root: builds providers, store, executor, pipeline from settings | everything |
 | `maintenance.py` | Startup recovery, shutdown interruption, periodic cleanup | jobs, access, storage |
@@ -113,6 +114,17 @@ unbounded task creation. When full, the API reports `503 server_at_capacity` wit
 `Retry-After` — a real resource constraint, not a usage quota. There are no daily limits and no
 transcript-length caps; the only size guard is `MAX_REQUEST_BODY_BYTES` (default 10 MB of
 JSON, roughly a million and a half words) to protect a small instance's memory.
+
+The YouTube caption import is not a job: it is one synchronous request that waits for Supadata
+in the server's thread pool (the event loop stays free; the request's database connection is
+released before the wait). At most `YOUTUBE_IMPORT_MAX_CONCURRENT` (default 2) run at once, again
+through a non-blocking semaphore (`503 youtube_import_busy` when full, never a queue). Every
+Supadata request of the process, status polls of an asynchronous provider job included, goes
+through one `RequestRateLimiter` (the same class as Azure Speech, here with a deadline so a wait
+never outlasts the import). Polling stays inside that request, bounded by
+`SUPADATA_DEADLINE_SECONDS`; the provider's job ID never leaves the server, so there is no import
+state in memory or the database to own, expire or clean up. No queue (Kafka, SQS, Redis, a
+database table) is involved; this fits the single-instance design.
 
 ### Data retention
 

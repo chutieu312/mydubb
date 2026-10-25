@@ -2,7 +2,12 @@ import threading
 
 import pytest
 
-from app.speech.rate_limit import WINDOW_MARGIN_SECONDS, RateLimiterClosed, RequestRateLimiter
+from app.speech.rate_limit import (
+    WINDOW_MARGIN_SECONDS,
+    RateLimiterClosed,
+    RateLimiterDeadline,
+    RequestRateLimiter,
+)
 
 
 class FakeTime:
@@ -89,6 +94,26 @@ def test_a_closed_limiter_refuses_and_wakes_waiters():
     assert len(errors) == 1
     with pytest.raises(RateLimiterClosed):
         limiter.acquire()
+
+
+def test_a_deadline_before_the_next_slot_fails_at_once_without_counting():
+    fake = FakeTime()
+    limiter = RequestRateLimiter(1, 1, clock=fake.clock, wait=fake.wait)
+    limiter.acquire()
+    with pytest.raises(RateLimiterDeadline):
+        limiter.acquire(deadline=fake.now + 1)  # the next slot is 2 s away
+    assert fake.waits == []
+    # The refused call took no slot: a caller with time to spare gets the next one.
+    limiter.acquire(deadline=fake.now + 5)
+    assert fake.waits == [pytest.approx(1 + WINDOW_MARGIN_SECONDS)]
+
+
+def test_a_free_slot_is_granted_whatever_the_deadline():
+    fake = FakeTime()
+    limiter = RequestRateLimiter(2, 60, clock=fake.clock, wait=fake.wait)
+    limiter.acquire(deadline=fake.now)
+    limiter.acquire(deadline=fake.now)
+    assert fake.waits == []
 
 
 def test_invalid_settings_are_rejected():

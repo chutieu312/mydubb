@@ -402,6 +402,73 @@ database migration).
 - The MP3 is exact for gapless-aware players (browsers, FFmpeg). A player that ignores the MP3
   header plays up to about 50-70 ms more; see [ARCHITECTURE.md](ARCHITECTURE.md#duration-fitting-milestone-3c).
 
+## YouTube caption import (Supadata)
+
+Optional and **off** (`YOUTUBE_IMPORT_PROVIDER=off` is the default): with it off, nothing changes
+and pasting works as before. When on, the form offers "YouTube URL" and fills the transcript with
+the video's existing English captions through [Supadata](https://supadata.ai) (`mode=native`;
+see [API.md](API.md#youtube-caption-import)). It never creates a job or calls Azure. Production
+is not configured for it by this change; `render.yaml` stays unchanged.
+
+Cost rule: the **Free** plan (100 credits a month, 1 request per second; Auto Recharge does not
+exist on Free). Do not buy a plan, upgrade or enable Auto Recharge without a decision. One import
+is one credit, also when the video has no captions (206) and also when the request timed out on
+MyDubb's side; status polls of an asynchronous job are free. Used-up credits make imports fail with
+`youtube_import_quota_exceeded`; pasting keeps working.
+
+### 1. Account and key
+
+1. Sign up at https://dash.supadata.ai (Free plan, no card).
+2. Copy the API key from https://dash.supadata.ai/organizations/api-key. Do not paste it in chat,
+   issues, pull requests or logs.
+
+### 2. Live smoke test from your computer (needs an agreed budget)
+
+Put the key in `backend/.env` (git-ignored; edit it in your editor): `SUPADATA_API_KEY=<key>`.
+
+```bash
+cd backend
+uv run python -m scripts.supadata_smoke --confirm-credits 4 \
+  "<video with manual English captions>" "<video with auto-generated English captions only>" \
+  "<long technical video>" "<video without English captions>"
+```
+
+`--confirm-credits` must equal the number of links (one credit each) or nothing is sent. The
+script calls only Supadata (no Azure, no job) and prints, per link: the returned language, caption
+count, empty captions left out, first and last start times in milliseconds, how many starts have a
+millisecond part, the first captions as imported, latency, requests/polls and the credits
+Supadata reports (`x-billable-requests`), plus whether the plain cleaning reads the transcript back
+as the caption texts. The dashboard history shows the credits too. Judging spelling, terms and
+whether captions were auto-generated is left to the reader.
+
+### 3. Enable (local app, or Render after a decision)
+
+Set `YOUTUBE_IMPORT_PROVIDER=supadata` and `SUPADATA_API_KEY` (on Render: Environment, mark the
+key as secret; save and Render redeploys). Missing or malformed key: the app refuses to start and
+the log names the variable, not its value. `/api/meta` then reports
+`youtube_import: {"enabled": true, "provider": "supadata"}`. The production smoke check does not
+look at this field.
+
+To switch off: set `YOUTUBE_IMPORT_PROVIDER=off` (or remove it) and save. The key can be revoked
+in the Supadata dashboard.
+
+For local development and the E2E stack, `YOUTUBE_IMPORT_PROVIDER=mock` returns fixed captions
+without any network call (`MOCK_STAGE_DELAY_SECONDS` delays it); it is refused with
+`APP_ENV=production`.
+
+### Expected behavior and limits
+
+- Only captions the video already has, English only (`en`, `en-US`...; the returned language is
+  checked because Supadata falls back to another language). Videos without English captions,
+  private, members-only, age-restricted, region-blocked or live videos cannot be imported.
+- One import holds a request thread while Supadata answers; at most
+  `YOUTUBE_IMPORT_MAX_CONCURRENT` (default 2) run at once, the next gets `503 youtube_import_busy`.
+  Requests are spaced by one shared limiter (one every two seconds with the Free defaults).
+  Each request has `SUPADATA_TIMEOUT_SECONDS` (30), the whole import `SUPADATA_DEADLINE_SECONDS`
+  (90); the initial request is never retried.
+- Logs show `Supadata import ok: requests=... polls=... captions=... latency_ms=...
+  billed_credits=...` or the status/Supadata error code; never the link or captions.
+
 ## Glossary candidates (English detection)
 
 No new service, resource, key or setting: detection is plain code in the app, and candidates are a

@@ -5,6 +5,7 @@ import type {
   Job,
   JobResult,
   SessionInfo,
+  YouTubeImport,
 } from "./types";
 
 export class ApiError extends Error {
@@ -108,4 +109,6 @@ export const api = {
     request<Job>("GET", `/api/jobs/${encodeURIComponent(id)}`, { signal }),
   getResult: (id: string, signal?: AbortSignal) =>
     request<JobResult>("GET", `/api/jobs/${encodeURIComponent(id)}/result`, { signal }),
+  importYouTube: (url: string, signal?: AbortSignal) =>
+    request<YouTubeImport>("POST", "/api/transcripts/youtube", { body: { url }, signal }),
 };

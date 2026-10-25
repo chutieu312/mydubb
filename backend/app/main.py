@@ -28,6 +28,7 @@ from app.maintenance import (
 )
 from app.services import AppServices, build_services
 from app.system.router import router as system_router
+from app.youtube_import.router import router as youtube_import_router
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,9 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             # Stop accepting queued work, let running jobs finish within the grace period
             # (heartbeats continue meanwhile), then interrupt whatever is left.
             services.executor.shutdown()
+            if services.youtube_import is not None:
+                # Imports waiting for the provider or a request slot stop instead of outliving us.
+                services.youtube_import.close()
             await drain_running_jobs(services)
             if services.speech_limiter is not None:
                 # Jobs still waiting for a speech request slot stop instead of outliving us.
@@ -210,6 +214,9 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     else:
         app.include_router(access_router)
     app.include_router(jobs_router)
+    # Always mounted: with the import off it answers 404 youtube_import_disabled after the
+    # session and CSRF checks, and /api/meta tells the UI not to offer it.
+    app.include_router(youtube_import_router)
     if settings.frontend_dist_dir is not None:
         _install_frontend(app, settings.frontend_dist_dir)
     return app

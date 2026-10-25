@@ -224,6 +224,7 @@ export function App() {
               <DubbingForm
                 voices={meta.voices}
                 disclosure={azureDisclosureShort(meta.providers)}
+                youtubeImport={meta.youtube_import?.enabled === true}
                 onJobCreated={handleJobCreated}
                 onSessionExpired={handleSessionExpired}
                 initialDraft={user ? drafts.draftFor(user.id) : undefined}

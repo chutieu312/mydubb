@@ -23,6 +23,7 @@ from app.config import (
     Settings,
     SpeechProviderChoice,
     TranslationProviderChoice,
+    YouTubeImportChoice,
     decode_encryption_key,
 )
 from app.db import create_db_engine, create_session_factory
@@ -37,6 +38,10 @@ from app.translation.azure import AzureTranslationProvider
 from app.translation.base import TranslationProvider
 from app.translation.glossary import default_glossary
 from app.translation.mock import MockTranslationProvider
+from app.youtube_import.base import CaptionProvider
+from app.youtube_import.mock import MockCaptionProvider
+from app.youtube_import.service import YouTubeImporter
+from app.youtube_import.supadata import SupadataCaptionProvider
 
 
 @dataclass
@@ -62,6 +67,8 @@ class AppServices:
     recovery_limiter: FailedAttemptLimiter | None = None
     # Same, keyed by the (hashed) email address of forgot/reset-password requests.
     recovery_email_limiter: FailedAttemptLimiter | None = None
+    # YouTube caption import; None while YOUTUBE_IMPORT_PROVIDER=off. Closed at shutdown.
+    youtube_import: YouTubeImporter | None = None
 
 
 def build_translator(
@@ -144,6 +151,32 @@ def build_audio(settings: Settings) -> AudioProcessor:
     )
 
 
+def build_youtube_import(
+    settings: Settings, transport: httpx.BaseTransport | None = None
+) -> YouTubeImporter | None:
+    provider: CaptionProvider
+    if settings.youtube_import_provider is YouTubeImportChoice.SUPADATA:
+        # Settings validation guarantees the key; there is no fallback to another provider.
+        assert settings.supadata_api_key is not None
+        provider = SupadataCaptionProvider(
+            key=settings.supadata_api_key,
+            # One limiter for every import of the process, status polls included.
+            limiter=RequestRateLimiter(
+                settings.supadata_max_requests_per_window,
+                settings.supadata_rate_window_seconds,
+            ),
+            timeout_seconds=settings.supadata_timeout_seconds,
+            deadline_seconds=settings.supadata_deadline_seconds,
+            poll_interval_seconds=settings.supadata_poll_interval_seconds,
+            transport=transport,
+        )
+    elif settings.youtube_import_provider is YouTubeImportChoice.MOCK:
+        provider = MockCaptionProvider(delay=settings.mock_stage_delay_seconds)
+    else:
+        return None
+    return YouTubeImporter(provider, max_concurrent=settings.youtube_import_max_concurrent)
+
+
 def build_auth(
     settings: Settings, cognito_client: CognitoClient | None
 ) -> tuple[
@@ -187,9 +220,10 @@ def build_services(
     *,
     translation_transport: httpx.BaseTransport | None = None,
     speech_transport: httpx.BaseTransport | None = None,
+    youtube_import_transport: httpx.BaseTransport | None = None,
     cognito_client: CognitoClient | None = None,
 ) -> AppServices:
-    """The transports replace the network for Azure Translator / Azure Speech, and
+    """The transports replace the network for Azure Translator / Azure Speech / Supadata, and
     `cognito_client` replaces Amazon Cognito (tests only)."""
     engine = create_db_engine(settings.sqlalchemy_url, settings.db_connect_timeout_seconds)
     session_factory = create_session_factory(engine)
@@ -239,4 +273,5 @@ def build_services(
         token_cipher=token_cipher,
         recovery_limiter=recovery_limiter,
         recovery_email_limiter=recovery_email_limiter,
+        youtube_import=build_youtube_import(settings, youtube_import_transport),
     )
