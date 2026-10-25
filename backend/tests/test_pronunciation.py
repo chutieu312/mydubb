@@ -285,10 +285,10 @@ def test_sentence_punctuation_is_not_part_of_a_path():
 
 
 def test_adjacent_english_words_from_the_source_form_a_phrase_candidate():
-    detection = detect_english("Build a container image.", "Tạo một container image.", GLOSSARY)
-    assert english_spans(detection) == [("term", "container image")]
+    detection = detect_english("Build an image layer.", "Tạo một image layer.", GLOSSARY)
+    assert english_spans(detection) == [("term", "image layer")]
     assert [(c.term, c.kind) for c in detection.candidates] == [
-        ("container image", CandidateKind.PHRASE)
+        ("image layer", CandidateKind.PHRASE)
     ]
 
 
@@ -309,14 +309,14 @@ def test_english_left_untranslated_is_read_in_english_but_not_stored():
 
 
 def test_candidate_kinds():
-    source = "Podman and Podman, VMs and GitHub-like iPhone tools."
-    translation = "Podman và tôi dùng Podman, VMs và iPhone."
+    source = "Buildah and Buildah, NICs and GitHub-like iPhone tools."
+    translation = "Buildah và tôi dùng Buildah, NICs và iPhone."
     detection = detect_english(source, translation, GLOSSARY)
     kinds = {c.term: c.kind for c in detection.candidates}
     # Capitalized inside a sentence upgrades the sentence-initial sighting to a name.
     assert kinds == {
-        "Podman": CandidateKind.PROPER_NAME,
-        "VMs": CandidateKind.ACRONYM,
+        "Buildah": CandidateKind.PROPER_NAME,
+        "NICs": CandidateKind.ACRONYM,
         "iPhone": CandidateKind.PROPER_NAME,
     }
 
@@ -375,14 +375,14 @@ def test_hostile_text_is_escaped_with_detected_spans():
 
 
 def test_chunks_never_cut_a_detected_phrase():
-    source = "container image registry " * 3
-    translation = ("Một container image ở đây và một container image nữa. " * 12).strip()
-    terms = SpeechTerms(GLOSSARY, english=["container image"])
+    source = "image layer registry " * 3
+    translation = ("Một image layer ở đây và một image layer nữa. " * 12).strip()
+    terms = SpeechTerms(GLOSSARY, english=["image layer"])
     chunks = split_for_speech(translation, terms, 40)
     assert " ".join(chunks).split() == translation.split()
-    assert all(not chunk.endswith("container") for chunk in chunks)
-    assert all(not chunk.startswith("image") for chunk in chunks)
-    assert detect_english(source, translation, GLOSSARY).candidates[0].term == "container image"
+    assert all(not chunk.endswith("image") for chunk in chunks)
+    assert all(not chunk.startswith("layer") for chunk in chunks)
+    assert detect_english(source, translation, GLOSSARY).candidates[0].term == "image layer"
 
 
 def test_random_mixtures_partition_exactly_and_never_overlap():
@@ -449,23 +449,23 @@ def test_a_long_english_span_is_cut_at_words_and_every_piece_stays_english():
 
 
 def test_long_english_keeps_glossary_terms_and_short_phrases_whole():
-    clause = "widgets container image and neural network are fine with "
-    translation = "Dùng container image ở đây.\n" + (clause * 40).strip()
+    clause = "widgets image layer and neural network are fine with "
+    translation = "Dùng image layer ở đây.\n" + (clause * 40).strip()
     detection, chunks, spans = speech_pipeline(translation, translation, 60)
     assert len(chunks) > 10
     for chunk in chunks:
         # Never cut inside the glossary term or the short phrase detected on line 1.
-        assert not chunk.endswith(("container", "neural"))
-        assert not chunk.startswith(("image", "network"))
+        assert not chunk.endswith(("image", "neural"))
+        assert not chunk.startswith(("layer", "network"))
     long_line = [s for c, s in zip(chunks, spans, strict=True) if "Dùng" not in c]
     for chunk_spans in long_line:
         assert all(language == "en-US" or no_letters(piece) for language, piece in chunk_spans)
         # The glossary term keeps its own span (glossary priority).
         if "neural network" in "".join(piece for _, piece in chunk_spans):
             assert ("en-US", "neural network") in chunk_spans
-    assert spans[0][:3] == [("vi-VN", "Dùng "), ("en-US", "container image"), ("vi-VN", " ở đây.")]
+    assert spans[0][:3] == [("vi-VN", "Dùng "), ("en-US", "image layer"), ("vi-VN", " ở đây.")]
     assert [(c.term, c.kind) for c in detection.candidates] == [
-        ("container image", CandidateKind.PHRASE)
+        ("image layer", CandidateKind.PHRASE)
     ]
 
 
