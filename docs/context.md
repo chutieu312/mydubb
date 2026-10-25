@@ -1,6 +1,6 @@
 # MyDubb — Context và handoff hiện tại
 
-Cập nhật: **2026-10-24**. Mốc hoàn tất gần nhất: **UI refresh** (layout Studio, Light/Dark theme, result gọn, diagnostics vào Audio details; PR #22), sau English detection, Audio speed, 3C, 3B, 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
+Cập nhật: **2026-10-24**. Mốc hoàn tất gần nhất: **Authentication email/password bằng Amazon Cognito** (backend PR #25, UI PR #24, cutover production 2026-10-24; Access Code không còn được chấp nhận), sau UI refresh, English detection, Audio speed, 3C, 3B, 3A và 2B. Đây là điểm bắt đầu cho session mới, tóm tắt quyết định sản phẩm và kết quả đã nghiệm thu. Task đang thực hiện được mô tả trong implementation prompt riêng, không chép vào file này.
 
 ## 1. Cách đọc và duy trì context
 
@@ -17,8 +17,8 @@ Cập nhật: **2026-10-24**. Mốc hoàn tất gần nhất: **UI refresh** (la
 
 MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội dung kỹ thuật: người dùng tự paste English transcript, hệ thống dịch phần diễn giải sang Vietnamese, giữ thuật ngữ English, tạo giọng Việt để nghe và download MP3.
 
-- MVP: responsive website, Private Beta Access Code, transcript + hai timestamps, chọn voice, xử lý job, xem bản dịch, nghe và tải MP3.
-- Không thuộc MVP: video upload/player, tự lấy transcript YouTube/Udemy, Speech-to-Text, sentence-by-sentence synchronization, browser extension, native apps, user registration, subscriptions, voice cloning và lưu audio vĩnh viễn.
+- MVP: responsive website, truy cập invite-only (Private Beta Access Code lúc đầu; từ 2026-10-24 là email/password qua Amazon Cognito, tài khoản do admin mời), transcript + hai timestamps, chọn voice, xử lý job, xem bản dịch, nghe và tải MP3.
+- Không thuộc MVP: video upload/player, tự lấy transcript YouTube/Udemy, Speech-to-Text, sentence-by-sentence synchronization, browser extension, native apps, public sign-up (self-registration), subscriptions, voice cloning và lưu audio vĩnh viễn.
 - Tầm nhìn dài hạn: nhiều ngôn ngữ/voice, playback speeds, tích hợp nội dung được phép sử dụng, đồng bộ video, đa nền tảng. Đây là hướng mở rộng, chưa phải scope implement.
 - Bắt đầu nhỏ nhưng giữ module boundaries và provider interfaces để mở rộng, thay provider hoặc chuyển Render sang AWS sau này. Không xây microservices/Kafka/Kubernetes/agent runtime chỉ để chuẩn bị giả định tương lai.
 - Người dùng là Product Owner, quyết định scope, chi phí và acceptance; **tự merge PR thủ công**. Codex hỗ trợ planning, architecture, implementation prompts và review. Claude là coding agent chính.
@@ -50,7 +50,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 - Ưu tiên free tiers; không tự mua/nâng tier, chuyển paid provider hay fallback âm thầm. Provider quota hết phải báo rõ.
 - Transcript xử lý tạm; metadata tối thiểu trong DB; translation/audio trong temporary result store. Không lưu audio binary vào DB.
 
-## 4. Hệ thống hiện có (sau UI refresh)
+## 4. Hệ thống hiện có (sau authentication)
 
 | Thành phần | Hiện trạng |
 |---|---|
@@ -61,6 +61,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh, đặc biệt nội d
 | Database | PostgreSQL 17, SQLAlchemy/Alembic; Neon Free tại AWS US West 2 (Oregon) |
 | Hosting | Docker multi-stage, FastAPI phục vụ React build và API cùng origin; Render Free Oregon |
 | Domain | https://mydubb.com; `www` và HTTP redirect về HTTPS; DNS GoDaddy |
+| Authentication | Production `AUTH_MODE=cognito` (từ 2026-10-24): Amazon Cognito user pool production riêng (us-west-2, plan Lite, email-only sign-in, invite-only, không MFA), app client confidential với secret và `USER_PASSWORD_AUTH`; backend gọi public user pool API, không có AWS credential. MyDubb giữ session riêng (cookie `mydubb_auth`), không gửi token Cognito xuống browser. UI chọn form đăng nhập theo `/api/meta` → `auth.mode`. Pool dev riêng cho local/live test. `ACCESS_CODE` vẫn còn trên Render chỉ để rollback (bị bỏ qua ở chế độ cognito) |
 | CI/CD | GitHub Actions, Render auto-deploy sau checks pass; chưa dùng Jenkins |
 | Production providers | Translation: **Azure Translator thật** (`TRANSLATION_PROVIDER=azure`, resource Free F0 `mydubb-translator`, Global endpoint, region `westus2`) + glossary backend. Speech: **Azure Speech thật** (`SPEECH_PROVIDER=azure`, resource Free F0, region `westus2`, REST API, key riêng của Speech chỉ nằm trong Render environment, FFmpeg trong image). Audio processing: **FFmpeg thật** (`AUDIO_PROCESSOR=ffmpeg`, bật trên Render ngày 2026-10-23; `/api/meta`: `azure/azure/ffmpeg`, `mock_mode=false`, `provider_mode=azure`). `render.yaml` khai báo `PROVIDER_MODE=azure` (mọi thành phần thật, không còn mock opt-in; PR #15, 2026-10-23). Ở mốc 2B cả ba đều là mock |
 
@@ -68,13 +69,14 @@ Giới hạn đã chấp nhận: Render có cold start; disk ephemeral làm mấ
 
 Các invariants vận hành:
 
-- Access Code kiểm tra ở server; session cookie HttpOnly/SameSite=Strict, Secure ở production; DB chỉ lưu hash của session token. Có CSRF, Origin check, brute-force protection theo IP và global, job ownership theo session.
+- Hai auth mode loại trừ nhau theo `AUTH_MODE`; production là `cognito`. Cognito giữ password; MyDubb chỉ giữ session của mình: cookie `mydubb_auth` HttpOnly/SameSite=Strict/Secure, DB chỉ lưu SHA-256 của token, TTL 12 giờ. Có CSRF (`X-CSRF-Token`), Origin check, giới hạn failed sign-in và recovery theo client/email/global (đếm trong RAM). Ở chế độ cognito, `/api/session` (Access Code) không tồn tại và cookie Access Code không bao giờ được chấp nhận; job thuộc về **user** (từ session), user khác hoặc job thời Access Code trả `404`. Email phải được Cognito xác minh (`email_verified`) mới tạo session. Bước đăng nhập dở (đổi mật khẩu tạm, verify email) lưu token Cognito mã hoá AES-256-GCM bằng `AUTH_TOKEN_ENCRYPTION_KEY` (giữ cố định trên Render; đổi khoá chỉ làm hỏng bước đang dở). Reset password thu hồi mọi session của account; khi kết quả reset không chắc chắn thì fail closed. Chi tiết: AUTHENTICATION.md, AUTH_API.md.
+- Chế độ `access_code` vẫn còn trong code làm đường rollback (đặt `AUTH_MODE=access_code` trên Render): Access Code kiểm tra ở server, session theo Access Code, job ownership theo session; session Cognito khi đó ngừng hoạt động và job của user Cognito bị ẩn (không bị xoá). Khôi phục Access Code là thay đổi cách truy cập production, cần Product Owner duyệt.
 - Production mock cần opt-in rõ ràng `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`; không nới bảo mật. Cấm `MOCK_FAIL_STAGE` ở production; Access Code tối thiểu 16 ký tự; có HSTS và CSP.
 - States: `queued → translating → synthesizing → processing → completed/failed`; compare-and-set chống stale worker ghi đè. UI hiển thị stages thật, không có phần trăm giả.
 - Mỗi process có instance ID; heartbeat chỉ cho job queued/running còn được quản lý trong RAM. Mặc định heartbeat 15 giây, stale 90 giây; shutdown drain 20 giây. Job mất worker sẽ `failed/interrupted`; không tự chạy lại provider khi kết quả gọi trước chưa rõ.
 - Result store publish bằng rename, cleanup bỏ qua active staging. Result mất/hết hạn trả `410 result_expired`. Logout chỉ coi thành công khi server trả `204` hoặc session đã hết hạn `401`.
 - Defaults đã chạy: result TTL 1 giờ; session TTL 12 giờ; job metadata chưa tự cleanup. Không nhầm với retention đề xuất ở mục 6.
-- Migrations chạy ở container startup và phải backward compatible. Expand-only **không đủ** để bảo đảm rollback: target image phải biết Alembic revision hiện tại. Mốc 2B là `0002`; PR #18 thêm `0003` (`jobs.audio_speed_percent`); từ PR #20 là `0004` (`glossary_candidates` + `jobs.glossary_candidates_recorded_at`), nên mọi deploy cũ hơn PR #20 không còn là Render rollback target hợp lệ. Chi tiết và rehearsal nằm trong DEPLOYMENT.md.
+- Migrations chạy ở container startup và phải backward compatible. Expand-only **không đủ** để bảo đảm rollback: target image phải biết Alembic revision hiện tại. Mốc 2B là `0002`; PR #18 thêm `0003` (`jobs.audio_speed_percent`); từ PR #20 là `0004` (`glossary_candidates` + `jobs.glossary_candidates_recorded_at`); PR #25 thêm `0005` và `0006` (users, user_sessions, auth_challenges, password reset attempts/events, `jobs.user_id`), nên mọi image không chứa `0006` (cũ hơn PR #25) không còn là Render rollback target hợp lệ. Chi tiết và rehearsal nằm trong DEPLOYMENT.md và AUTHENTICATION.md.
 - Azure translation (3A): chọn Azure mà thiếu `AZURE_TRANSLATOR_KEY` thì app không khởi động. Không tự retry, không fallback về mock; một chunk lỗi thì job lỗi, không có bản dịch một phần. Log chỉ có kích thước và mã lỗi, không có transcript, bản dịch hay key.
 - Azure Speech (3B): `SPEECH_PROVIDER=mock|azure` (mặc định mock). Chọn Azure thì cần `AZURE_SPEECH_KEY` (key riêng, không dùng key Translator), `AZURE_SPEECH_REGION` và `ffmpeg`/`ffprobe` trong PATH, thiếu thì app không khởi động. Không retry, không fallback mock, một chunk lỗi thì job lỗi và không có audio một phần. Rate limiter dùng chung cho mọi job trong process (mặc định 20 request/60 giây, giới hạn F0, cộng 1 giây đệm). Log chỉ có status, request id, số lượng và độ dài audio, không có key, SSML hay text.
 - Duration fitting (3C): `AUDIO_PROCESSOR=mock|ffmpeg` (mặc định mock); `ffmpeg` cần `SPEECH_PROVIDER=azure` (cần audio lossless) và FFmpeg có `atempo` + `libmp3lame`, thiếu thì app không khởi động; không fallback pass-through. `PROVIDER_MODE=azure` nghĩa là mọi thành phần thật và chỉ được chấp nhận khi `TRANSLATION_PROVIDER=azure`, `SPEECH_PROVIDER=azure`, `AUDIO_PROCESSOR=ffmpeg`; `PROVIDER_MODE=mock` cho phép trộn và production vẫn cần `ALLOW_MOCK_PROVIDERS_IN_PRODUCTION=true`. `/api/meta` báo `provider_mode` theo thực tế đang chạy. FFmpeg chạy bằng argument list, timeout hữu hạn, kill khi timeout/shutdown, dọn file tạm; lỗi có mã `audio_*` an toàn, log chỉ có số đếm.
@@ -96,6 +98,7 @@ Các invariants vận hành:
 | Audio speed | Bảy tốc độ audio, output = baseline / speed, fit một bước từ WAV gốc; migration `0003` (PR #18) | Hoàn tất: đã merge, deploy qua CD, Product Owner test mọi speed trên production (2026-10-23) |
 | English detection | English còn trong bản dịch đọc `en-US`; glossary candidates tích lũy qua job, review theo đợt bằng CLI local; migration `0004`; glossary thêm `Linux`, `Linux kernel`, `container runtime` (PR #20) | Hoàn tất: đã merge, deploy qua CD, Product Owner nghe trên production (2026-10-23) |
 | UI refresh | Layout Studio, Light/Dark theme, result gọn (provider/diagnostics trong "Audio details"), disclosure gọn + Privacy, Access Code restyle; không đổi backend/API/auth (PR #22) | Hoàn tất: đã merge, deploy qua CD, Product Owner xem trên production (2026-10-24) |
+| Authentication | Email/password invite-only bằng Amazon Cognito: backend `AUTH_MODE`, session MyDubb, challenges, reset với thu hồi session, ownership theo user, migrations `0005`/`0006` (PR #25); UI sign in, set password, verify email, forgot/reset, account + Sign out, chọn mode theo `/api/meta` (PR #24); cutover production bằng biến môi trường Render | Hoàn tất: đã merge, deploy qua CD, cutover production, Product Owner nghiệm thu trên production (2026-10-24) |
 
 Bằng chứng cuối của 2B (không phải kiểm tra live tự động mỗi khi đọc file):
 
@@ -175,6 +178,16 @@ Kết quả và bằng chứng của UI refresh:
 - Nghiệm thu: Product Owner kiểm tra https://mydubb.com và báo trong chat rằng giao diện "rất đẹp và ok". Xác nhận này là chung; từng trạng thái (failed, expired, session-expired) và Dark theme trên production không được ghi ở đây như đã kiểm chứng riêng.
 - Giới hạn còn lại: `notices` của backend chưa có trường `kind` có cấu trúc nên UI chưa hiện từng notice đúng chỗ mà không lọc chuỗi (cần thay đổi backend riêng nếu muốn); tương phản và responsive được kiểm bằng E2E Chromium và đo màu tự động, chưa kiểm thủ công trên Safari/iPhone, Firefox hay màn hình đọc.
 
+Kết quả và bằng chứng của Authentication:
+
+- Backend ([PR #25](https://github.com/chutieu312/mydubb/pull/25)): merge SHA `affc1ad0b61bc55065dd35c81efeb5a568ad7bfa`; [CI trên merge commit](https://github.com/chutieu312/mydubb/actions/runs/40117755688) pass đủ job, **Deploy to Render** và **Production smoke check** success (production vẫn `access_code` lúc đó). Kiểm thử với Cognito giả (`tests/fake_cognito.py`); onboarding/reset qua backend HTTP được báo pass bởi phần backend.
+- UI ([PR #24](https://github.com/chutieu312/mydubb/pull/24)): reviewed HEAD `3f6105a31bb2643d7cf6abfe64566b5854e5b3a6` ([CI PR](https://github.com/chutieu312/mydubb/actions/runs/40140300760) pass: frontend 186 test, E2E gồm stack backend thật + Cognito giả trên desktop/mobile); merge SHA `1e9fb7725a0ad5af4400437b0da0b6164477f580`. [CI trên merge commit](https://github.com/chutieu312/mydubb/actions/runs/40141158057) pass; Render deployment `dep-dbejklfb9u1s739um0qg` live cho `1e9fb77` sau 61 giây; Production smoke check pass. Không có password policy tự đặt ở UI; lỗi xử lý theo HTTP status/`code`; draft Studio chỉ trong bộ nhớ trang, gắn user id. Chi tiết: AUTH_UI.md.
+- Live browser trước cutover (local, backend thật, Cognito **dev** thật, providers mock, Chromium desktop + 390 px): 14/14 trên `ae1fa18` (sign in, reload, job/player/download, Light/Dark, sign out, hai user cách ly hai chiều, session hết hạn + draft). Công cụ `e2e/live/` chạy tay, không thuộc CI.
+- Cutover 2026-10-24: Product Owner tạo user pool production riêng (us-west-2, Lite), app client confidential, mời user bằng email mình kiểm soát (không đánh dấu verified), rồi thêm trên Render `AUTH_MODE=cognito`, `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `AUTH_TOKEN_ENCRYPTION_KEY` (khoá mới, sinh local) và "Save and deploy" (deploy do "Environment updated", source `1e9fb77`). Log khởi động có cảnh báo `ACCESS_CODE is set but ignored because AUTH_MODE=cognito`; Alembic không có migration chờ.
+- Claude kiểm tra từ bên ngoài sau cutover (không secret, không đăng nhập): health/ready 200; `/api/meta` báo `auth.mode=cognito`, `self_registration=false`, `password_reset=true`, providers vẫn `azure/azure/ffmpeg`, `mock_mode=false`; `POST`/`DELETE /api/session` 405, `GET` 404; `/api/auth/me` và tạo job khi chưa đăng nhập 401 `not_authenticated`; HSTS, CSP, X-Frame-Options còn.
+- Nghiệm thu: Product Owner tự kiểm trên https://mydubb.com và báo tất cả pass: session Access Code cũ không còn được chấp nhận; UI email/password không có Access Code hay sign-up; invitation → mật khẩu tạm → mật khẩu mới → verify email → Studio; reload giữ session, logout; job thật với transcript công khai ngắn, phát và tải MP3; forgot/reset password và thu hồi session. Xác nhận là chung theo từng bước; Claude không đăng nhập production.
+- Giới hạn còn lại: UI không hiển thị password policy (backend không công bố; người dùng biết rule qua thư mời); cấu hình gửi email của pool production chưa được ghi ở đây (nếu là mặc định Cognito thì giới hạn 50 email/ngày cho cả AWS account, dùng chung với pool dev, người gửi `no-reply@verificationemail.com`); gap backend đã biết: `X-CSRF-Token` chứa ký tự ngoài ASCII trả 500 thay vì 403 (không ảnh hưởng bảo mật), thông điệp `503` của reset khi kết quả không chắc mạnh hơn bảo đảm `settle_at` (~80 giây), AUTH_API.md mô tả thời điểm gửi mã xác minh theo hai cách (UI chỉ gửi khi người dùng bấm); disable user trong Cognito không kết thúc session MyDubb đang có (dùng `scripts/auth_users.py`); migration `0006` trên Neon chỉ có bằng chứng gián tiếp (deploy live, log Alembic), chưa đối chiếu bằng SQL; chưa kiểm Safari/iPhone, Firefox trên production; job thời Access Code không còn hiển thị (result tự hết hạn theo TTL).
+
 ## 6. Quyết định còn mở
 
 - **Duration tolerance (đã giải quyết ở 3C):** tiêu chí là đúng target, PCM và MP3 decode (cùng header gapless) lệch tối đa 1 sample; không dùng ±50 ms. Còn mở: nếu cần chính xác cả với player bỏ qua metadata MP3 thì phải đổi format (WAV, hoặc AAC), là thay đổi API/format cần quyết định riêng.
@@ -186,7 +199,7 @@ Kết quả và bằng chứng của UI refresh:
 - **Translation provider/API:** v3.0 đang dùng; chuyển sang API `2026-06-06` hoặc provider khác chỉ khi có lý do (chất lượng, ngừng hỗ trợ) và cần quyết định riêng cùng live test. Paid LLM translation chưa được duyệt.
 - **Mixed pronunciation:** đã đạt với voice Andrew/Emma Multilingual và `<lang>` spans trên transcript ngắn. Từ PR #20, English bản dịch giữ lại ngoài glossary cũng đọc `en-US` (Product Owner nghe ổn trên production). Còn mở: English trùng hình âm tiết Việt (`run`, `Go`), cách đọc code/path, transcript thật dài; mở rộng glossary đi qua review candidate theo đợt, chưa có glossary UI.
 - **Candidate retention:** bảng `glossary_candidates` không tự xoá và chưa có retention riêng; nếu cần là quyết định riêng.
-- **Authentication:** email/password invite-only đã quyết định về sản phẩm; phương án (tự xây hay dịch vụ ngoài), activation và reset password chưa chốt. Hiện vẫn dùng Access Code; UI refresh (PR #22) không thêm form auth giả.
+- **Authentication (đã triển khai, 2026-10-24):** Amazon Cognito invite-only trên production. Còn mở: chuyển gửi email sang SES (có phí, cần ra khỏi sandbox) nếu vượt giới hạn email mặc định; cách công bố password policy cho người dùng; thời điểm xoá `ACCESS_CODE` khỏi Render (hiện giữ để rollback); sửa các gap backend nhỏ ở mục 5; MFA, account settings, admin portal chưa thuộc scope.
 - **Kích thước image:** khoảng 1,04 GB với Debian `ffmpeg`; chỉ xem lại nếu deploy/disk thành vấn đề, cần quyết định riêng về FFmpeg static.
 
 ## 7. Tài liệu và workflow cần dùng
@@ -198,7 +211,10 @@ Kết quả và bằng chứng của UI refresh:
 | API, timestamps, cleaning, errors và ownership | [API.md](API.md) |
 | Branch/PR, CI, protections và cost control | [WORKFLOW.md](WORKFLOW.md) |
 | Render/Neon, secrets, smoke, deploy, rollback/rehearsal | [DEPLOYMENT.md](DEPLOYMENT.md) |
+| Authentication: thiết kế, AWS setup, quản trị user, cutover/rollback | [AUTHENTICATION.md](AUTHENTICATION.md) |
+| Auth HTTP contract giữa backend và UI | [AUTH_API.md](AUTH_API.md) |
+| Sign-in UI, các mức kiểm chứng, live acceptance | [AUTH_UI.md](AUTH_UI.md) |
 | Isolated browser tests | [E2E README](../e2e/README.md) |
 | Bối cảnh/tầm nhìn ban đầu (historical) | [Original planning handoff](../mydubb-context.md) |
 
-Nhắc lại workflow: branch mới từ main mới nhất cho task mới; không tái sử dụng branch đã merge; không đụng thay đổi chưa commit của session khác. GitHub Free private repo hiện dùng quy tắc bảo vệ main thủ công. Trước merge cần CI đúng PR HEAD; sau merge cần CI đúng merge SHA và deploy đúng SHA. Không dựa vào run cũ. Tests có thể drop/recreate schema: chỉ chạy trên DB test disposable, không production. Production smoke tránh thử Access Code sai để không tiêu hao failed-login allowance.
+Nhắc lại workflow: branch mới từ main mới nhất cho task mới; không tái sử dụng branch đã merge; không đụng thay đổi chưa commit của session khác. GitHub Free private repo hiện dùng quy tắc bảo vệ main thủ công. Trước merge cần CI đúng PR HEAD; sau merge cần CI đúng merge SHA và deploy đúng SHA. Không dựa vào run cũ. Tests có thể drop/recreate schema: chỉ chạy trên DB test disposable, không production. Production smoke không đăng nhập; tránh thử đăng nhập sai trên production để không tiêu hao failed-login allowance, và tránh gửi email Cognito không cần thiết (giới hạn hằng ngày).
