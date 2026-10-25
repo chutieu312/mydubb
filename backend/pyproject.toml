@@ -15,6 +15,8 @@ dependencies = [
     "httpx>=0.28,<0.29",
     # AES-GCM for the short-lived Cognito material kept server-side during a sign-in step.
     "cryptography>=50.0.2,<51",
+    # Glossary matching: one Aho-Corasick automaton for every term (translation/glossary.py).
+    "pyahocorasick>=2.3.1,<2.4",
 ]
 
 [dependency-groups]

@@ -279,6 +279,23 @@ Pipeline inside `translate(text)`:
    translation. See "English left in the translation".) Ambiguous everyday words (class, model, cell, key, ...) are
    deliberately not listed: the glossary policy is to add specific phrases ("loss function"),
    because keeping a common word in English in every context would damage ordinary sentences.
+   **Matching** (`Glossary.find_matches`, shared by translation, speech and English detection):
+   all terms are in one Aho-Corasick automaton (`pyahocorasick`), built once per `Glossary` in
+   memory; the shared glossary is built once per process (`default_glossary()`), never per job
+   or request, and nothing is pickled or stored. A text is scanned once, in a search form where
+   each whitespace run is one space and each character is replaced by a one-character case
+   key; positions map back to the original text. Every hit is then confirmed by that term's own
+   regular expression, anchored at that position in the original text, so capitalization,
+   `=TERM`, whole words, any whitespace between words and the plural `s` behave exactly as
+   before; overlaps keep the same rule (longest, then earliest). The case key gives one key to
+   every pair of characters `re.IGNORECASE` treats as equal (checked for every code point in
+   the tests). No Unicode normalization (NFC/NFD) is applied, as before: a decomposed "ö" does
+   not match a composed one. Cost for n characters, h automaton hits and k confirmed matches:
+   scan O(n + h); overlap step O(k log k) for the sort plus inserts into a sorted list (O(k)
+   each in the worst case); build O(total term length) plus one compiled expression per term.
+   The per-job `SpeechTerms` matchers (code and English detected for that job) build their own
+   small automata once per job. `scripts/glossary_timing.py` measures build and matching on
+   synthetic data (offline; local numbers say nothing about Render).
 2. **Markup** (`notranslate_markup.py`): the transcript is untrusted plain text. It is
    escaped (`&`, `<`, `>`), and only then are glossary terms wrapped in Microsoft's documented
    `<span class="notranslate">`, which works with `textType=html`. User text can therefore
