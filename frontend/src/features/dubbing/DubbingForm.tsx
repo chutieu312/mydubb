@@ -8,6 +8,7 @@ import { previewTargetDuration } from "../../lib/timestamps";
 import { FieldMessage } from "./FieldMessage";
 import { LengthSummary } from "./LengthSummary";
 import { SpeedField } from "./SpeedField";
+import { TimestampInput } from "./TimestampInput";
 import { VoiceField } from "./VoiceField";
 
 interface Props {
@@ -149,29 +150,5 @@ export function DubbingForm({
         </button>
       </aside>
     </form>
-  );
-}
-
-function TimestampInput(props: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  error?: string;
-}) {
-  return (
-    <div className="field">
-      <label htmlFor={props.id}>{props.label}</label>
-      <input
-        id={props.id}
-        inputMode="numeric"
-        autoComplete="off"
-        placeholder="HH:MM:SS"
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        aria-invalid={Boolean(props.error)}
-      />
-      <FieldMessage message={props.error} />
-    </div>
   );
 }

@@ -39,6 +39,10 @@ Windows, run the scripts from Git Bash with Docker Desktop started.
 Paste the English transcript, give the **First Sentence Start Time** and the **Last Sentence Start
 Time** (`HH:MM:SS`), pick a voice and an **audio speed**, then **Generate Dubbing**.
 
+- Type the start times as digits only: the colons appear by themselves (`000130` becomes
+  `00:01:30`) and nothing is completed for you, so `0000` stays `00:00` until you finish it. Pasting
+  `000130` or `00:01:30` both work. Hours with more than two digits (`100:05:30`) can be pasted or
+  edited, and are kept exactly as written. Details: [docs/API.md](docs/API.md#timestamp-fields-in-the-ui).
 - The two timestamps give the *baseline*: `last - first`. At **1x** (the default) the audio lasts
   exactly that long.
 - The other speeds (0.5x, 0.75x, 1.25x, 1.5x, 1.75x, 2x) change the audio file itself:
