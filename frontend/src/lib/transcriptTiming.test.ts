@@ -33,6 +33,20 @@ describe("recognizing a timed transcript", () => {
     });
   });
 
+  it("reads the milliseconds the caption import writes, exactly", () => {
+    const imported = "0:10.480\nWelcome back.\n0:12.960\nStep by step.\n1:02:03.004\nBye!";
+    expect(analyzeTranscriptTiming(imported)).toEqual({
+      kind: "timed",
+      captions: 3,
+      first: 10.48,
+      last: 3723.004,
+    });
+    expect(analyzeTranscriptTiming("0:00.1\nA.\n0:00.25\nB.")).toMatchObject({
+      first: 0.1,
+      last: 0.25,
+    });
+  });
+
   it("treats text without standalone timestamps as plain", () => {
     expect(analyzeTranscriptTiming("Spring Boot uses JSON.")).toEqual({ kind: "none" });
     expect(analyzeTranscriptTiming("10:30 is our meeting time.\nSee you.")).toEqual({
@@ -56,6 +70,9 @@ describe("recognizing a timed transcript", () => {
     ["Intro\n0:00\nA.\n0:05\nB.", "Line 1 has text before the first timestamp"],
     ["0:00\n0:03\nA.\n0:05\nB.", "line 1 has no caption text"],
     ["0:04\nA.\n0:04\nB.", "same time as the first one"],
+    ["0:04.250\nA.\n0:04.250\nB.", "same time as the first one"],
+    ["0:00\nA.\n0:05.5555\nB.", "(0:05.5555) is not a valid timestamp"],
+    ["0:00\nA.\n0:05,500\nB.", "(0:05,500) is not a valid timestamp"],
   ])("explains why %j cannot be timed instead of guessing", (raw, message) => {
     const timing = analyzeTranscriptTiming(raw);
     expect(timing.kind).toBe("invalid");
@@ -68,5 +85,7 @@ describe("caption clock", () => {
     expect(captionClock(5)).toBe("0:05");
     expect(captionClock(750)).toBe("12:30");
     expect(captionClock(3723)).toBe("1:02:03");
+    expect(captionClock(10.48)).toBe("0:10.480");
+    expect(captionClock(3723.004)).toBe("1:02:03.004");
   });
 });

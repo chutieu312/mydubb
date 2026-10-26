@@ -11,6 +11,8 @@ interface Props {
   // Seconds between the two fields, when both are valid.
   selectedBaseline: number | null;
   onUseTranscriptTimes: () => void;
+  // The first and last caption start in the same whole second: the fields cannot be filled.
+  needsTimes?: boolean;
 }
 
 /** What the transcript's timestamps will be used for; nothing for a plain transcript. */
@@ -21,6 +23,7 @@ export function TranscriptTimingPanel({
   overridden,
   selectedBaseline,
   onUseTranscriptTimes,
+  needsTimes = false,
 }: Props) {
   if (timing.kind === "none") return null;
   if (timing.kind === "cues") {
@@ -65,8 +68,10 @@ export function TranscriptTimingPanel({
         <>
           <p>
             <strong>Timestamps detected:</strong> {timing.captions} captions from{" "}
-            {captionClock(timing.first)} to {captionClock(timing.last)}. The start times below
-            are filled from the first and last caption.
+            {captionClock(timing.first)} to {captionClock(timing.last)}.{" "}
+            {needsTimes
+              ? "They start within the same second, so the start times below cannot be filled: enter them."
+              : "The start times below are filled from the first and last caption (whole seconds)."}
           </p>
           <p>
             Timing follows the captions and is estimated: some sentences may be grouped together

@@ -217,9 +217,9 @@ class TimingOut(BaseModel):
     captions: int
     blocks: int
     # Baseline from the first and last caption, and the one the time fields selected.
-    source_first_seconds: int
-    source_last_seconds: int
-    source_baseline_seconds: int
+    source_first_seconds: float  # exact to the millisecond
+    source_last_seconds: float
+    source_baseline_seconds: float
     selected_baseline_seconds: int
     speech_requests: int
     # The rest is null when the audio was not placed on a timeline (mock audio).

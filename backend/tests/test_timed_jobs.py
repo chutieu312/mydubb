@@ -65,6 +65,28 @@ def test_a_timed_job_runs_with_mock_providers(client: TestClient) -> None:
     assert any("not exact sentence-by-sentence" in notice for notice in result["notices"])
 
 
+def test_an_imported_transcript_with_milliseconds_runs_as_a_timed_job(client: TestClient) -> None:
+    # The caption import's handoff format, with the fields it suggests (truncated to seconds).
+    imported = "0:10.480\nWelcome back.\n0:12.960\nGradient descent, step by step.\n6:10.999\nBye!"
+    csrf = login(client)
+    response = timed_job(
+        client,
+        csrf,
+        transcript=imported,
+        first_sentence_start="00:00:10",
+        last_sentence_start="00:06:10",
+    )
+    assert response.status_code == 202, response.text
+    job = wait_for_terminal(client, response.json()["id"])
+    assert job["status"] == "completed"
+    timing = client.get(f"/api/jobs/{job['id']}/result").json()["timing"]
+    assert (timing["captions"], timing["blocks"]) == (3, 2)
+    assert timing["source_first_seconds"] == 10.48
+    assert timing["source_last_seconds"] == 370.999
+    assert timing["source_baseline_seconds"] == 360.519
+    assert timing["selected_baseline_seconds"] == 360
+
+
 def test_plain_mode_is_the_default_and_unchanged(client: TestClient) -> None:
     csrf = login(client)
     job = wait_for_terminal(

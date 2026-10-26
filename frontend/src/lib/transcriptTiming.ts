@@ -7,27 +7,37 @@ export type TranscriptTiming =
   | { kind: "none" }
   // SRT or WebVTT: accepted and cleaned, but their timing is not used yet (plain flow).
   | { kind: "cues" }
+  // `first` / `last`: the first and last caption start, in seconds with millisecond precision.
   | { kind: "timed"; captions: number; first: number; last: number }
   | { kind: "invalid"; message: string };
 
 const LOOSE_STAMP = /^\d{1,2}(?::\d{1,2}){1,2}(?:[.,]\d+)?$/;
-const M_SS = /^(\d{1,2}):([0-5]\d)$/;
-const H_MM_SS = /^(\d{1,2}):([0-5]\d):([0-5]\d)$/;
+// Whole seconds as pasted from YouTube's panel, or ".mmm" as written by the caption import.
+const M_SS = /^(\d{1,2}):([0-5]\d)(?:\.(\d{1,3}))?$/;
+const H_MM_SS = /^(\d{1,2}):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$/;
 
+/** The time in whole milliseconds, or null when it is not a valid caption time. */
 function parseStamp(text: string): number | null {
   const long = H_MM_SS.exec(text);
-  if (long) return Number(long[1]) * 3600 + Number(long[2]) * 60 + Number(long[3]);
-  const short = M_SS.exec(text);
-  if (short) return Number(short[1]) * 60 + Number(short[2]);
-  return null;
+  const short = long ? null : M_SS.exec(text);
+  const parts = long ?? (short ? [short[0], "0", short[1], short[2], short[3]] : null);
+  if (!parts) return null;
+  const [, hours, minutes, seconds, fraction] = parts;
+  const millis = fraction ? Number(fraction.padEnd(3, "0")) : 0;
+  return ((Number(hours) * 60 + Number(minutes)) * 60 + Number(seconds)) * 1000 + millis;
 }
 
-/** "0:05", "12:30", "1:02:03": how the transcript writes its times. */
+/** "0:05", "12:30", "1:02:03", "0:10.480": how the transcript writes its times. */
 export function captionClock(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = String(seconds % 60).padStart(2, "0");
-  return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${secs}` : `${minutes}:${secs}`;
+  const millis = Math.round(seconds * 1000);
+  const whole = Math.floor(millis / 1000);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = String(whole % 60).padStart(2, "0");
+  const fraction = millis % 1000 ? `.${String(millis % 1000).padStart(3, "0")}` : "";
+  const clock =
+    hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${secs}` : `${minutes}:${secs}`;
+  return clock + fraction;
 }
 
 export function analyzeTranscriptTiming(raw: string): TranscriptTiming {
@@ -56,7 +66,7 @@ export function analyzeTranscriptTiming(raw: string): TranscriptTiming {
       if (seconds === null) {
         return {
           kind: "invalid",
-          message: `Line ${number} (${line}) is not a valid timestamp. Use M:SS or H:MM:SS with minutes and seconds from 00 to 59.`,
+          message: `Line ${number} (${line}) is not a valid timestamp. Use M:SS or H:MM:SS with minutes and seconds from 00 to 59, optionally with milliseconds (0:05.480).`,
         };
       }
       const problem = close();
@@ -81,7 +91,7 @@ export function analyzeTranscriptTiming(raw: string): TranscriptTiming {
     if (after < before) {
       return {
         kind: "invalid",
-        message: `The timestamps go backwards (${captionClock(before)} is followed by ${captionClock(after)}).`,
+        message: `The timestamps go backwards (${captionClock(before / 1000)} is followed by ${captionClock(after / 1000)}).`,
       };
     }
   }
@@ -94,5 +104,5 @@ export function analyzeTranscriptTiming(raw: string): TranscriptTiming {
         "The last caption starts at the same time as the first one, so there is no time span to place the audio in.",
     };
   }
-  return { kind: "timed", captions: starts.length, first, last };
+  return { kind: "timed", captions: starts.length, first: first / 1000, last: last / 1000 };
 }

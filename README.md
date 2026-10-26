@@ -54,6 +54,14 @@ Time** (`HH:MM:SS`), pick a voice and an **audio speed**, then **Generate Dubbin
   the finished file. See [docs/API.md](docs/API.md#audio-speed) and
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+When the server has the YouTube caption import on, the transcript can also come from a video:
+choose **YouTube URL**, paste the link and choose **Import transcript**. The video's existing English
+captions fill the transcript (one start time line `M:SS.mmm`, then the caption's text) and the two
+start times (first and last caption, whole seconds). Nothing is generated until you review, edit
+and choose **Generate audio**. MyDubb does not transcribe audio: a video without English captions
+cannot be imported. The link is sent to Supadata. See
+[docs/API.md](docs/API.md#youtube-caption-import).
+
 To listen to a speed series from a local lossless WAV without calling Azure:
 `cd backend && uv run python -m scripts.duration_smoke --wav speech.wav --baseline-seconds 20 --speeds`
 (needs FFmpeg; files go to `duration-samples/`).
@@ -172,13 +180,26 @@ uv run python -m scripts.duration_smoke --wav speech.wav --target-seconds 360   
 uv run python -m scripts.duration_smoke --azure            # LIVE: 2 Azure Speech requests
 ```
 
+### YouTube caption import
+
+Off by default (`YOUTUBE_IMPORT_PROVIDER=off`; pasting works the same either way).
+`YOUTUBE_IMPORT_PROVIDER=supadata` needs `SUPADATA_API_KEY` (startup fails without it; no other
+provider is used as a fallback). `YOUTUBE_IMPORT_PROVIDER=mock` returns fixed captions with no
+network call, for local development and the E2E stack (refused in production). Optional limits:
+`SUPADATA_TIMEOUT_SECONDS`, `SUPADATA_DEADLINE_SECONDS`, `SUPADATA_POLL_INTERVAL_SECONDS`,
+`SUPADATA_MAX_REQUESTS_PER_WINDOW` / `SUPADATA_RATE_WINDOW_SECONDS` (default 1 per second, the Free
+plan), `YOUTUBE_IMPORT_MAX_CONCURRENT`. Account, credits and the live smoke test
+(`uv run python -m scripts.supadata_smoke --confirm-credits N <links>`, one credit per link) are in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#youtube-caption-import-supadata).
+
 ### Timed transcripts
 
 A transcript in the YouTube transcript-panel format (a timestamp alone on a line above each
-caption) can be dubbed in timed mode: the UI recognizes it, fills the two start times from the
-first and last caption and sends `timing_mode: "timed"`; the speech is then placed near the caption
-times (estimated, group-level timing, not exact per sentence). Plain mode is unchanged and remains
-the default. Rules, checks and limits: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#timed-dubbing).
+caption, whole seconds or `.mmm` milliseconds as written by the YouTube caption import below) can
+be dubbed in timed mode: the UI recognizes it, pasted or imported, fills the two start times from
+the first and last caption (truncated to whole seconds) and sends `timing_mode: "timed"`; the
+speech is then placed near the caption times (estimated, group-level timing, not exact per
+sentence). Plain mode is unchanged and remains the default. Rules, checks and limits: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#timed-dubbing).
 Measurement tools (Azure is called only by the smoke script, with a request and character budget):
 
 ```bash

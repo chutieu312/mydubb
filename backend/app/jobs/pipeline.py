@@ -66,9 +66,10 @@ def timing_summary(
         "mode": "timed",
         "captions": len(timed.captions),
         "blocks": len(timed.blocks),
-        "source_first_seconds": timed.source_first,
-        "source_last_seconds": timed.source_last,
-        "source_baseline_seconds": timed.source_baseline,
+        # Caption starts are exact to the millisecond (the import writes .mmm).
+        "source_first_seconds": float(timed.source_first),
+        "source_last_seconds": float(timed.source_last),
+        "source_baseline_seconds": float(timed.source_baseline),
         "selected_baseline_seconds": selected_baseline,
         "estimated_block_starts": [b.estimated_start for b in timed.blocks],
         "speech_requests": requests,

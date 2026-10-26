@@ -41,6 +41,15 @@ class AudioProcessorChoice(StrEnum):
     FFMPEG = "ffmpeg"
 
 
+class YouTubeImportChoice(StrEnum):
+    # Importing the existing English captions of a YouTube video into the form. Off by default:
+    # pasting a transcript works the same with or without it.
+    OFF = "off"
+    SUPADATA = "supadata"
+    # Fixed captions for development and the browser E2E suite; never reaches the network.
+    MOCK = "mock"
+
+
 class AuthMode(StrEnum):
     # The Private Beta Access Code (default) or Amazon Cognito email/password accounts. The two are
     # exclusive: each mode serves only its own login endpoints and accepts only its own sessions.
@@ -169,6 +178,23 @@ class Settings(BaseSettings):
     azure_speech_max_requests_per_window: int = Field(default=20, ge=1, le=1000)
     azure_speech_rate_window_seconds: float = Field(default=60, ge=1, le=600)
 
+    # YouTube caption import (only validated and used when YOUTUBE_IMPORT_PROVIDER=supadata). The
+    # key stays in the backend environment; the browser never talks to Supadata.
+    youtube_import_provider: YouTubeImportChoice = YouTubeImportChoice.OFF
+    supadata_api_key: SecretStr | None = None
+    # Time allowed for one HTTP request to Supadata, and for a whole import including the status
+    # polls of an asynchronous job. The browser waits for the import, so both stay bounded.
+    supadata_timeout_seconds: float = Field(default=30, ge=5, le=120)
+    supadata_deadline_seconds: float = Field(default=90, ge=10, le=300)
+    # Pause between two status polls of an asynchronous job (Supadata recommends 1 second).
+    supadata_poll_interval_seconds: float = Field(default=1, ge=0.5, le=30)
+    # Request rate shared by every import of this process, status polls included. Defaults are
+    # the Free plan's 1 request per second; raise them only for a plan with a higher limit.
+    supadata_max_requests_per_window: int = Field(default=1, ge=1, le=100)
+    supadata_rate_window_seconds: float = Field(default=1, ge=1, le=60)
+    # Imports running at the same time; one more is refused (503) instead of queued.
+    youtube_import_max_concurrent: int = Field(default=2, ge=1, le=20)
+
     session_ttl_seconds: int = Field(default=12 * 3600, ge=60)
     cookie_secure: bool = True
     # Header set (overwritten) by the edge proxy with the real client IP, e.g.
@@ -270,6 +296,22 @@ class Settings(BaseSettings):
                     "MOCK_FAIL_STAGE=audio only applies to the mock audio processor; "
                     "unset it or use AUDIO_PROCESSOR=mock"
                 )
+        if self.youtube_import_provider is YouTubeImportChoice.SUPADATA:
+            key = self.supadata_api_key.get_secret_value() if self.supadata_api_key else ""
+            if not key:
+                raise ValueError(
+                    "SUPADATA_API_KEY is required when YOUTUBE_IMPORT_PROVIDER=supadata"
+                )
+            if not _HEADER_VALUE.fullmatch(key):
+                raise ValueError("SUPADATA_API_KEY must be printable ASCII without spaces")
+        if (
+            self.youtube_import_provider is YouTubeImportChoice.MOCK
+            and self.app_env is AppEnv.PRODUCTION
+        ):
+            raise ValueError(
+                "YOUTUBE_IMPORT_PROVIDER=mock is not allowed when APP_ENV=production (it "
+                "returns fixed captions, not the video's); use supadata or off"
+            )
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
             raise ValueError(
                 "JOB_STALE_AFTER_SECONDS must be at least 3x JOB_HEARTBEAT_INTERVAL_SECONDS"

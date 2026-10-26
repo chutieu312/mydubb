@@ -380,13 +380,15 @@ textarea[aria-invalid="true"] {
   gap: 8px;
 }
 
-.speed-option {
+.speed-option,
+.choice-option {
   position: relative;
   display: block;
   font-weight: 400;
 }
 
-.speed-option input {
+.speed-option input,
+.choice-option input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -396,7 +398,8 @@ textarea[aria-invalid="true"] {
   cursor: pointer;
 }
 
-.speed-option span {
+.speed-option span,
+.choice-option span {
   display: block;
   min-height: 44px;
   padding: 10px 6px;
@@ -408,7 +411,8 @@ textarea[aria-invalid="true"] {
   font-variant-numeric: tabular-nums;
 }
 
-.speed-option input:checked + span {
+.speed-option input:checked + span,
+.choice-option input:checked + span {
   background: var(--brand);
   border-color: var(--brand);
   color: var(--on-brand);
@@ -416,17 +420,58 @@ textarea[aria-invalid="true"] {
 }
 
 /* The selected box also carries a mark, so the choice is not shown by colour alone. */
-.speed-option input:checked + span::before {
+.speed-option input:checked + span::before,
+.choice-option input:checked + span::before {
   content: "\2713\00a0";
 }
 
-.speed-option input:focus-visible + span {
+.speed-option input:focus-visible + span,
+.choice-option input:focus-visible + span {
   outline: 3px solid var(--brand);
   outline-offset: 3px;
 }
 
-.speed-option input:not(:checked):hover + span {
+.speed-option input:not(:checked):hover + span,
+.choice-option input:not(:checked):hover + span {
   border-color: var(--brand);
+}
+
+/* ---- Transcript source (paste or YouTube import) ---- */
+
+.source-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.import-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.import-row .button {
+  flex: 0 0 auto;
+}
+
+.confirm {
+  display: grid;
+  gap: 10px;
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.callout p + p {
+  margin-top: 6px;
 }
 
 /* ---- Length preview ---- */

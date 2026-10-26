@@ -28,6 +28,25 @@ export interface AppMeta {
   result_ttl_seconds: number;
   // How users sign in. Read it with authModeOf(): a missing or unknown value must not be guessed.
   auth?: { mode?: string; self_registration?: boolean; password_reset?: boolean };
+  // Whether the form offers importing a YouTube video's captions. Missing means not offered.
+  youtube_import?: { enabled?: boolean; provider?: string | null };
+}
+
+/** The existing English captions of a video, written as a timestamped transcript. */
+export interface YouTubeImport {
+  // One line with the caption's start time (M:SS.mmm or H:MM:SS.mmm), then one line with its
+  // text, for every caption. Shown and edited as plain text.
+  transcript: string;
+  language: string;
+  caption_count: number;
+  // Captions without any text, left out of the transcript.
+  skipped_empty_captions: number;
+  first_caption_start_ms: number;
+  last_caption_start_ms: number;
+  // HH:MM:SS (whole seconds) for the two time fields; null when the captions give no baseline.
+  first_sentence_start: string | null;
+  last_sentence_start: string | null;
+  provider: string;
 }
 
 export interface SessionInfo {

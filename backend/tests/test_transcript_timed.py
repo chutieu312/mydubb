@@ -145,7 +145,9 @@ def test_equal_timestamps_merge_into_a_block_with_a_positive_frame() -> None:
         ("0:00\nA.\n0:05\nB.\n0:03\nC.", "timestamps_decrease"),
         ("0:00\nA.\n0:75\nB.", "invalid_timestamp"),
         ("0:00\nA.\n1:2:03\nB.", "invalid_timestamp"),
-        ("0:00\nA.\n0:05.5\nB.", "invalid_timestamp"),
+        ("0:00\nA.\n0:05.5555\nB.", "invalid_timestamp"),  # more than milliseconds
+        ("0:00\nA.\n0:05,500\nB.", "invalid_timestamp"),  # the handoff format uses a dot
+        ("0:04.250\nA.\n0:04.250\nB.", "zero_baseline"),
         ("Intro\n0:00\nA.\n0:05\nB.", "text_before_first_timestamp"),
         ("0:00\n0:03\nA.\n0:05\nB.", "timestamp_without_text"),
         ("0:00\nA.\n0:05", "timestamp_without_text"),
@@ -165,6 +167,62 @@ def test_h_mm_ss_and_mm_ss_timestamps() -> None:
     raw = "59:58\nA long video.\n1:00:03\nStill here.\n01:00:09\nEnd."
     timed = parse_timed_transcript(raw)
     assert [c.start for c in timed.captions] == [3598, 3603, 3609]
+
+
+# --- The caption import's handoff format (milliseconds) -----------------------------------------
+
+IMPORTED = "0:10.480\nWelcome back.\n0:12.960\nGradient descent, step by step.\n6:10.999\nBye!"
+
+
+def test_milliseconds_are_kept_exactly() -> None:
+    timed = parse_timed_transcript(IMPORTED)
+    assert [c.start for c in timed.captions] == [
+        Fraction(10480, 1000),
+        Fraction(12960, 1000),
+        Fraction(370999, 1000),
+    ]
+    assert timed.source_baseline == Fraction(360519, 1000)
+    assert [b.text for b in timed.blocks] == [
+        "Welcome back.",
+        "Gradient descent, step by step. Bye!",  # the last caption joins the block before it
+    ]
+    assert parse_timed_transcript("1:02:03.004\nA.\n1:02:03.5\nB.").captions[1].start == Fraction(
+        3723500, 1000
+    )
+
+
+def test_the_selected_whole_second_baseline_scales_a_millisecond_timeline() -> None:
+    # The fields hold 00:00:10 -> 00:06:10 (360 s, truncated); the captions span 360.519 s.
+    timed = parse_timed_transcript(IMPORTED)
+    boundaries = timed.boundaries(360, AudioSpeed.X1, RATE)
+    assert boundaries[-1] == 360 * RATE
+    exact = Fraction(12960 - 10480, 360519) * 360 * RATE
+    assert boundaries[1] == (2 * exact.numerator + exact.denominator) // (2 * exact.denominator)
+
+
+def test_first_and_last_caption_in_the_same_second_still_have_a_span() -> None:
+    timed = parse_timed_transcript("0:10.100\nHello there.\n0:10.900\nAnd goodbye.")
+    assert timed.source_baseline == Fraction(4, 5)
+
+
+def test_every_imported_transcript_reads_back_as_its_captions_in_timed_mode() -> None:
+    from app.youtube_import.captions import RawCaption, build_track
+
+    track = build_track(
+        "en",
+        [
+            RawCaption("Generally, if if somebody's trying to", 0, 1000),
+            RawCaption("make a company work. Uh except", 1480, 900),
+            RawCaption("that 3.5 percent fail.", 3_600_999, 800),
+            RawCaption("Bye", 3_601_500, 500),
+        ],
+    )
+    timed = parse_timed_transcript(track.transcript)
+    assert [c.text for c in timed.captions] == [c.text for c in track.captions]
+    assert [c.start for c in timed.captions] == [Fraction(c.start_ms, 1000) for c in track.captions]
+    assert " ".join(b.text for b in timed.blocks) == " ".join(c.text for c in track.captions)
+    # The form's suggestions are the same whole seconds the timed reader would fill.
+    assert track.suggested_starts() == ("00:00:00", "01:00:01")
 
 
 def test_cue_documents_are_not_the_timed_structure() -> None:

@@ -2,7 +2,8 @@
 
 Supported structure (YouTube's transcript panel, copied as text): a timestamp alone on a line,
 followed by the caption text on the next line(s), repeated. Timestamps are `M:SS`, `MM:SS` or
-`H:MM:SS` (also `HH:MM:SS`), whole seconds:
+`H:MM:SS` (also `HH:MM:SS`), whole seconds, or with a dot and 1-3 millisecond digits as the
+YouTube caption import writes them (`0:10.480`, the handoff format in API.md):
 
     0:00
     Generally, if if somebody's trying to
@@ -59,8 +60,10 @@ from app.audio.speed import AudioSpeed, DurationTarget, TimelinePlan
 # A line that looks like a timestamp at all (validated strictly afterwards, so that "0:75" or
 # "1:2:03" in a timed transcript is an error instead of spoken text).
 _LOOSE_STAMP = re.compile(r"^\d{1,2}(?::\d{1,2}){1,2}(?:[.,]\d+)?$")
-_M_SS = re.compile(r"^(\d{1,2}):([0-5]\d)$")
-_H_MM_SS = re.compile(r"^(\d{1,2}):([0-5]\d):([0-5]\d)$")
+# Whole seconds (YouTube's panel) or a dot and 1-3 millisecond digits (the caption import's
+# handoff format, see youtube_import/captions.py).
+_M_SS = re.compile(r"^(\d{1,2}):([0-5]\d)(?:\.(\d{1,3}))?$")
+_H_MM_SS = re.compile(r"^(\d{1,2}):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$")
 _WHITESPACE = re.compile(r"\s+")
 _SENTENCE_END = re.compile(r"[.!?…][\"'”’)\]}»]*$")  # noqa: RUF001 (typographic quotes are intended)
 _TRAILING_CLOSERS = re.compile(r"[\"'”’)\]}»]+$")  # noqa: RUF001
@@ -90,7 +93,7 @@ class TimedTranscriptError(ValueError):
 
 @dataclass(frozen=True)
 class Caption:
-    start: int  # seconds, from its timestamp
+    start: Fraction  # seconds, exact to the millisecond, from its timestamp
     text: str  # whitespace normalized to single spaces
 
 
@@ -123,15 +126,15 @@ class TimedTranscript:
     blocks: tuple[TimedBlock, ...]
 
     @property
-    def source_first(self) -> int:
+    def source_first(self) -> Fraction:
         return self.captions[0].start
 
     @property
-    def source_last(self) -> int:
+    def source_last(self) -> Fraction:
         return self.captions[-1].start
 
     @property
-    def source_baseline(self) -> int:
+    def source_baseline(self) -> Fraction:
         return self.source_last - self.source_first
 
     @property
@@ -184,11 +187,14 @@ def parse_timed_transcript(raw: str, *, min_block_seconds: int = 0) -> TimedTran
     return TimedTranscript(tuple(captions), tuple(blocks))
 
 
-def format_caption_time(seconds: int) -> str:
-    """HH:MM:SS, the format of the API's time fields."""
-    hours, rest = divmod(seconds, 3600)
+def _caption_clock(seconds: Fraction) -> str:
+    """How transcripts write a caption time: "0:05", "1:02:03", "0:10.480"."""
+    millis = int(seconds * 1000)
+    whole, fraction = divmod(millis, 1000)
+    hours, rest = divmod(whole, 3600)
     minutes, secs = divmod(rest, 60)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    clock = f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+    return f"{clock}.{fraction:03d}" if fraction else clock
 
 
 def _lines(raw: str) -> list[str]:
@@ -200,14 +206,17 @@ def _is_cue_document(lines: Sequence[str]) -> bool:
     return first.startswith("WEBVTT") or any("-->" in line for line in lines)
 
 
-def _parse_stamp(text: str) -> int | None:
+def _parse_stamp(text: str) -> Fraction | None:
+    """Seconds, exact to the millisecond; None when the line is not a valid caption time."""
     if match := _H_MM_SS.match(text):
-        hours, minutes, seconds = (int(part) for part in match.groups())
-        return hours * 3600 + minutes * 60 + seconds
-    if match := _M_SS.match(text):
-        minutes, seconds = (int(part) for part in match.groups())
-        return minutes * 60 + seconds
-    return None
+        hours, minutes, seconds, fraction = match.groups()
+    elif match := _M_SS.match(text):
+        hours, (minutes, seconds, fraction) = "0", match.groups()
+    else:
+        return None
+    millis = int((fraction or "0").ljust(3, "0"))
+    whole = (int(hours) * 60 + int(minutes)) * 60 + int(seconds)
+    return whole + Fraction(millis, 1000)
 
 
 def _parse_captions(raw: str) -> list[Caption]:
@@ -241,7 +250,7 @@ def _parse_captions(raw: str) -> list[Caption]:
                 raise TimedTranscriptError(
                     "invalid_timestamp",
                     f"Line {number} ({line}) is not a valid timestamp. Use M:SS or H:MM:SS with "
-                    "minutes and seconds from 00 to 59.",
+                    "minutes and seconds from 00 to 59, optionally with milliseconds (0:05.480).",
                 )
             close()
             pending, text = (number, seconds), []
@@ -258,8 +267,8 @@ def _parse_captions(raw: str) -> list[Caption]:
         if current.start < previous.start:
             raise TimedTranscriptError(
                 "timestamps_decrease",
-                f"The timestamps go backwards ({format_caption_time(previous.start)} is followed "
-                f"by {format_caption_time(current.start)}).",
+                f"The timestamps go backwards ({_caption_clock(previous.start)} is followed "
+                f"by {_caption_clock(current.start)}).",
             )
     if captions[-1].start <= captions[0].start:
         raise TimedTranscriptError(
