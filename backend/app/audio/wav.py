@@ -10,11 +10,23 @@ import wave
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 _COPY_BLOCK_BYTES = 1024 * 1024
 # A streaming encoder may write 0 or 0xFFFFFFFF as the data size because it is unknown.
 _UNKNOWN_SIZES = (0, 0xFFFFFFFF)
 _PCM = 1
+# Silence is written in blocks of at most this many bytes, all taken from one preallocated buffer,
+# so a long silence never needs memory of its own size (a 3-hour frame of 24 kHz 16-bit mono
+# audio is about 500 MB).
+SILENCE_BLOCK_BYTES = 1024 * 1024
+_ZEROS = memoryview(bytes(SILENCE_BLOCK_BYTES))
+
+
+class FrameWriter(Protocol):
+    """What `write_silent_frames` needs: `wave.Wave_write` or a test double."""
+
+    def writeframes(self, data: bytes | memoryview) -> None: ...
 
 
 class InvalidAudioError(ValueError):
@@ -115,3 +127,24 @@ def concat_wavs(sources: Sequence[Path], output: Path, expected: PcmFormat) -> f
                     target.writeframes(block)
                     remaining -= len(block)
     return sum(info.frames for info in infos) / expected.sample_rate
+
+
+def write_silent_frames(target: FrameWriter, frames: int, frame_bytes: int) -> None:
+    """Write `frames` silent frames to an open WAV writer, in bounded blocks of whole frames."""
+    if frames < 0 or frame_bytes <= 0:
+        raise ValueError("frames must not be negative and frame_bytes must be positive")
+    block = SILENCE_BLOCK_BYTES - SILENCE_BLOCK_BYTES % frame_bytes
+    remaining = frames * frame_bytes
+    while remaining:
+        count = min(block, remaining)
+        target.writeframes(_ZEROS[:count])
+        remaining -= count
+
+
+def write_silence(output: Path, pcm: PcmFormat, frames: int) -> None:
+    """A WAV of `frames` silent frames in format `pcm`."""
+    with wave.open(str(output), "wb") as target:
+        target.setnchannels(pcm.channels)
+        target.setsampwidth(pcm.sample_width)
+        target.setframerate(pcm.sample_rate)
+        write_silent_frames(target, frames, pcm.frame_bytes)

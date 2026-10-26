@@ -33,15 +33,17 @@ import re
 import shutil
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import httpx
 from pydantic import SecretStr
 
 from app.audio.ffmpeg import AudioToolError, AudioTools, encode_mp3, probe_mp3
-from app.audio.wav import InvalidAudioError, PcmFormat, concat_wavs, read_wav_info
+from app.audio.wav import InvalidAudioError, PcmFormat, concat_wavs, read_wav_info, write_silence
 from app.processing_errors import ProcessingError
-from app.speech.base import SpeechAudio
+from app.speech.base import SpeechAudio, TimedSpeechAudio
+from app.speech.blocks import BlockRequest, BlockSplitError, plan_block_requests, split_response
 from app.speech.chunker import SpeechTextTooLongError, speech_text, split_for_speech
 from app.speech.rate_limit import RateLimiterClosed, RequestRateLimiter
 from app.speech.ssml import build_ssml_from_spans, chunk_language_spans
@@ -102,6 +104,11 @@ _MESSAGES = {
         "split for speech. Please add spaces or line breaks and submit again."
     ),
     "speech_no_speakable_text": "The translated text has nothing that can be spoken.",
+    "speech_block_split_failed": (
+        "The speech for the timed transcript did not pass the checks used to match it to its "
+        "sentences, so no audio was produced. You can process the transcript as plain text "
+        "instead."
+    ),
 }
 
 
@@ -115,6 +122,7 @@ def synthesis_url(region: str) -> str:
 
 class AzureSpeechProvider:
     name = "azure-speech"
+    produces_fixture = False
 
     def __init__(
         self,
@@ -178,6 +186,86 @@ class AzureSpeechProvider:
             duration,
         )
         return SpeechAudio(path=mp3, is_fixture=False, lossless_path=wav)
+
+    def synthesize_blocks(
+        self,
+        texts: Sequence[str],
+        voice: Voice,
+        work_dir: Path,
+        terms: TermMatcher | None = None,
+    ) -> TimedSpeechAudio:
+        """One lossless clip per block: several blocks per request, cut at inserted breaks.
+
+        See speech/blocks.py for the breaks and the checks that must all hold before a response
+        is cut. A response that fails any check fails the job (`speech_block_split_failed`);
+        it is not retried, cut differently or synthesized another way.
+        """
+        terms = self._glossary if terms is None else terms
+        try:
+            requests = plan_block_requests(texts, terms, self._max_chunk_chars)
+        except SpeechTextTooLongError:
+            raise _failure("speech_input_unsupported") from None
+        if not requests:
+            raise _failure("speech_no_speakable_text")
+        scratch = Path(tempfile.mkdtemp(prefix="speech-blocks-", dir=work_dir))
+        clips: list[Path] = []
+        try:
+            parts = self._synthesize_block_requests(requests, voice, scratch)
+            for index in range(len(texts)):
+                clip = work_dir / f"block-{index:05d}.wav"
+                if index in parts:
+                    concat_wavs(parts[index], clip, PCM_FORMAT)
+                else:
+                    write_silence(clip, PCM_FORMAT, frames=1)  # nothing to say in this block
+                clips.append(clip)
+        except (InvalidAudioError, OSError):
+            for clip in clips:
+                clip.unlink(missing_ok=True)
+            raise _failure("speech_audio_failed") from None
+        except BaseException:
+            for clip in clips:
+                clip.unlink(missing_ok=True)
+            raise
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        logger.info(
+            "Azure Speech finished (timed): blocks=%d requests=%d chars=%d",
+            len(texts),
+            len(requests),
+            sum(request.chars for request in requests),
+        )
+        return TimedSpeechAudio(clips=tuple(clips), is_fixture=False, requests=len(requests))
+
+    def _synthesize_block_requests(
+        self, requests: list[BlockRequest], voice: Voice, scratch: Path
+    ) -> dict[int, list[Path]]:
+        parts: dict[int, list[Path]] = {}
+        timeout = httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
+        with httpx.Client(timeout=timeout, transport=self._transport) as client:
+            for number, request in enumerate(requests):
+                try:
+                    self._limiter.acquire()
+                except RateLimiterClosed:
+                    raise _failure("speech_cancelled") from None
+                response = scratch / f"request-{number:05d}.wav"
+                self._synthesize_chunk(client, request.ssml(voice), response)
+                self._validate_chunk(response, request.chars)
+                try:
+                    pieces, report = split_response(response, request, scratch, f"r{number:05d}")
+                except BlockSplitError as exc:
+                    # The reason names a check, never content.
+                    logger.warning("Azure Speech blocks could not be mapped: %s", exc.reason)
+                    raise _failure("speech_block_split_failed") from None
+                logger.info(
+                    "Azure Speech request split: pieces=%d shortest_break_ms=%s "
+                    "longest_natural_ms=%d",
+                    len(request.pieces),
+                    min(report.breaks_ms) if report.breaks_ms else "-",
+                    report.longest_natural_ms,
+                )
+                for piece, clip in zip(request.pieces, pieces, strict=True):
+                    parts.setdefault(piece.block, []).append(clip)
+        return parts
 
     def _synthesize_chunks(
         self, chunks: list[tuple[str, list[tuple[str, str]]]], voice: Voice, scratch: Path

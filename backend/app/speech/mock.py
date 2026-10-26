@@ -1,9 +1,10 @@
 import shutil
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from app.processing_errors import ProcessingError
-from app.speech.base import SpeechAudio
+from app.speech.base import SpeechAudio, TimedSpeechAudio
 from app.speech.voices import Voice
 from app.translation.glossary import TermMatcher
 
@@ -18,6 +19,7 @@ class MockSpeechProvider:
     """
 
     name = "mock-speech"
+    produces_fixture = True
 
     def __init__(self, *, fail: bool = False, delay: float = 0.0) -> None:
         self._fail = fail
@@ -26,6 +28,21 @@ class MockSpeechProvider:
     def synthesize(
         self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
     ) -> SpeechAudio:
+        return SpeechAudio(path=self._fixture(work_dir), is_fixture=True)
+
+    def synthesize_blocks(
+        self,
+        texts: Sequence[str],
+        voice: Voice,
+        work_dir: Path,
+        terms: TermMatcher | None = None,
+    ) -> TimedSpeechAudio:
+        """The same fixture: no clip per block, so nothing is placed on a timeline."""
+        return TimedSpeechAudio(
+            clips=(), is_fixture=True, requests=0, fixture_path=self._fixture(work_dir)
+        )
+
+    def _fixture(self, work_dir: Path) -> Path:
         time.sleep(self._delay)
         if self._fail:
             raise ProcessingError(
@@ -33,4 +50,4 @@ class MockSpeechProvider:
             )
         output = work_dir / "speech.mp3"
         shutil.copyfile(FIXTURE_MP3, output)
-        return SpeechAudio(path=output, is_fixture=True)
+        return output

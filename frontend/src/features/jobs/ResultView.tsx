@@ -136,6 +136,13 @@ export function ResultView({ jobId, voiceLabel, onSessionExpired }: Props) {
           timestamps, so it will not match the video&apos;s length for that stretch.
         </p>
       )}
+      {result.timing && (
+        <p className="callout small" aria-label="Transcript timing">
+          Placed on the caption times ({result.timing.blocks} sentence blocks{result.timing.frames !== null && ` in ${result.timing.frames} parts`}). Caption timing is
+          estimated: some sentences may be grouped together or start slightly off their caption
+          time.
+        </p>
+      )}
       {!audio.is_fixture && (
         <p className="small muted">
           English terms outside our glossary can occasionally be pronounced imperfectly.

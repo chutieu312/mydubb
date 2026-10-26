@@ -1,16 +1,34 @@
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
-from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, PrivateAttr, ValidationInfo, field_validator, model_validator
 
 from app.audio.speed import DEFAULT_SPEED, AudioSpeed, DurationTarget, speed_from_api
 from app.jobs.models import Job
 from app.speech.voices import DEFAULT_VOICE, Voice
 from app.transcript.cleaning import clean_transcript
+from app.transcript.timed import TimedTranscript, parse_timed_transcript
 from app.transcript.timestamps import format_seconds, parse_timestamp, target_duration_seconds
 
 
+class TimingMode(StrEnum):
+    """How the transcript's timestamps are used.
+
+    `plain`: timing markup is removed and the whole audio is fitted to the baseline (the behaviour
+    before timed mode; the default, also for clients that do not send the field). `timed`: the
+    transcript must have the YouTube-style structure (transcript/timed.py); its caption times place
+    the blocks on the timeline. Never switched silently: a timed transcript that cannot be timed is
+    a validation error, not a plain job.
+    """
+
+    PLAIN = "plain"
+    TIMED = "timed"
+
+
 class CreateJobRequest(BaseModel):
+    # Declared before `transcript`, whose validator depends on it.
+    timing_mode: TimingMode = TimingMode.PLAIN
     transcript: str
     first_sentence_start: str
     last_sentence_start: str
@@ -18,6 +36,7 @@ class CreateJobRequest(BaseModel):
     # Strict: only 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2. Omitted means 1x (the behaviour before
     # the option existed). The output length is always computed by the server, never sent.
     speed: AudioSpeed = DEFAULT_SPEED
+    _timed: TimedTranscript | None = PrivateAttr(default=None)
 
     @field_validator("speed", mode="before")
     @classmethod
@@ -26,11 +45,31 @@ class CreateJobRequest(BaseModel):
 
     @field_validator("transcript")
     @classmethod
-    def _clean_transcript(cls, value: str) -> str:
+    def _clean_transcript(cls, value: str, info: ValidationInfo) -> str:
+        if info.data.get("timing_mode") is TimingMode.TIMED:
+            # TimedTranscriptError is a ValueError: a 422 on `transcript` with its reason.
+            parse_timed_transcript(value)
+            return value
         cleaned = clean_transcript(value)
         if not cleaned:
             raise ValueError("Transcript must contain English text.")
         return cleaned
+
+    @model_validator(mode="after")
+    def _parse_timeline(self) -> "CreateJobRequest":
+        if self.timing_mode is TimingMode.TIMED:
+            self._timed = parse_timed_transcript(self.transcript)
+        return self
+
+    @property
+    def timed(self) -> TimedTranscript | None:
+        """The parsed captions and blocks in timed mode (kept in memory only)."""
+        return self._timed
+
+    @property
+    def spoken_text(self) -> str:
+        """What is translated and read: the cleaned text, or the timed blocks one per line."""
+        return self._timed.text if self._timed is not None else self.transcript
 
     @field_validator("first_sentence_start", "last_sentence_start")
     @classmethod
@@ -156,6 +195,88 @@ class AudioOut(BaseModel):
     duration: DurationOut | None = None
 
 
+class TimedFrameOut(BaseModel):
+    """One frame of the output timeline: one block, or several grouped blocks read in it."""
+
+    first_block: int
+    last_block: int
+    start_seconds: float
+    frame_seconds: float
+    # Audio that had to be heard in the frame, before any tempo change.
+    audio_seconds: float
+    # >1 faster (pitch kept); null when the speech fitted at its natural speed.
+    tempo_factor: float | None
+    padded_seconds: float
+
+
+class TimingOut(BaseModel):
+    """Timed mode: how the caption times were used. Block starts inside a caption are estimated
+    by word count, and grouped blocks share a frame, so this is not exact sentence timing."""
+
+    mode: str  # "timed"
+    captions: int
+    blocks: int
+    # Baseline from the first and last caption, and the one the time fields selected.
+    source_first_seconds: float  # exact to the millisecond
+    source_last_seconds: float
+    source_baseline_seconds: float
+    selected_baseline_seconds: int
+    speech_requests: int
+    # The rest is null when the audio was not placed on a timeline (mock audio).
+    frames: int | None = None
+    removed_boundaries: int | None = None
+    tempo_warning_level: float | None = None
+    max_tempo_factor: float | None = None
+    frames_over_warning_level: int | None = None
+    # Computed from the tempo factors, not measured on the audio.
+    estimated_max_displacement_seconds: float | None = None
+    frame_details: list[TimedFrameOut] | None = None
+
+    @classmethod
+    def from_summary(cls, summary: dict) -> "TimingOut":
+        timeline = summary.get("timeline")
+        fields = {
+            key: summary[key]
+            for key in (
+                "mode",
+                "captions",
+                "blocks",
+                "source_first_seconds",
+                "source_last_seconds",
+                "source_baseline_seconds",
+                "selected_baseline_seconds",
+                "speech_requests",
+            )
+        }
+        if not timeline:
+            return cls(**fields)
+        rate = timeline["sample_rate"]
+        boundaries = timeline["boundaries"]
+        fits = timeline["frame_fits"]
+        tempos = [fit["tempo_factor"] for fit in fits if fit["tempo_factor"] is not None]
+        return cls(
+            **fields,
+            frames=len(fits),
+            removed_boundaries=len(timeline["removed_boundaries"]),
+            tempo_warning_level=timeline["tempo_warning_level"],
+            max_tempo_factor=max(tempos, default=None),
+            frames_over_warning_level=timeline["frames_over_warning_level"],
+            estimated_max_displacement_seconds=timeline["estimated_max_displacement_seconds"],
+            frame_details=[
+                TimedFrameOut(
+                    first_block=fit["first_block"],
+                    last_block=fit["last_block"],
+                    start_seconds=boundaries[fit["first_block"]] / rate,
+                    frame_seconds=fit["frame_samples"] / rate,
+                    audio_seconds=fit["audible_samples"] / rate,
+                    tempo_factor=fit["tempo_factor"],
+                    padded_seconds=fit["padded_samples"] / rate,
+                )
+                for fit in fits
+            ],
+        )
+
+
 class JobResultResponse(BaseModel):
     job_id: uuid.UUID
     # What was submitted, from the job record (also when the audio was not adjusted, e.g. with
@@ -167,3 +288,5 @@ class JobResultResponse(BaseModel):
     audio: AudioOut
     expires_at: datetime
     notices: list[str]
+    # Timed mode only; null for plain jobs (and for results stored before timed mode existed).
+    timing: TimingOut | None = None

@@ -1,4 +1,5 @@
 import time
+from collections.abc import Sequence
 
 from app.processing_errors import ProcessingError
 from app.translation.base import TranslationResult
@@ -19,6 +20,18 @@ class MockTranslationProvider:
         self._delay = delay
 
     def translate(self, text: str) -> TranslationResult:
+        self._start()
+        lines = [f"(VI mock) {line}" for line in text.split("\n")]
+        text = "\n".join([ILLUSTRATIVE_NOTICE, *lines])
+        return TranslationResult(text=text, is_illustrative=True)
+
+    def translate_lines(self, lines: Sequence[str]) -> TranslationResult:
+        self._start()
+        translated = tuple(f"(VI mock) {line}" for line in lines)
+        text = "\n".join([ILLUSTRATIVE_NOTICE, *translated])
+        return TranslationResult(text=text, is_illustrative=True, lines=translated)
+
+    def _start(self) -> None:
         time.sleep(self._delay)
         if self._unexpected_error:
             raise RuntimeError("mock unexpected failure in translation stage")
@@ -26,6 +39,3 @@ class MockTranslationProvider:
             raise ProcessingError(
                 "translation_failed", "Translation failed (development mock failure scenario)."
             )
-        lines = [f"(VI mock) {line}" for line in text.split("\n")]
-        text = "\n".join([ILLUSTRATIVE_NOTICE, *lines])
-        return TranslationResult(text=text, is_illustrative=True)

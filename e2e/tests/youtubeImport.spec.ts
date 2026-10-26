@@ -51,19 +51,55 @@ test("imports captions into the form; the edited text is what the job uses", asy
 
   const edited = FIXTURE.replace("Welcome back.", "Welcome back, everyone.");
   await transcript(page).fill(edited);
+  // An imported transcript is read like a pasted timestamped one: timed mode.
+  await expect(page.getByLabel("Transcript timing").first()).toContainText(
+    "Timestamps detected",
+  );
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/jobs") && r.request().method() === "POST",
   );
   await page.getByRole("button", { name: "Generate audio" }).click();
-  const job = await (await created).json();
+  const response = await created;
+  expect(response.request().postDataJSON()).toMatchObject({
+    transcript: edited,
+    timing_mode: "timed",
+  });
+  const job = await response.json();
   expect(job.target_duration_seconds).toBe(9);
   await expect(page.locator(".stage.done", { hasText: "Completed" })).toBeVisible();
 
-  // The plain cleaning drops the time lines and keeps every caption in order.
+  // Timed mode reads the edited captions as sentences: every word, in order, no time read aloud.
   const translation = page.locator(".translation");
   await expect(translation).toContainText(
     [
-      "(VI mock) Welcome back, everyone. Today we look at gradient descent.",
+      "(VI mock) Welcome back, everyone.",
+      "(VI mock) Today we look at gradient descent.",
+      "(VI mock) It minimizes the loss function of a neural network, step by step.",
+      "(VI mock) [Music] Spring Boot's REST API returns JSON, naïve café style.",
+    ].join("\n"),
+  );
+  await expect(translation).not.toContainText("0:00.480");
+});
+
+test("an imported transcript can still be processed as plain text", async ({ page }) => {
+  await openImport(page);
+  await link(page).fill(LINK);
+  await page.getByRole("button", { name: "Import transcript" }).click();
+  await expect(transcript(page)).toHaveValue(FIXTURE);
+
+  await page.getByLabel(/Ignore the timestamps/).check();
+  const created = page.waitForRequest(
+    (r) => r.url().endsWith("/api/jobs") && r.method() === "POST",
+  );
+  await page.getByRole("button", { name: "Generate audio" }).click();
+  expect((await created).postDataJSON()).not.toHaveProperty("timing_mode");
+  await expect(page.locator(".stage.done", { hasText: "Completed" })).toBeVisible();
+
+  // The plain cleaning drops the time lines and keeps every caption line in order.
+  const translation = page.locator(".translation");
+  await expect(translation).toContainText(
+    [
+      "(VI mock) Welcome back. Today we look at gradient descent.",
       "(VI mock) It minimizes the loss function",
       "(VI mock) of a neural network, step by step.",
       "(VI mock) [Music]",

@@ -28,6 +28,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Sequence
 from urllib.parse import urlsplit
 
 import httpx
@@ -149,6 +150,18 @@ class AzureTranslationProvider:
         # Counts only; never content.
         logger.info("Azure translation finished: %d request(s)", requests)
         return TranslationResult(text=plan.assemble(translated), is_illustrative=False)
+
+    def translate_lines(self, lines: Sequence[str]) -> TranslationResult:
+        """Each line is its own segment(s) of the plan (`segmenter.py`), so the translation keeps
+        one line per input line; the count is verified rather than assumed."""
+        if any("\n" in line or not line.strip() for line in lines):
+            raise ValueError("lines must be non-empty and hold no line breaks")
+        result = self.translate("\n".join(lines))
+        translated = result.text.split("\n")
+        if len(translated) != len(lines) or not all(line.strip() for line in translated):
+            logger.warning("Azure translation lost the line structure of the blocks")
+            raise _failure("translation_invalid_response")
+        return TranslationResult(text=result.text, is_illustrative=False, lines=tuple(translated))
 
     def _translate_batch(self, client: httpx.Client, batch: list[Segment]) -> list[str]:
         body = self._post(client, [segment.markup for segment in batch])

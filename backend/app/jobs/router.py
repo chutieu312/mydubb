@@ -18,6 +18,8 @@ from app.jobs.schemas import (
     DurationOut,
     JobResponse,
     JobResultResponse,
+    TimingMode,
+    TimingOut,
     TranslationOut,
 )
 from app.services import AppServices
@@ -52,6 +54,21 @@ SPEED_NOT_APPLIED_NOTICE = (
     "Audio speed {speed} was selected, but this audio processor does not adjust duration, so "
     "the audio is neither the baseline length nor the length that speed would give."
 )
+TIMED_NOTICE = (
+    "Timed transcript: the speech follows the caption times. Times inside a caption are "
+    "estimated from word counts, and neighbouring sentences can share one stretch of time, so "
+    "some sentences start a little before or after their caption. This is not exact "
+    "sentence-by-sentence synchronization."
+)
+TIMED_ADJUSTED_NOTICE = (
+    "Each stretch of time holds its sentences: speech that was too long was sped up (pitch "
+    "preserved) only as much as that stretch needed, and shorter speech is followed by silence. "
+    "Nothing was cut or repeated, and the whole audio lasts exactly the target duration."
+)
+TIMED_FAST_NOTICE = (
+    "{count} stretch(es) still needed more than {level:g}x tempo after grouping, so speech can "
+    "sound fast there."
+)
 GLOSSARY_NOTICE = (
     "Translated by Azure Translator. Technical terms from the MyDubb glossary are kept in "
     "English; terms that are not in the glossary may be translated."
@@ -66,6 +83,14 @@ def create_job(
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResponse:
+    if body.timing_mode is TimingMode.TIMED and not services.pipeline.timed_mode_available():
+        # Refused before any slot, job row or provider call: there is no partial result to undo.
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "timing_mode_unavailable",
+            "Timed transcripts need the server's audio processing, which is not enabled on this "
+            "server. Process the transcript as plain text (tick 'Ignore the timestamps').",
+        )
     try:
         slot = services.executor.reserve()
     except ExecutorAtCapacity:
@@ -87,7 +112,7 @@ def create_job(
             first_sentence_start_seconds=parse_timestamp(body.first_sentence_start),
             last_sentence_start_seconds=parse_timestamp(body.last_sentence_start),
             audio_speed=body.speed,
-            transcript_char_count=len(body.transcript),
+            transcript_char_count=len(body.spoken_text),
             **services.pipeline.provider_names(),
             runner_id=services.instance_id,
         )
@@ -99,10 +124,11 @@ def create_job(
 
     job_input = JobInput(
         job_id=job.id,
-        transcript=body.transcript,
+        transcript=body.spoken_text,
         voice=body.voice,
         baseline_seconds=job.target_duration_seconds,
         speed=body.speed,
+        timed=body.timed,
     )
     services.pipeline.start(slot, job_input)
     response.headers["Location"] = f"/api/jobs/{job.id}"
@@ -160,6 +186,7 @@ def get_result(
     job = _owned_job_or_404(db, job_id, principal)
     stored = _available_result(job, services)
     speed = AudioSpeed(job.audio_speed_percent)
+    timing = TimingOut.from_summary(stored.timing) if stored.timing else None
     notices = []
     if stored.translation_is_illustrative:
         notices.append(ILLUSTRATIVE_NOTICE)
@@ -169,7 +196,20 @@ def get_result(
         notices.append(FIXTURE_NOTICE)
     else:
         notices.append(SPEECH_NOTICE)
-        notices.append(DURATION_ADJUSTED_NOTICE if stored.duration_adjusted else DURATION_NOTICE)
+        if not stored.duration_adjusted:
+            notices.append(DURATION_NOTICE)
+        elif timing is None:
+            notices.append(DURATION_ADJUSTED_NOTICE)
+        else:
+            notices.append(TIMED_ADJUSTED_NOTICE)
+    if timing is not None:
+        notices.append(TIMED_NOTICE)
+        if timing.frames_over_warning_level:
+            notices.append(
+                TIMED_FAST_NOTICE.format(
+                    count=timing.frames_over_warning_level, level=timing.tempo_warning_level
+                )
+            )
     if speed is not AudioSpeed.X1:
         if stored.duration_adjusted:
             relation = "shorter than" if speed.value > 100 else "longer than"
@@ -200,6 +240,7 @@ def get_result(
         ),
         expires_at=stored.expires_at,
         notices=notices,
+        timing=timing,
     )
 
 

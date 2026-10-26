@@ -1,6 +1,7 @@
 import type { JobResult } from "../../api/types";
 import { formatOutputDuration, speedLabel } from "../../lib/speed";
 import { DurationDetails } from "./DurationDetails";
+import { TimingDetails } from "./TimingDetails";
 
 interface Props {
   result: JobResult;
@@ -29,6 +30,7 @@ export function AudioDetails({ result }: Props) {
           <dt>Speech</dt>
           <dd>{result.audio.provider}</dd>
         </dl>
+        {result.timing && <TimingDetails timing={result.timing} />}
         {duration ? (
           <DurationDetails duration={duration} />
         ) : (

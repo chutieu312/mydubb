@@ -141,6 +141,46 @@ def change_tempo(
     )
 
 
+@dataclass(frozen=True)
+class TempoTask:
+    """One input of `change_tempo_many`: `source` up to `keep_frames`, sped up by `factor`."""
+
+    source: Path
+    output: Path
+    factor: float
+    keep_frames: int  # samples of `source` that are used (the rest is a silent tail)
+    sample_rate: int
+
+
+def change_tempo_many(
+    tools: AudioTools, tasks: list[TempoTask], *, cancel: threading.Event | None = None
+) -> None:
+    """`change_tempo` for several files in ONE FFmpeg process (one input and output per task).
+
+    Starting a process costs more than the work on a few seconds of audio, so a timeline of
+    many blocks is processed with one start per pass instead of one per block.
+    """
+    if not tasks:
+        return
+    args = [tools.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
+    args += ["-threads", "1"]
+    graphs = []
+    for index, task in enumerate(tasks):
+        args += ["-i", str(task.source)]
+        filters = ",".join(f"atempo={step!r}" for step in tempo_filter_chain(task.factor))
+        graphs.append(f"[{index}:a]atrim=end_sample={task.keep_frames},{filters}[o{index}]")
+    args += ["-filter_complex", ";".join(graphs)]
+    for index, task in enumerate(tasks):
+        args += ["-map", f"[o{index}]", "-map_metadata", "-1", "-codec:a", "pcm_s16le"]
+        args += ["-f", "wav", str(task.output)]
+    work = sum(max(1.0, 1.0 / task.factor) * task.keep_frames / task.sample_rate for task in tasks)
+    run_tool(
+        args,
+        timeout=_FILTER_BASE_TIMEOUT_SECONDS + work * _FILTER_SECONDS_PER_AUDIO_SECOND,
+        cancel=cancel,
+    )
+
+
 def decode_to_wav(
     tools: AudioTools,
     source: Path,

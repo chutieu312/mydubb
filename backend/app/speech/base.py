@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -16,6 +17,17 @@ class SpeechAudio:
     lossless_path: Path | None = None
 
 
+@dataclass(frozen=True)
+class TimedSpeechAudio:
+    """One lossless clip per block of a timed transcript, in block order (timed mode)."""
+
+    clips: tuple[Path, ...]  # empty for a fixture
+    is_fixture: bool
+    requests: int  # synthesis requests made (all blocks)
+    # Mock mode: the bundled MP3 that stands in for the speech (not generated from the text).
+    fixture_path: Path | None = None
+
+
 class SpeechProvider(Protocol):
     """Synthesizes Vietnamese text into an audio file inside `work_dir`.
 
@@ -27,7 +39,20 @@ class SpeechProvider(Protocol):
     """
 
     name: str
+    # True when the audio is a bundled fixture, not speech made from the text (mock).
+    produces_fixture: bool
 
     def synthesize(
         self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
     ) -> SpeechAudio: ...
+
+    def synthesize_blocks(
+        self,
+        texts: Sequence[str],
+        voice: Voice,
+        work_dir: Path,
+        terms: TermMatcher | None = None,
+    ) -> TimedSpeechAudio:
+        """One clip per text, in order (timed mode). Every block must succeed: a failure fails
+        the whole call and no clip is returned."""
+        ...

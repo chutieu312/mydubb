@@ -3,8 +3,9 @@ from pathlib import Path
 from typing import Protocol
 
 from app.audio.duration import DurationReport
-from app.audio.speed import DurationTarget
-from app.speech.base import SpeechAudio
+from app.audio.speed import DurationTarget, TimelinePlan
+from app.audio.timeline import TimelineReport
+from app.speech.base import SpeechAudio, TimedSpeechAudio
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,8 @@ class ProcessedAudio:
     duration_adjusted: bool
     # What was measured on the real output; None when the duration was not adjusted.
     duration_report: DurationReport | None = None
+    # Timed mode: what happened in each frame of the timeline; None in plain mode.
+    timeline: TimelineReport | None = None
 
 
 class AudioProcessor(Protocol):
@@ -26,10 +29,19 @@ class AudioProcessor(Protocol):
     """
 
     name: str
+    # True when `fit_timeline` really places one clip per block on the timeline (timed
+    # mode needs it as soon as the speech is real; see JobPipeline.timed_mode_available).
+    places_timeline: bool
 
     def fit_to_duration(
         self, speech: SpeechAudio, target: DurationTarget, work_dir: Path
     ) -> ProcessedAudio: ...
+
+    def fit_timeline(
+        self, speech: TimedSpeechAudio, plan: TimelinePlan, work_dir: Path
+    ) -> ProcessedAudio:
+        """Timed mode: each block's clip in its own frame of the target (audio/timeline.py)."""
+        ...
 
     def close(self) -> None:
         """Cancel running work (server shutdown); later and running calls fail safely."""

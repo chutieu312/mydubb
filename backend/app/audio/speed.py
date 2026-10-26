@@ -11,6 +11,7 @@ the calculation and no error accumulates. Half-up is the one rounding rule used 
 (Python's `round` rounds halves to even and is not used).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
@@ -90,3 +91,37 @@ class DurationTarget:
     def output_seconds(self) -> Fraction:
         """The planned length in seconds, as an exact fraction (before sample rounding)."""
         return Fraction(self.baseline_seconds) / self.speed.ratio
+
+
+def round_half_up(value: Fraction) -> int:
+    """The one rounding rule for non-negative exact values (halves go up, never to even)."""
+    return (2 * value.numerator + value.denominator) // (2 * value.denominator)
+
+
+@dataclass(frozen=True)
+class TimelinePlan:
+    """Where each block of a timed transcript starts, as a fraction of the output (timed mode).
+
+    `ratios[i] = (source_start_i - source_first) / source_baseline`, exact, with `ratios[0] == 0`
+    and every ratio below 1 (see transcript/timed.py). The output is the same `target` as in plain
+    mode: the selected baseline divided by the speed.
+    """
+
+    ratios: Sequence[Fraction]
+    target: DurationTarget
+
+    def __post_init__(self) -> None:
+        if not self.ratios or self.ratios[0] != 0 or not all(0 <= r < 1 for r in self.ratios):
+            raise ValueError("ratios must start at 0 and stay below 1")
+        if any(b < a for a, b in zip(self.ratios, self.ratios[1:], strict=False)):
+            raise ValueError("ratios must not decrease")
+
+    def boundaries(self, sample_rate: int) -> list[int]:
+        """Output sample at which each block starts, then the total (`target.samples`).
+
+        `round_half_up(ratio * baseline * sample_rate / speed)` for each block, in integers and
+        exact fractions, so the end is exactly the plain-mode target and nothing accumulates.
+        """
+        exact = Fraction(self.target.baseline_seconds * sample_rate * 100, self.target.speed.value)
+        starts = [round_half_up(ratio * exact) for ratio in self.ratios]
+        return [*starts, self.target.samples(sample_rate)]

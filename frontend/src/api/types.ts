@@ -63,6 +63,8 @@ export interface CreateJobInput {
   // One of 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2. The server rejects anything else and computes the
   // output length itself.
   speed: number;
+  // "timed" uses the caption times of a timestamped transcript; omitted means plain.
+  timing_mode?: "timed";
 }
 
 export interface Job {
@@ -115,6 +117,39 @@ export interface AudioDuration {
   mp3_padding_adjusted_samples: number;
 }
 
+/** Timed mode: one frame of the output timeline (one block, or grouped blocks). */
+export interface TimedFrame {
+  first_block: number;
+  last_block: number;
+  start_seconds: number;
+  frame_seconds: number;
+  audio_seconds: number;
+  // >1 faster; null when the speech fitted at its natural speed.
+  tempo_factor: number | null;
+  padded_seconds: number;
+}
+
+/** How a timed job used the caption times; starts inside captions are estimates. */
+export interface Timing {
+  mode: string;
+  captions: number;
+  blocks: number;
+  source_first_seconds: number;
+  source_last_seconds: number;
+  source_baseline_seconds: number;
+  selected_baseline_seconds: number;
+  speech_requests: number;
+  // Null when the audio was not placed on a timeline (mock audio).
+  frames: number | null;
+  removed_boundaries: number | null;
+  tempo_warning_level: number | null;
+  max_tempo_factor: number | null;
+  frames_over_warning_level: number | null;
+  // Computed from the tempo factors, not measured.
+  estimated_max_displacement_seconds: number | null;
+  frame_details: TimedFrame[] | null;
+}
+
 export interface JobResult {
   job_id: string;
   // What the job was submitted with, also when the audio was not adjusted (mock audio).
@@ -135,6 +170,8 @@ export interface JobResult {
   };
   expires_at: string;
   notices: string[];
+  // Timed jobs only (absent or null for plain jobs and older results).
+  timing?: Timing | null;
 }
 
 export interface FieldError {

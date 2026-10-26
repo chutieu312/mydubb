@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from app.audio.speed import AudioSpeed
-from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info
+from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info, write_silent_frames
 
 # `atempo` analyses 2048-sample windows (hop 1024). A residual of at most one window is the
 # rounding of that filter; anything larger means the tempo was not realised and is an error.
@@ -99,6 +99,31 @@ def tail_is_silent(path: Path, info: WavInfo, frames: int) -> bool:
     return True
 
 
+def silent_tail_frames(path: Path, info: WavInfo) -> int:
+    """How many frames at the end of the WAV are quiet enough to be dropped (`TRIMMABLE_PEAK`)."""
+    if info.format.sample_width != 2 or info.format.channels != 1:
+        raise InvalidAudioError("only 16-bit mono audio is supported")
+    silent = 0
+    end = info.frames
+    with path.open("rb") as handle:
+        while end:
+            count = min(_BLOCK_FRAMES, end)
+            handle.seek(info.data_offset + (end - count) * info.format.frame_bytes)
+            block = handle.read(count * info.format.frame_bytes)
+            if len(block) != count * info.format.frame_bytes:
+                raise InvalidAudioError("audio ended unexpectedly")
+            samples = array.array("h")
+            samples.frombytes(block)
+            if sys.byteorder == "big":
+                samples.byteswap()
+            for index in range(count - 1, -1, -1):
+                if abs(samples[index]) > TRIMMABLE_PEAK:
+                    return silent + (count - 1 - index)
+            silent += count
+            end -= count
+    return silent
+
+
 def conform_wav(source: Path, info: WavInfo, output: Path, target_frames: int) -> tuple[int, int]:
     """Write `source` with exactly `target_frames` frames; returns (padded, trimmed) frames.
 
@@ -120,11 +145,7 @@ def conform_wav(source: Path, info: WavInfo, output: Path, target_frames: int) -
                 raise InvalidAudioError("audio ended unexpectedly")
             target.writeframes(block)
             remaining -= count
-        padding = target_frames - keep
-        while padding:
-            count = min(_BLOCK_FRAMES, padding)
-            target.writeframes(bytes(count * frame_bytes))
-            padding -= count
+        write_silent_frames(target, target_frames - keep, frame_bytes)
     written = read_wav_info(output)
     if written.frames != target_frames:
         raise InvalidAudioError("conformed audio has the wrong length")

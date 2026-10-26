@@ -192,6 +192,24 @@ plan), `YOUTUBE_IMPORT_MAX_CONCURRENT`. Account, credits and the live smoke test
 (`uv run python -m scripts.supadata_smoke --confirm-credits N <links>`, one credit per link) are in
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#youtube-caption-import-supadata).
 
+### Timed transcripts
+
+A transcript in the YouTube transcript-panel format (a timestamp alone on a line above each
+caption, whole seconds or `.mmm` milliseconds as written by the YouTube caption import below) can
+be dubbed in timed mode: the UI recognizes it, pasted or imported, fills the two start times from
+the first and last caption (truncated to whole seconds) and sends `timing_mode: "timed"`; the
+speech is then placed near the caption times (estimated, group-level timing, not exact per
+sentence). Plain mode is unchanged and remains the default. Rules, checks and limits: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#timed-dubbing).
+Measurement tools (Azure is called only by the smoke script, with a request and character budget):
+
+```bash
+cd backend
+uv run python -m scripts.timed_benchmark --words 1000 [--audio]   # parse cost, request model, FFmpeg
+uv run python -m scripts.timed_speech_smoke --output-dir DIR       # LIVE: 4 Azure Speech requests
+uv run python -m scripts.timed_speech_smoke --output-dir DIR --replay DIR/responses   # no network
+uv run python -m scripts.timed_grouping_samples --clips main=DIR --output-dir OUT    # no network
+```
+
 ## Tests and checks
 
 ```bash
