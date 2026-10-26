@@ -195,13 +195,20 @@ repeated. The rules are in `backend/app/transcript/timed.py` and ARCHITECTURE.md
   group-level, not exact per sentence; see the limits in ARCHITECTURE.md.
 - **SRT and WebVTT** are accepted only in plain mode for now (their timing is removed by cleaning,
   as before); with `"timed"` they are rejected like any transcript without the structure.
-- With mock speech or the mock audio processor, a timed job completes with the fixture and the
+- With mock speech (and the mock audio processor), a timed job completes with the fixture and the
   `timing` summary, but nothing is placed on a timeline (`timing.frames` is `null`).
+- With real speech and the mock audio processor (`SPEECH_PROVIDER=azure`, `AUDIO_PROCESSOR=mock`)
+  timed mode is unavailable: real speech is one clip per block, which only FFmpeg processing can
+  place and join, so the request is refused with `409 timing_mode_unavailable` before any job is
+  created or provider called (never a job that completes with part of the speech). Plain mode works
+  in that configuration as before. Production (`PROVIDER_MODE=azure`) always has FFmpeg.
 
 Responses:
 - `202` + `Location: /api/jobs/{id}` + a Job body (status `queued`). Returned immediately; work
   runs in the background.
 - `422 validation_error` with `fields`.
+- `409 timing_mode_unavailable` for `timing_mode: "timed"` when the server's audio processing
+  cannot place timed speech (see above).
 - `503 server_at_capacity` + `Retry-After` when running + queued jobs are at
   `JOB_MAX_CONCURRENCY + JOB_MAX_QUEUED`.
 - `401` / `403` for missing session / CSRF.
@@ -252,8 +259,10 @@ a speech response did not pass the checks used to cut it into sentence blocks); 
 audio processing:
 `audio_source_missing`, `audio_input_invalid`, `audio_duration_unsupported`,
 `audio_duration_not_reached`, `audio_verification_failed`, `audio_timeout`, `audio_cancelled`,
-`audio_processing_failed`. Messages are safe to show (no keys, transcript text or raw
-provider output). Failed jobs are never retried automatically; submit again.
+`audio_processing_failed`, and `audio_timeline_unsupported` (a timed job reached the mock audio
+processor with real speech clips; normally refused at submission). Messages are safe to show (no
+keys, transcript text or raw provider output). Failed jobs are never retried automatically; submit
+again.
 
 ### `GET /api/jobs/{id}/result`
 Requires session and ownership.

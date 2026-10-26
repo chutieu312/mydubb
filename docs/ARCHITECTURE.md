@@ -704,7 +704,10 @@ far too short is redone from the original clip with a corrected factor, up to 6 
 `audio_duration_not_reached`. Speech is never cut, every frame starts exactly at its boundary, and
 nothing spills into the next frame. All tempo changes of a pass run in one FFmpeg process (64 clips
 per process at most). The joined PCM is exactly `target_samples`; it is encoded to MP3 once and
-verified like plain mode (decoded samples and gapless header). There is no second tempo pass over
+verified like plain mode (decoded samples and gapless header). Silence is written in blocks of at
+most 1 MiB from one preallocated buffer (`wav.write_silent_frames`, also used by plain mode's
+`conform_wav`), so a frame that is mostly silence (a 3-hour baseline is about 500 MB of PCM) never
+needs memory of its size; the joined PCM streams to disk. There is no second tempo pass over
 the whole file. Inside a group, a block starts where the speech before it ends: how far that is from
 its own caption time is **estimated** from the tempo factor (`estimated_max_displacement_seconds`),
 not measured.
@@ -725,8 +728,13 @@ covers those two samples only, not every voice, speed or transcript.
 **Other limits.** Timing is estimated: word counts inside captions, sentence detection without a
 model, groups that share a frame. Vietnamese speech is about 1.7x longer than the English source
 timing in the samples, so at 1.25x-1.75x grouping leaves few frames and some still above 2x.
-SRT/WebVTT timing is not used yet (plain mode). Timed mode was tested with synthetic transcripts and
-fakes; it has not been run on production or with a long real course transcript.
+SRT/WebVTT timing is not used yet (plain mode). Timed mode needs the FFmpeg audio processor as soon
+as speech is real: with `SPEECH_PROVIDER=azure` and `AUDIO_PROCESSOR=mock` a timed request is
+refused (`409 timing_mode_unavailable`, `JobPipeline.timed_mode_available`), and the mock processor
+itself refuses real clips (`audio_timeline_unsupported`) rather than passing one through. Cutting a
+speech response reads it into memory, which is bounded by the 10-minute audio limit per request
+(about 29 MB). Timed mode was tested with synthetic transcripts and fakes; it has not been run on
+production or with a long real course transcript.
 
 ### English left in the translation, and glossary candidates
 

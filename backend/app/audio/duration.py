@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from app.audio.speed import AudioSpeed
-from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info
+from app.audio.wav import InvalidAudioError, WavInfo, read_wav_info, write_silent_frames
 
 # `atempo` analyses 2048-sample windows (hop 1024). A residual of at most one window is the
 # rounding of that filter; anything larger means the tempo was not realised and is an error.
@@ -145,11 +145,7 @@ def conform_wav(source: Path, info: WavInfo, output: Path, target_frames: int) -
                 raise InvalidAudioError("audio ended unexpectedly")
             target.writeframes(block)
             remaining -= count
-        padding = target_frames - keep
-        while padding:
-            count = min(_BLOCK_FRAMES, padding)
-            target.writeframes(bytes(count * frame_bytes))
-            padding -= count
+        write_silent_frames(target, target_frames - keep, frame_bytes)
     written = read_wav_info(output)
     if written.frames != target_frames:
         raise InvalidAudioError("conformed audio has the wrong length")

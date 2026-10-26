@@ -39,6 +39,8 @@ class SpeechProvider(Protocol):
     """
 
     name: str
+    # True when the audio is a bundled fixture, not speech made from the text (mock).
+    produces_fixture: bool
 
     def synthesize(
         self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None

@@ -106,6 +106,16 @@ class JobPipeline:
         self._accepted: set[uuid.UUID] = set()  # queued or running in this process
         self._running: set[uuid.UUID] = set()
 
+    def timed_mode_available(self) -> bool:
+        """Whether a timed job can produce complete audio with these providers.
+
+        Mock speech returns a fixture, which the mock processor passes through as in plain mode.
+        Real speech returns one WAV clip per block, which only an audio processor that places
+        them on the timeline (FFmpeg) can turn into the MP3; with the mock processor that job is
+        refused at submission instead of returning part of the speech.
+        """
+        return self._speech.produces_fixture or self._audio.places_timeline
+
     def provider_names(self) -> dict[str, str]:
         return {
             "translation_provider": self._translator.name,

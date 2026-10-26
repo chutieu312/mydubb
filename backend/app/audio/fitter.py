@@ -129,6 +129,7 @@ class _Candidate:
 
 class FfmpegAudioProcessor:
     name = "ffmpeg-audio"
+    places_timeline = True
 
     def __init__(self, tools: AudioTools) -> None:
         self._tools = tools

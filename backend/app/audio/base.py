@@ -29,6 +29,9 @@ class AudioProcessor(Protocol):
     """
 
     name: str
+    # True when `fit_timeline` really places one clip per block on the timeline (timed
+    # mode needs it as soon as the speech is real; see JobPipeline.timed_mode_available).
+    places_timeline: bool
 
     def fit_to_duration(
         self, speech: SpeechAudio, target: DurationTarget, work_dir: Path

@@ -18,6 +18,7 @@ from app.jobs.schemas import (
     DurationOut,
     JobResponse,
     JobResultResponse,
+    TimingMode,
     TimingOut,
     TranslationOut,
 )
@@ -82,6 +83,14 @@ def create_job(
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResponse:
+    if body.timing_mode is TimingMode.TIMED and not services.pipeline.timed_mode_available():
+        # Refused before any slot, job row or provider call: there is no partial result to undo.
+        raise ApiError(
+            status.HTTP_409_CONFLICT,
+            "timing_mode_unavailable",
+            "Timed transcripts need the server's audio processing, which is not enabled on this "
+            "server. Process the transcript as plain text (tick 'Ignore the timestamps').",
+        )
     try:
         slot = services.executor.reserve()
     except ExecutorAtCapacity:

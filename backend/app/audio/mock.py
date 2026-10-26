@@ -12,6 +12,7 @@ class MockAudioProcessor:
     """Passes audio through unchanged. Does NOT adjust duration, whatever speed was chosen."""
 
     name = "mock-audio"
+    places_timeline = False
 
     def __init__(self, *, fail: bool = False, delay: float = 0.0) -> None:
         self._fail = fail
@@ -28,11 +29,19 @@ class MockAudioProcessor:
     def fit_timeline(
         self, speech: TimedSpeechAudio, plan: TimelinePlan, work_dir: Path
     ) -> ProcessedAudio:
-        """Timed mode: the fixture (or the first clip) unchanged; nothing is placed or fitted."""
-        source = speech.fixture_path or (speech.clips[0] if speech.clips else None)
-        if source is None:
-            raise ProcessingError("audio_source_missing", "No audio to pass through.")
-        return self._pass_through(source, work_dir)
+        """Timed mode with mock speech: the fixture unchanged; nothing is placed or fitted.
+
+        Real per-block clips cannot be passed through: they are WAV files, one per block, and
+        copying one of them would return part of the speech as a wrongly named MP3. Such jobs are
+        refused before they start (JobPipeline.timed_mode_available); this is the last guard.
+        """
+        if speech.fixture_path is None:
+            raise ProcessingError(
+                "audio_timeline_unsupported",
+                "Timed transcripts need the server's audio processing, which is not enabled, so "
+                "no audio was produced. Process the transcript as plain text instead.",
+            )
+        return self._pass_through(speech.fixture_path, work_dir)
 
     def _pass_through(self, source: Path, work_dir: Path) -> ProcessedAudio:
         time.sleep(self._delay)

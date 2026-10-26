@@ -41,7 +41,14 @@ from pathlib import Path
 from app.audio.duration import ROUNDING_LIMIT_FRAMES, silent_tail_frames
 from app.audio.ffmpeg import AudioTools, TempoTask, change_tempo_many
 from app.audio.grouping import TEMPO_TARGET, group_frames, relative_target
-from app.audio.wav import InvalidAudioError, PcmFormat, WavInfo, concat_wavs, read_wav_info
+from app.audio.wav import (
+    InvalidAudioError,
+    PcmFormat,
+    WavInfo,
+    concat_wavs,
+    read_wav_info,
+    write_silent_frames,
+)
 
 # How far short of its frame a sped-up clip aims (about 43 ms at 24 kHz): `atempo` misses the
 # exact length by tens to a few hundred samples, and a miss must land on the silent side.
@@ -325,4 +332,4 @@ def _join(frames: list[_Frame], pcm: PcmFormat, output: Path) -> None:
                         raise InvalidAudioError("audio ended unexpectedly")
                     target.writeframes(block)
                     remaining -= len(block)
-            target.writeframes(bytes((frame.samples - take) * pcm.frame_bytes))
+            write_silent_frames(target, frame.samples - take, pcm.frame_bytes)

@@ -167,7 +167,7 @@ def azure_client(
 ) -> Iterator[Callable[..., tuple[TestClient, list]]]:
     clients: list[TestClient] = []
 
-    def factory(speech_handler=None) -> tuple[TestClient, list]:
+    def factory(speech_handler=None, **overrides) -> tuple[TestClient, list]:
         calls: list[httpx.Request] = []
         handler = speech_handler or break_voice()
 
@@ -176,7 +176,7 @@ def azure_client(
             return handler(request)
 
         services = build_services(
-            make_settings(**SPEECH),
+            make_settings(**{**SPEECH, **overrides}),
             translation_transport=httpx.MockTransport(echo_translation),
             speech_transport=httpx.MockTransport(recording),
         )
@@ -255,3 +255,22 @@ def test_a_block_mapping_check_failure_fails_the_job_without_plain_fallback(azur
     assert len(calls) == 1  # not retried, not synthesized as plain text
     result = client.get(f"/api/jobs/{job['id']}/result")
     assert result.status_code == 409
+
+
+def test_real_speech_with_mock_audio_refuses_timed_jobs_before_any_provider_call(
+    azure_client,
+) -> None:
+    # Real speech returns one WAV clip per block; the mock audio processor cannot place them, so
+    # a timed job is refused up front instead of completing with part of the speech.
+    client, calls = azure_client(audio_processor="mock", provider_mode="mock")
+    csrf = login(client)
+    response = timed_job(client, csrf)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "timing_mode_unavailable"
+    assert calls == []
+
+    # Plain mode keeps working in this configuration (speech joined to one MP3, not adjusted).
+    plain = create_job(client, csrf, transcript=YOUTUBE, **ELEVEN_SECONDS)
+    job = wait_for_terminal(client, plain.json()["id"], 60)
+    assert job["status"] == "completed", job
+    assert client.get(f"/api/jobs/{job['id']}/result").json()["audio"]["duration_adjusted"] is False

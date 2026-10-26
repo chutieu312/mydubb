@@ -122,6 +122,7 @@ def synthesis_url(region: str) -> str:
 
 class AzureSpeechProvider:
     name = "azure-speech"
+    produces_fixture = False
 
     def __init__(
         self,

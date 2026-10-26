@@ -19,6 +19,7 @@ class MockSpeechProvider:
     """
 
     name = "mock-speech"
+    produces_fixture = True
 
     def __init__(self, *, fail: bool = False, delay: float = 0.0) -> None:
         self._fail = fail
