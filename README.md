@@ -54,6 +54,14 @@ Time** (`HH:MM:SS`), pick a voice and an **audio speed**, then **Generate Dubbin
   the finished file. See [docs/API.md](docs/API.md#audio-speed) and
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+When the server has the YouTube caption import on, the transcript can also come from a video:
+choose **YouTube URL**, paste the link and choose **Import transcript**. The video's existing English
+captions fill the transcript (one start time line `M:SS.mmm`, then the caption's text) and the two
+start times (first and last caption, whole seconds). Nothing is generated until you review, edit
+and choose **Generate audio**. MyDubb does not transcribe audio: a video without English captions
+cannot be imported. The link is sent to Supadata. See
+[docs/API.md](docs/API.md#youtube-caption-import).
+
 To listen to a speed series from a local lossless WAV without calling Azure:
 `cd backend && uv run python -m scripts.duration_smoke --wav speech.wav --baseline-seconds 20 --speeds`
 (needs FFmpeg; files go to `duration-samples/`).
@@ -171,6 +179,18 @@ uv run python -m scripts.duration_smoke                    # table of target / s
 uv run python -m scripts.duration_smoke --wav speech.wav --target-seconds 360   # a local WAV
 uv run python -m scripts.duration_smoke --azure            # LIVE: 2 Azure Speech requests
 ```
+
+### YouTube caption import
+
+Off by default (`YOUTUBE_IMPORT_PROVIDER=off`; pasting works the same either way).
+`YOUTUBE_IMPORT_PROVIDER=supadata` needs `SUPADATA_API_KEY` (startup fails without it; no other
+provider is used as a fallback). `YOUTUBE_IMPORT_PROVIDER=mock` returns fixed captions with no
+network call, for local development and the E2E stack (refused in production). Optional limits:
+`SUPADATA_TIMEOUT_SECONDS`, `SUPADATA_DEADLINE_SECONDS`, `SUPADATA_POLL_INTERVAL_SECONDS`,
+`SUPADATA_MAX_REQUESTS_PER_WINDOW` / `SUPADATA_RATE_WINDOW_SECONDS` (default 1 per second, the Free
+plan), `YOUTUBE_IMPORT_MAX_CONCURRENT`. Account, credits and the live smoke test
+(`uv run python -m scripts.supadata_smoke --confirm-credits N <links>`, one credit per link) are in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#youtube-caption-import-supadata).
 
 ## Tests and checks
 

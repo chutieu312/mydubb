@@ -45,6 +45,13 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
             for v in Voice
         ],
         "timestamp_format": "HH:MM:SS",
+        # Whether the form offers "YouTube URL" next to pasting, and which provider serves it.
+        "youtube_import": {
+            "enabled": services.youtube_import is not None,
+            "provider": (
+                services.youtube_import.provider.name if services.youtube_import else None
+            ),
+        },
         "result_ttl_seconds": settings.result_ttl_seconds,
         # Which login UI to show. Accounts are created by an administrator: no sign-up.
         "auth": {

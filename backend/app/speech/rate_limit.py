@@ -2,7 +2,8 @@
 
 The Free (F0) resource allows 20 transactions per 60 seconds (documented, not adjustable)
 for the whole resource, so the limit is enforced across concurrent jobs rather than per job.
-Callers block until a slot is free; `close()` wakes them for shutdown.
+Callers block until a slot is free; `close()` wakes them for shutdown. The YouTube caption import
+uses the same class for Supadata's per-plan request rate, with a deadline on the wait.
 """
 
 import threading
@@ -16,6 +17,10 @@ WINDOW_MARGIN_SECONDS = 1.0
 
 class RateLimiterClosed(Exception):
     """The limiter was closed (application shutdown) while waiting for a slot."""
+
+
+class RateLimiterDeadline(Exception):
+    """No slot is free before the caller's deadline. Nothing was counted."""
 
 
 class RequestRateLimiter:
@@ -38,8 +43,12 @@ class RequestRateLimiter:
         self._wait = wait or self._closed.wait
         self._starts: deque[float] = deque()
 
-    def acquire(self) -> None:
-        """Block until one more request may start, then count it."""
+    def acquire(self, *, deadline: float | None = None) -> None:
+        """Block until one more request may start, then count it.
+
+        With a `deadline` (on this limiter's clock), raise RateLimiterDeadline at once when the
+        next free slot comes later than that, instead of waiting for it.
+        """
         while True:
             with self._lock:
                 if self._closed.is_set():
@@ -51,6 +60,8 @@ class RequestRateLimiter:
                     self._starts.append(now)
                     return
                 delay = self._window - (now - self._starts[0])
+                if deadline is not None and now + delay > deadline:
+                    raise RateLimiterDeadline
             if self._wait(delay):
                 raise RateLimiterClosed
 

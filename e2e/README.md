@@ -1,7 +1,8 @@
 # Browser E2E tests
 
 Playwright tests that drive the real production-style container (FastAPI serving the React
-build) with **mock providers only**. Azure is never called.
+build) with **mock providers only**. Azure is never called, and the Access Code stack imports
+YouTube captions with `YOUTUBE_IMPORT_PROVIDER=mock` (fixed captions; Supadata is never called).
 
 ## What is covered
 
@@ -12,6 +13,7 @@ Each test runs in two Playwright projects: `desktop` (Desktop Chrome) and `mobil
 |---|---|
 | `workflow.spec.ts` | Wrong Access Code rejected; session cookie and code not readable by JavaScript; server-side validation errors (empty transcript, last <= first); full mock job: 202 response, 360 s target, intermediate stages observed, transcript/result rendered as text only (HTML payload inert), timestamp-like spoken content ("10:30 is our meeting time.") preserved in order, mock notices, audio metadata loads, MP3 download (`attachment`, `audio/mpeg`), polling stops after completion; no horizontal overflow at phone width |
 | `timestamps.spec.ts` | Start time fields in a real browser: colons added while typing six digits with no completion, caret position after typing and edits in the middle, selection replacement, Backspace/Delete next to a colon, paste of `000001`/`00:00:01`/long hours/invalid text (clipboard permission granted to Chromium), preview and submitted payload, incomplete value reported by the server and tied to the field |
+| `youtubeImport.spec.ts` | YouTube caption import against the real backend (mock provider): nothing sent until Import, Import and Generate disabled while importing, the form filled with millisecond timestamps and both start times, empty caption reported; the edited transcript becomes the job and the plain cleaning drops the time lines; the replace question (focus on Replace) and a failed import (no English captions) leaving the form unchanged; a look-alike host refused on the link field (422); no horizontal overflow at 320/390 px |
 | `logout.spec.ts` | Successful logout ends the server session (reload stays signed out); network failure and HTTP 500 during logout keep the user signed in with an error, the real session stays valid, and a retry succeeds |
 
 ### Email + password sign-in (`auth.*.spec.ts`)
