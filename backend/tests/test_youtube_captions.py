@@ -4,6 +4,7 @@ import math
 
 import pytest
 
+from app.jobs.schemas import CreateJobRequest
 from app.transcript.cleaning import clean_transcript
 from app.youtube_import.captions import (
     CaptionError,
@@ -106,7 +107,7 @@ def test_huge_integer_times_are_refused_without_crashing():
     with pytest.raises(CaptionError):
         track(("text", 100 * 3_600_000, 1))  # 100 hours needs a third hour digit
     # A huge duration does not matter: only start times are used.
-    assert track(("text", 0, 10**400)).captions[0].duration_ms == 10**400
+    assert track(("text", 0, 10**400), ("more", 1, 1)).captions[0].duration_ms == 10**400
 
 
 def test_fractional_milliseconds_round_half_up_to_one_millisecond():
@@ -148,7 +149,7 @@ def test_captions_without_any_text_are_refused():
 def test_a_caption_that_is_only_a_time_is_refused(text):
     with pytest.raises(CaptionError) as error:
         track(("intro", 0, 1), (text, 1000, 1))
-    assert error.value.code == "youtube_import_ambiguous_caption"
+    assert error.value.code == "youtube_import_not_representable"
 
 
 @pytest.mark.parametrize(
@@ -169,7 +170,6 @@ def test_suggested_start_times_come_from_caption_starts_truncated_to_seconds():
 
 
 def test_no_suggestion_without_two_different_start_seconds():
-    assert track(("only one", 4200, 1)).suggested_starts() is None
     assert track(("a", 4200, 1), ("b", 4200, 1)).suggested_starts() is None
     # Different milliseconds in the same second: the fields cannot express a baseline.
     assert track(("a", 4100, 1), ("b", 4900, 1)).suggested_starts() is None
@@ -190,3 +190,91 @@ def test_the_plain_transcript_cleaning_reads_the_format_back_as_the_caption_text
     offsets = [480, 2960, 5100, 5100, 9250, 3_723_004]
     result = track(*((t, o, 1) for t, o in zip(texts, offsets, strict=True)))
     assert clean_transcript(result.transcript) == "\n".join(texts)
+
+
+# --- import -> transcript text -> job ------------------------------------------------------------
+
+
+def job_transcript(text: str) -> str:
+    """What POST /api/jobs keeps of a transcript: the request model's own cleaning."""
+    request = CreateJobRequest(
+        transcript=text, first_sentence_start="00:00:00", last_sentence_start="00:00:10"
+    )
+    return request.transcript
+
+
+@pytest.mark.parametrize(
+    "captions",
+    [
+        # A single caption: cleaning keeps a lone time line, so the job would read "0:00.480".
+        [("Hello world.", 480, 1000)],
+        # Captions beginning with a clock time on two lines: cleaning strips H:MM:SS prefixes.
+        [
+            ("00:10:30 is the first meeting time.", 0, 1000),
+            ("00:11:30 is the next meeting time.", 2000, 1000),
+        ],
+        [
+            ("Agenda:", 0, 1),
+            ("1:02:03 is when it starts", 1000, 1),
+            ("and 1:05:00 is when it ends", 2000, 1),
+            ("1:10:00 we close.", 3000, 1),
+        ],
+        # A bracketed time at the start of a caption is always removed by cleaning.
+        [("(0:05) look at this", 0, 1), ("then this", 1000, 1)],
+        [("[01:10] chapter two", 0, 1), ("goes on", 1000, 1)],
+        # A caption that is a cue timing line makes cleaning treat everything as SRT.
+        [("intro", 0, 1), ("00:00:01,000 --> 00:00:04,000", 1000, 1), ("outro", 2000, 1)],
+    ],
+)
+def test_captions_the_format_cannot_carry_are_refused_not_changed(captions):
+    with pytest.raises(CaptionError) as error:
+        track(*captions)
+    assert error.value.code == "youtube_import_not_representable"
+
+
+def test_the_two_review_cases_reproduce_without_the_check():
+    # Why the check exists: written as the format, these lose words or gain a time once cleaned.
+    one = "0:00.480\nHello world."
+    assert clean_transcript(one) == one
+    two = "\n".join(
+        [
+            "0:00.000",
+            "00:10:30 is the first meeting time.",
+            "0:02.000",
+            "00:11:30 is the next meeting time.",
+        ]
+    )
+    assert job_transcript(two) == "is the first meeting time.\nis the next meeting time."
+
+
+@pytest.mark.parametrize(
+    "captions",
+    [
+        [("Hello world.", 480, 1000), ("Bye.", 2000, 1000)],
+        # One H:MM:SS prefix alone is kept by cleaning, so it is spoken content.
+        [("00:10:30 is our meeting time.", 0, 1), ("See you there.", 2000, 1)],
+        [("10:30 is our meeting time.", 0, 1), ("16:30 is the aspect ratio.", 2000, 1)],
+        [("Node.js and C++ (and C#) in 2026.", 0, 1), ("naïve café 日本語 🙂", 1000, 1)],
+        [("uh uh I I think", 0, 1), ("uh uh I I think", 0, 1), ("[Music]", 1500, 1)],
+        [("first  with  spaces", 0, 1), ("line\nbreak", 3_723_004, 1)],
+        [("Welcome back.", 0, 1), ("Done after an hour.", 3_600_000, 1)],
+    ],
+)
+def test_an_imported_transcript_reaches_the_job_as_exactly_its_captions(captions):
+    result = track(*captions)
+    expected = [" ".join(caption_text(text).split()) for text, _, _ in captions]
+    assert job_transcript(result.transcript).split("\n") == expected
+    assert clean_transcript(result.transcript).split("\n") == expected
+
+
+def test_an_edited_import_reaches_the_job_as_edited():
+    result = track(("Welcome back.", 480, 1), ("Bye.", 2000, 1))
+    edited = result.transcript.replace("Bye.", "Goodbye, everyone.")
+    assert job_transcript(edited) == "Welcome back.\nGoodbye, everyone."
+
+
+def test_pasted_transcripts_are_cleaned_as_before():
+    # The import refuses what cleaning would change; cleaning itself is unchanged for pasting.
+    assert job_transcript("0:05\nHello\n0:09\nWorld") == "Hello\nWorld"
+    assert job_transcript("10:30 is our meeting time.") == "10:30 is our meeting time."
+    assert job_transcript("00:00:01 a\n00:00:02 b") == "a\nb"

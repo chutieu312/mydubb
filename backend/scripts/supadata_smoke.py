@@ -22,6 +22,7 @@ Exit code 0 means every link ended with a result or a clean, expected error.
 """
 
 import argparse
+import asyncio
 import os
 import sys
 
@@ -77,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     for video in videos:
         print(f"\n=== {video.canonical_url}")
         try:
-            track, stats = provider.fetch(video)
+            track, stats = asyncio.run(provider.fetch(video))
         except ImportFailure as exc:
             print(f"error: {exc.code} (HTTP {exc.status_code} in MyDubb): {exc.message}")
             continue

@@ -39,11 +39,12 @@ _FAILURES = {
         "The captions of this video cannot be read: the video may not exist, be private, "
         "members-only, age-restricted, blocked in some regions or still live.",
     ),
-    "youtube_import_ambiguous_caption": _Failure(
+    "youtube_import_not_representable": _Failure(
         422,
-        "A caption of this video is only a time (for example 10:30), which the imported "
-        "transcript cannot show without mistaking it for a timestamp. Paste the transcript "
-        "instead.",
+        "These captions cannot be imported with their timestamps without changing what is said "
+        "(for example a video with a single caption, a caption that is only a time such as "
+        "10:30, or captions that begin with a clock time such as 00:10:30). Nothing was "
+        "imported. Paste the transcript instead.",
     ),
     "youtube_import_too_large": _Failure(
         422, "The captions of this video are too large to import. Paste a shorter transcript."
@@ -98,7 +99,7 @@ class CaptionProvider(Protocol):
     # Reported by /api/meta and logged; never a secret.
     name: str
 
-    def english_captions(self, video: YouTubeVideo) -> CaptionTrack:
+    async def english_captions(self, video: YouTubeVideo) -> CaptionTrack:
         """The video's existing English captions. Raises ImportFailure."""
         ...
 

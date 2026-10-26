@@ -21,9 +21,19 @@ Rules that make a response unusable instead of being repaired silently (`Caption
 * a start time that is not a finite, non-negative number of milliseconds, or that reaches 100
   hours (the time format has at most two hour digits);
 * start times that decrease (equal start times are kept, in the provider's order);
-* a caption whose whole text would itself read as a timestamp line (`10:30`, `[0:05]`), because
-  the transcript could then not be read back unambiguously;
-* no caption with text at all.
+* no caption with text at all;
+* a transcript that does not read back as exactly its captions (`youtube_import_not_representable`).
+  Today's reader is the job's own transcript cleaning (`clean_transcript`, the same function
+  `POST /api/jobs` applies), so after writing the transcript it is cleaned and must give every
+  caption's text, in order, one per line (whitespace runs inside a line become one space, as
+  cleaning does for pasted text). Anything else would have the job read a time aloud or drop
+  spoken words. Cases this catches: a single caption (cleaning removes standalone times only
+  when there are two or more, so the one time line would be read), captions beginning with a
+  clock time (`00:10:30 is the first meeting time.` twice: cleaning strips `H:MM:SS` prefixes
+  found on two lines), a bracketed time at the start of a caption (`(0:05) look here`), a caption
+  that looks like a cue timing line. Also refused with the same code, before that check: a
+  caption whose whole text is a time (`10:30`, `[0:05]`, `16:9`), which a timed reader of the
+  format would take for a timestamp line even where cleaning would not.
 
 A caption whose text is empty (or only whitespace) carries no words; it is left out and counted
 in `skipped_empty`, which the UI reports. The two time-field suggestions are the start of the
@@ -36,14 +46,18 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from itertools import pairwise
 
+from app.transcript.cleaning import clean_transcript
 from app.transcript.timestamps import format_seconds
 
 # One more digit than hours have in the format would no longer be read as a timestamp line.
 MAX_START_MS = 100 * 3600 * 1000
 # Text that a reader of the format (cleaning.py, or a timed parser) takes for a timestamp line.
 _TIMESTAMP_LIKE = re.compile(r"^[\[(]?\d{1,2}(?::\d{1,2}){1,2}(?:[.,]\d+)?[\])]?$")
+# What cleaning does to the whitespace of every line it keeps.
+_WHITESPACE = re.compile(r"\s+")
 
 
 class CaptionError(ValueError):
@@ -77,7 +91,7 @@ class CaptionTrack:
     captions: tuple[Caption, ...]
     skipped_empty: int
 
-    @property
+    @cached_property
     def transcript(self) -> str:
         return "\n".join(
             f"{format_caption_time(caption.start_ms)}\n{caption.text}" for caption in self.captions
@@ -130,14 +144,20 @@ def build_track(language: str, raw_captions: Sequence[RawCaption]) -> CaptionTra
             skipped += 1
             continue
         if _TIMESTAMP_LIKE.match(text):
-            raise CaptionError("youtube_import_ambiguous_caption", "caption text is a timestamp")
+            raise CaptionError("youtube_import_not_representable", "caption text is a timestamp")
         captions.append(Caption(start, duration, text))
     if not captions:
         raise CaptionError("youtube_import_empty_captions", "no caption has text")
     for previous, current in pairwise(captions):
         if current.start_ms < previous.start_ms:
             raise CaptionError("youtube_import_invalid_response", "offsets decrease")
-    return CaptionTrack(language, tuple(captions), skipped)
+    track = CaptionTrack(language, tuple(captions), skipped)
+    expected = "\n".join(_WHITESPACE.sub(" ", caption.text).strip() for caption in captions)
+    if clean_transcript(track.transcript) != expected:
+        raise CaptionError(
+            "youtube_import_not_representable", "transcript does not read back as its captions"
+        )
+    return track
 
 
 def _milliseconds(value: object, name: str) -> int:

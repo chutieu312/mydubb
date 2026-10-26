@@ -1,9 +1,12 @@
 """Supadata caption provider against a fake HTTP transport (no network, no credentials)."""
 
+import asyncio
+import inspect
 import json
 import logging
 import threading
-from collections.abc import Callable
+import time
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 import pytest
@@ -73,18 +76,38 @@ def provider(
     deadline: float = 5,
     poll: float = 0.01,
     timeout: float = 5,
-) -> SupadataCaptionProvider:
+    clock: Callable[[], float] = time.monotonic,
+) -> "SyncProvider":
     transport = (
         handler if isinstance(handler, httpx.MockTransport) else httpx.MockTransport(handler)
     )
-    return SupadataCaptionProvider(
-        key=SecretStr(KEY),
-        limiter=limiter or RequestRateLimiter(1000, 1),
-        timeout_seconds=timeout,
-        deadline_seconds=deadline,
-        poll_interval_seconds=poll,
-        transport=transport,
+    return SyncProvider(
+        SupadataCaptionProvider(
+            key=SecretStr(KEY),
+            limiter=limiter or RequestRateLimiter(1000, 1),
+            timeout_seconds=timeout,
+            deadline_seconds=deadline,
+            poll_interval_seconds=poll,
+            transport=transport,
+            clock=clock,
+        )
     )
+
+
+class SyncProvider:
+    """Runs the async provider to completion, one event loop per call (as a request would)."""
+
+    def __init__(self, inner: SupadataCaptionProvider) -> None:
+        self.inner = inner
+
+    def english_captions(self, video: YouTubeVideo):
+        return asyncio.run(self.inner.english_captions(video))
+
+    def fetch(self, video: YouTubeVideo):
+        return asyncio.run(self.inner.fetch(video))
+
+    def close(self) -> None:
+        self.inner.close()
 
 
 def failure_code(fake: Callable[[httpx.Request], httpx.Response], **kwargs) -> str:
@@ -133,8 +156,12 @@ def test_english_variants_are_english(language):
 
 
 def test_captions_without_a_chunk_language_are_accepted():
-    body = {**TRANSCRIPT, "content": [{"text": "hi", "offset": 0, "duration": 1}]}
-    assert provider(Fake(ok(body))).english_captions(VIDEO).captions[0].text == "hi"
+    content = [
+        {"text": "hi", "offset": 0, "duration": 1},
+        {"text": "you", "offset": 9, "duration": 1},
+    ]
+    track = provider(Fake(ok({**TRANSCRIPT, "content": content}))).english_captions(VIDEO)
+    assert [c.text for c in track.captions] == ["hi", "you"]
 
 
 # --- language -------------------------------------------------------------------------------------
@@ -236,6 +263,22 @@ def test_an_unknown_job_status_is_an_invalid_answer():
     assert failure_code(fake) == "youtube_import_invalid_response"
 
 
+@pytest.mark.parametrize("job_status", [[], {}, ["queued"], {"queued": 1}, 1, None, True, 1.5])
+def test_a_job_status_of_the_wrong_type_is_an_invalid_answer_not_a_crash(job_status):
+    # [] and {} are unhashable: a membership test on them raised TypeError before.
+    fake = Fake(ok({"jobId": JOB_ID}, status=202), [ok({"status": job_status})])
+    assert failure_code(fake) == "youtube_import_invalid_response"
+    assert len(fake.initial_requests) == 1
+    assert len(fake.requests) == 2  # stopped at the first malformed poll
+
+
+@pytest.mark.parametrize("body", [[], "completed", 3, None])
+def test_a_poll_answer_that_is_not_an_object_is_an_invalid_answer(body):
+    fake = Fake(ok({"jobId": JOB_ID}, status=202), [ok(body)])
+    assert failure_code(fake) == "youtube_import_invalid_response"
+    assert len(fake.initial_requests) == 1
+
+
 def test_a_rate_limited_poll_is_polled_again_but_a_used_up_quota_stops():
     fake = Fake(
         ok({"jobId": JOB_ID}, status=202),
@@ -280,6 +323,121 @@ def test_closing_the_provider_stops_a_waiting_import():
     instance.close()
     thread.join(timeout=5)
     assert outcome == ["youtube_import_cancelled"]
+
+
+# --- deadline -------------------------------------------------------------------------------------
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class ScriptedStream(httpx.AsyncByteStream):
+    """Body chunks with steps in between: a number advances the fake clock, a callable is
+    awaited (to block or drip in real time)."""
+
+    def __init__(self, steps: list) -> None:
+        self.steps = steps
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for step in self.steps:
+            if isinstance(step, bytes):
+                yield step
+                continue
+            result = step()
+            if inspect.isawaitable(result):
+                await result
+
+
+def streamed(*steps) -> Callable[[httpx.Request], httpx.Response]:
+    return lambda request: httpx.Response(200, stream=ScriptedStream(list(steps)))
+
+
+BODY = json.dumps(TRANSCRIPT).encode()
+
+
+def test_a_stream_whose_last_chunk_is_in_time_but_that_ends_late_is_a_timeout():
+    clock = FakeClock()
+    head, tail = BODY[:20], BODY[20:]
+
+    def late() -> None:
+        # After the last chunk, before the stream ends: past the 5 s request limit, well within
+        # the 60 s import deadline, so only the end-of-stream check can catch it.
+        clock.now += 6
+
+    fake = streamed(head, lambda: setattr(clock, "now", clock.now + 4), tail, late)
+    assert failure_code(fake, clock=clock, timeout=5, deadline=60) == "youtube_import_timeout"
+
+
+def test_the_same_stream_ending_in_time_is_a_success():
+    clock = FakeClock()
+    fake = streamed(BODY[:20], lambda: setattr(clock, "now", clock.now + 4), BODY[20:])
+    track = provider(fake, clock=clock, timeout=5, deadline=60).english_captions(VIDEO)
+    assert len(track.captions) == 3
+
+
+def test_an_answer_checked_after_the_deadline_is_not_returned(monkeypatch):
+    from app.youtube_import import supadata
+
+    clock = FakeClock()
+    check = supadata._track
+
+    def slow_check(data):
+        clock.now += 10  # the answer arrived in time; checking it ran past the deadline
+        return check(data)
+
+    monkeypatch.setattr(supadata, "_track", slow_check)
+    assert failure_code(Fake(ok()), clock=clock, deadline=5) == "youtube_import_timeout"
+
+
+def test_late_headers_are_a_timeout():
+    clock = FakeClock()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        clock.now += 6
+        return httpx.Response(200, json=TRANSCRIPT)
+
+    assert failure_code(handler, clock=clock, timeout=5, deadline=60) == "youtube_import_timeout"
+
+
+def test_a_read_that_blocks_is_cut_off_at_the_deadline():
+    async def stall() -> None:
+        await asyncio.sleep(60)  # far beyond both the deadline and the read timeout
+
+    fake = Fake(httpx.Response(200, stream=ScriptedStream([BODY[:10], stall])))
+    started = time.monotonic()
+    assert failure_code(fake, deadline=0.5, timeout=30) == "youtube_import_timeout"
+    assert time.monotonic() - started < 3
+
+
+def test_a_dripping_answer_cannot_outlast_the_deadline():
+    async def drip() -> None:
+        await asyncio.sleep(0.1)  # each read is far below the 30 s read timeout
+
+    steps: list = []
+    for _ in range(200):
+        steps += [b" ", drip]
+    fake = Fake(httpx.Response(200, stream=ScriptedStream(steps)))
+    started = time.monotonic()
+    assert failure_code(fake, deadline=0.5, timeout=30) == "youtube_import_timeout"
+    assert time.monotonic() - started < 3
+    assert len(fake.requests) == 1
+
+
+def test_a_poll_that_blocks_is_cut_off_at_the_deadline():
+    async def stall() -> None:
+        await asyncio.sleep(60)
+
+    stalled = httpx.Response(200, stream=ScriptedStream([b'{"status": ', stall]))
+    fake = Fake(ok({"jobId": JOB_ID}, status=202), [stalled])
+    started = time.monotonic()
+    assert failure_code(fake, deadline=0.6, timeout=30, poll=0.05) == "youtube_import_timeout"
+    assert time.monotonic() - started < 3
+    assert len(fake.initial_requests) == 1
 
 
 # --- rate limit and deadline ----------------------------------------------------------------------

@@ -152,7 +152,7 @@ def build_audio(settings: Settings) -> AudioProcessor:
 
 
 def build_youtube_import(
-    settings: Settings, transport: httpx.BaseTransport | None = None
+    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
 ) -> YouTubeImporter | None:
     provider: CaptionProvider
     if settings.youtube_import_provider is YouTubeImportChoice.SUPADATA:
@@ -220,7 +220,7 @@ def build_services(
     *,
     translation_transport: httpx.BaseTransport | None = None,
     speech_transport: httpx.BaseTransport | None = None,
-    youtube_import_transport: httpx.BaseTransport | None = None,
+    youtube_import_transport: httpx.AsyncBaseTransport | None = None,
     cognito_client: CognitoClient | None = None,
 ) -> AppServices:
     """The transports replace the network for Azure Translator / Azure Speech / Supadata, and

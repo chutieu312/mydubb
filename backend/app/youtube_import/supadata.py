@@ -26,8 +26,20 @@ the import's deadline passes. Redirects are not followed, the body is read withi
 limit, and the URL sent is the canonical one built from the video ID (`youtube_url.py`), never the
 user's text. Logs hold status codes, the provider's error code, counts, latency and billed
 credits; never the key, the video, the response body or caption text.
+
+Deadline: the provider is async (`httpx.AsyncClient`) so that the whole import runs under one
+`asyncio.timeout(deadline_seconds)`. httpx's own timeouts apply to each connect/read operation
+separately (a server that sends a byte just before every read timeout could keep a synchronous
+read going far past any total), whereas the asyncio timeout cancels whatever is awaited at the
+deadline, a blocked read included. The clock is also checked after the headers, after every
+chunk, when the stream has ended and before a result is returned, so an answer that completes
+late is a timeout, not a success. What the timeout cannot interrupt is work running in a thread:
+parsing and checking an answer (at most 8 MB, done off the event loop) and a rate-limiter wait,
+which itself never waits past the deadline; the import still fails as a timeout when the
+deadline passes, and that thread finishes on its own shortly after.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -98,7 +110,7 @@ class SupadataCaptionProvider:
         timeout_seconds: float,
         deadline_seconds: float,
         poll_interval_seconds: float,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._key = key
@@ -112,32 +124,28 @@ class SupadataCaptionProvider:
         # The HTTP client library logs every request URL at INFO, and this one holds the video.
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    def english_captions(self, video: YouTubeVideo) -> CaptionTrack:
-        return self.fetch(video)[0]
+    async def english_captions(self, video: YouTubeVideo) -> CaptionTrack:
+        return (await self.fetch(video))[0]
 
     def close(self) -> None:
         self._closed.set()
         self._limiter.close()
 
-    def fetch(self, video: YouTubeVideo) -> tuple[CaptionTrack, ImportStats]:
-        """The captions and what it took to get them (the smoke script prints the stats)."""
+    async def fetch(self, video: YouTubeVideo) -> tuple[CaptionTrack, ImportStats]:
+        """The captions and what it took to get them (the smoke script prints the stats).
+
+        The whole import, rate-limiter waits and polls included, runs under one asyncio timeout
+        of `deadline_seconds`, which cancels a network read that is still blocked (a stalled or
+        slowly dripping answer) instead of waiting for it to time out on its own.
+        """
         started = self._clock()
         deadline = started + self._deadline
-        params = {"url": video.canonical_url, "lang": LANGUAGE, "text": "false", "mode": "native"}
-        with httpx.Client(transport=self._transport, follow_redirects=False) as client:
-            status, body, billed = self._get(client, TRANSCRIPT_URL, params, deadline)
-            requests, polls = 1, 0
-            if status == 200:
-                track = _track(_json_object(body))
-            elif status == 202:
-                job_id = _json_object(body).get("jobId")
-                if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
-                    raise _invalid("job id missing or malformed")
-                track, polls = self._wait_for_job(client, job_id, deadline)
-                requests += polls
-            else:
-                raise _status_failure(status, body, polling=False)
-        stats = ImportStats(requests, polls, billed, self._clock() - started)
+        try:
+            async with asyncio.timeout(self._deadline):
+                track, stats = await self._fetch(video, started, deadline)
+        except TimeoutError:
+            logger.warning("Supadata import passed its deadline")
+            raise ImportFailure("youtube_import_timeout") from None
         logger.info(
             "Supadata import ok: requests=%d polls=%d captions=%d skipped_empty=%d "
             "latency_ms=%d billed_credits=%s",
@@ -146,12 +154,33 @@ class SupadataCaptionProvider:
             len(track.captions),
             track.skipped_empty,
             round(stats.latency_seconds * 1000),
-            "-" if billed is None else billed,
+            "-" if stats.billed_credits is None else stats.billed_credits,
         )
         return track, stats
 
-    def _wait_for_job(
-        self, client: httpx.Client, job_id: str, deadline: float
+    async def _fetch(
+        self, video: YouTubeVideo, started: float, deadline: float
+    ) -> tuple[CaptionTrack, ImportStats]:
+        params = {"url": video.canonical_url, "lang": LANGUAGE, "text": "false", "mode": "native"}
+        async with httpx.AsyncClient(transport=self._transport, follow_redirects=False) as client:
+            status, body, billed = await self._get(client, TRANSCRIPT_URL, params, deadline)
+            requests, polls = 1, 0
+            if status == 200:
+                track = await _parsed(body, deadline, self._clock)
+            elif status == 202:
+                job_id = (await _parsed_object(body)).get("jobId")
+                if not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id):
+                    raise _invalid("job id missing or malformed")
+                track, polls = await self._wait_for_job(client, job_id, deadline)
+                requests += polls
+            else:
+                raise _status_failure(status, body, polling=False)
+        # A complete answer that arrived after the deadline is not a success either.
+        _check_deadline(self._clock, deadline)
+        return track, ImportStats(requests, polls, billed, self._clock() - started)
+
+    async def _wait_for_job(
+        self, client: httpx.AsyncClient, job_id: str, deadline: float
     ) -> tuple[CaptionTrack, int]:
         """Poll an asynchronous job until it completes, fails or the deadline passes."""
         polls = 0
@@ -159,30 +188,41 @@ class SupadataCaptionProvider:
             if self._clock() + self._poll_interval >= deadline:
                 logger.warning("Supadata job did not finish before the deadline: polls=%d", polls)
                 raise ImportFailure("youtube_import_timeout")
-            if self._closed.wait(self._poll_interval):
+            await asyncio.sleep(self._poll_interval)
+            if self._closed.is_set():
                 raise ImportFailure("youtube_import_cancelled")
-            status, body, _ = self._get(client, f"{TRANSCRIPT_URL}/{job_id}", None, deadline)
+            status, body, _ = await self._get(client, f"{TRANSCRIPT_URL}/{job_id}", None, deadline)
             polls += 1
             if status == 429 and not _is_quota(body):
                 # A rate-limited status read; the next one waits for the shared limiter.
                 continue
             if status != 200:
                 raise _status_failure(status, body, polling=True)
-            data = _json_object(body)
+            data = await _parsed_object(body)
             job_status = data.get("status")
+            # Checked before any lookup: a list or an object here is a malformed answer.
+            if not isinstance(job_status, str):
+                raise _invalid("job status is not a string")
             if job_status in _PENDING:
                 continue
             if job_status == "completed":
-                return _track(data), polls
+                return await _parsed_track(data, deadline, self._clock), polls
             if job_status == "failed":
                 raise _job_failure(data.get("error"))
             raise _invalid("unknown job status")
 
-    def _get(
-        self, client: httpx.Client, url: str, params: dict[str, str] | None, deadline: float
+    async def _get(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, str] | None,
+        deadline: float,
     ) -> tuple[int, bytes, int | None]:
+        if self._closed.is_set():
+            raise ImportFailure("youtube_import_cancelled")
         try:
-            self._limiter.acquire(deadline=deadline)
+            # The limiter blocks a thread, not the event loop, and never waits past the deadline.
+            await asyncio.to_thread(self._limiter.acquire, deadline=deadline)
         except RateLimiterDeadline:
             logger.warning("Supadata request slot not free before the deadline")
             raise ImportFailure("youtube_import_timeout") from None
@@ -198,14 +238,15 @@ class SupadataCaptionProvider:
             "User-Agent": USER_AGENT,
         }
         try:
-            with client.stream(
+            async with client.stream(
                 "GET",
                 url,
                 params=params,
                 headers=headers,
                 timeout=httpx.Timeout(limit, connect=min(10.0, limit)),
             ) as response:
-                body = self._read_body(response, started, limit)
+                _check_request_time(self._clock, started, limit)  # headers came in time
+                body = await self._read_body(response, started, limit)
                 status = response.status_code
                 billed = response.headers.get("x-billable-requests", "")
         except httpx.TimeoutException:
@@ -216,18 +257,50 @@ class SupadataCaptionProvider:
             raise ImportFailure("youtube_import_service_error") from None
         return status, body, int(billed) if billed.isdigit() else None
 
-    def _read_body(self, response: httpx.Response, started: float, limit: float) -> bytes:
+    async def _read_body(self, response: httpx.Response, started: float, limit: float) -> bytes:
+        """The body, within the size limit and this request's time limit.
+
+        The time is checked at every chunk and once more when the stream has ended: a stream
+        whose last chunk came in time but that finished late is late. A read that blocks
+        between chunks is ended by the import's asyncio timeout (see `fetch`).
+        """
         chunks: list[bytes] = []
         size = 0
-        for chunk in response.iter_bytes():
+        async for chunk in response.aiter_bytes():
             size += len(chunk)
             if size > MAX_RESPONSE_BYTES:
                 logger.warning("Supadata response exceeded the size limit")
                 raise ImportFailure("youtube_import_too_large")
-            if self._clock() - started > limit:
-                raise httpx.ReadTimeout("total time limit exceeded")
+            _check_request_time(self._clock, started, limit)
             chunks.append(chunk)
+        _check_request_time(self._clock, started, limit)
         return b"".join(chunks)
+
+
+def _check_request_time(clock: Callable[[], float], started: float, limit: float) -> None:
+    if clock() - started > limit:
+        raise httpx.ReadTimeout("total time limit exceeded")
+
+
+def _check_deadline(clock: Callable[[], float], deadline: float) -> None:
+    if clock() > deadline:
+        logger.warning("Supadata answer completed after the deadline")
+        raise ImportFailure("youtube_import_timeout")
+
+
+async def _parsed_object(body: bytes) -> dict:
+    # Parsing up to 8 MB of JSON is CPU work: a thread keeps the event loop free.
+    return await asyncio.to_thread(_json_object, body)
+
+
+async def _parsed(body: bytes, deadline: float, clock: Callable[[], float]) -> CaptionTrack:
+    return await _parsed_track(await _parsed_object(body), deadline, clock)
+
+
+async def _parsed_track(data: dict, deadline: float, clock: Callable[[], float]) -> CaptionTrack:
+    track = await asyncio.to_thread(_track, data)
+    _check_deadline(clock, deadline)
+    return track
 
 
 def _invalid(reason: str) -> ImportFailure:

@@ -3,6 +3,7 @@
 Supadata is a fake HTTP transport; nothing reaches the network and no credential is real.
 """
 
+import asyncio
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -381,9 +382,13 @@ def test_imports_over_the_concurrency_limit_are_refused_not_queued(import_client
     entered = threading.Event()
     release = threading.Event()
 
-    def blocking(request: httpx.Request) -> httpx.Response:
+    async def blocking(request: httpx.Request) -> httpx.Response:
+        # Waits without blocking the event loop, as a slow provider answer would.
         entered.set()
-        release.wait(10)
+        for _ in range(1000):
+            if release.is_set():
+                break
+            await asyncio.sleep(0.01)
         return supadata_ok(request)
 
     client, calls = import_client(blocking, youtube_import_max_concurrent=1)
@@ -410,5 +415,65 @@ def test_shutdown_stops_the_import_provider(make_settings, db_engine):
         pass
     assert services.youtube_import is not None
     with pytest.raises(ImportFailure) as stopped:
-        services.youtube_import.import_captions(parse_youtube_url(URL))
+        asyncio.run(services.youtube_import.import_captions(parse_youtube_url(URL)))
     assert stopped.value.code == "youtube_import_cancelled"
+
+
+def captions_at(*captions: tuple[str, int]):
+    content = [{"text": text, "offset": offset, "duration": 1000} for text, offset in captions]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={**TRANSCRIPT, "content": content})
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "captions",
+    [
+        [("Hello world.", 480)],
+        [("00:10:30 is the first meeting time.", 0), ("00:11:30 is the next meeting time.", 2000)],
+    ],
+)
+def test_captions_a_job_would_misread_are_refused_with_a_clear_error(import_client, captions):
+    client, _ = import_client(captions_at(*captions))
+    response = post(client, login(client), {"url": URL})
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "youtube_import_not_representable"
+    assert "Nothing was imported" in error["message"]
+    assert "transcript" not in response.json()
+
+
+def test_spoken_clock_times_survive_import_and_job_creation(import_client):
+    client, _ = import_client(
+        captions_at(("00:10:30 is our meeting time.", 0), ("10:30 again, at 11:00.", 61_250))
+    )
+    csrf = login(client)
+    imported = post(client, csrf, {"url": URL}).json()
+    assert imported["transcript"] == (
+        "0:00.000\n00:10:30 is our meeting time.\n1:01.250\n10:30 again, at 11:00."
+    )
+    job = create_job(
+        client,
+        csrf,
+        transcript=imported["transcript"],
+        first_sentence_start=imported["first_sentence_start"],
+        last_sentence_start=imported["last_sentence_start"],
+    )
+    assert job.status_code == 202, job.text
+    assert job.json()["target_duration_seconds"] == 61
+
+
+@pytest.mark.parametrize("job_status", [[], {}])
+def test_a_malformed_job_status_is_a_502_not_a_500(import_client, job_status):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/transcript":
+            return httpx.Response(202, json={"jobId": "job-1"})
+        return httpx.Response(200, json={"status": job_status})
+
+    client, calls = import_client(handler, supadata_poll_interval_seconds=0.5)
+    response = post(client, login(client), {"url": URL})
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "youtube_import_invalid_response"
+    assert [c.url.path for c in calls] == ["/v1/transcript", "/v1/transcript/job-1"]

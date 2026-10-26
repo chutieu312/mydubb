@@ -352,23 +352,33 @@ returned as `401`, so the UI does not take it for an ended session:
 | 422 | `youtube_import_no_english_captions` | No captions at all (Supadata 206), or only another language (Supadata answers with the first available language when English is missing; the returned `lang` is checked) |
 | 422 | `youtube_import_video_unavailable` | Supadata 403/404: video missing, private, members-only, age-restricted, region-blocked or live |
 | 422 | `youtube_import_empty_captions` | Captions without any text |
-| 422 | `youtube_import_ambiguous_caption` | A caption whose whole text is a time (`10:30`, `[0:05]`, `16:9`): the format could not tell it from a timestamp line |
+| 422 | `youtube_import_not_representable` | The [format](#timestamped-transcript-format) cannot carry these captions without changing what a job reads: a single caption, captions that begin with a clock time on two or more lines (`00:10:30 is the first meeting time.`), a caption starting with a bracketed time (`(0:05) look`), a caption that is a cue timing line, or a caption whose whole text is a time (`10:30`, `[0:05]`, `16:9`). Nothing is imported |
 | 422 | `youtube_import_too_large` | Answer above 8 MB |
 | 502 | `youtube_import_auth_failed` | Supadata rejected the server's key (configuration problem) |
 | 502 | `youtube_import_rejected` | Supadata 400/402 |
 | 502 | `youtube_import_service_error` | Network error, Supadata 5xx, a redirect, an expired job, an unknown status |
-| 502 | `youtube_import_invalid_response` | Wrong schema or types, `content` as plain text, a time that is not a finite non-negative number (booleans and strings included), start times that decrease (never sorted), a job that completed without captions |
+| 502 | `youtube_import_invalid_response` | Wrong schema or types (a job `status` that is not a string, a poll answer that is not an object, and so on), `content` as plain text, a time that is not a finite non-negative number (booleans and strings included), start times that decrease (never sorted), a job that completed without captions |
 | 503 | `youtube_import_quota_exceeded` | Supadata 429 "Plan usage limit": the month's credits are used up |
 | 503 | `youtube_import_rate_limited` + `Retry-After: 5` | Supadata 429 rate limit |
 | 503 | `youtube_import_busy` + `Retry-After: 10` | `YOUTUBE_IMPORT_MAX_CONCURRENT` imports already running (admission control, not a quota) |
 | 503 | `youtube_import_cancelled` | The server is shutting down |
-| 504 | `youtube_import_timeout` | No answer within `SUPADATA_TIMEOUT_SECONDS`, an asynchronous job not finished within `SUPADATA_DEADLINE_SECONDS`, or no request slot free before the deadline |
+| 504 | `youtube_import_timeout` | A request not complete within `SUPADATA_TIMEOUT_SECONDS`, the import not complete within `SUPADATA_DEADLINE_SECONDS` (an asynchronous job still running, a stalled or slowly dripping answer, an answer that finished or was checked after the deadline), or no request slot free before the deadline |
 
 How the request is served:
 
-- Synchronous: the response comes when the captions are there or the import failed. The handler
-  runs in the server's thread pool, so waiting does not block the event loop, and the database
-  connection used for the session check is released before waiting.
+- One request: the response comes when the captions are there or the import failed. The handler
+  is async: Supadata's network I/O is awaited, so it never blocks the event loop, while blocking
+  work (the session check, the database, the rate limiter, parsing the answer) runs in threads.
+  The database connection used for the session check is released before waiting.
+- Deadline: the whole import runs under one `asyncio` timeout of `SUPADATA_DEADLINE_SECONDS`,
+  which cancels whatever is being awaited at that moment, a network read that is blocked included.
+  This is needed because httpx's timeouts are per operation (each connect or read separately), so
+  an answer arriving a little at a time could otherwise go far past any total. The time is also
+  checked after the headers, after every chunk, when the stream has ended and before a result is
+  returned, so an answer that completes late is a timeout, not a success. Each single request is
+  also limited to `SUPADATA_TIMEOUT_SECONDS` the same way. Limit: the timeout cannot interrupt
+  parsing and checking an answer (at most 8 MB, in a thread); that takes a fraction of a second,
+  and its result is dropped as a timeout if the deadline passed meanwhile.
 - Supadata request: `GET https://api.supadata.ai/v1/transcript` with `url`, `lang=en`,
   `text=false` (timed captions), `mode=native` (existing captions only; never `auto` or
   `generate`); no `chunkSize`, so the provider does not regroup captions. Redirects are not
@@ -407,12 +417,21 @@ Done after an hour.
 - Text: exactly the provider's caption text (words, punctuation, spelling, Unicode, repeated words
   and repeated captions). Line breaks inside one caption become one space; nothing else changes.
   Captions are not merged into sentences, deduplicated, sorted or summarised; equal start times
-  stay in the provider's order. A caption whose whole text is a time is refused rather than
-  written ambiguously.
+  stay in the provider's order.
 - Start times never decrease. Durations are not written (the format has no end times).
-- Plain jobs today: `cleaning.py` removes the time lines (two or more standalone timestamps in
-  non-decreasing order, `.mmm` included) and keeps every caption's text in order, one per line;
-  covered by a backend test and the E2E suite. Known limit: a transcript with a single caption keeps
-  its one time line as text (cleaning removes standalone timestamps only when there are two or more).
+- **Read back before it is returned.** The only reader today is the transcript cleaning that
+  `POST /api/jobs` applies (`clean_transcript`): it removes the time lines (two or more standalone
+  timestamps in non-decreasing order, `.mmm` included). So every imported transcript is cleaned on
+  the server first and must give back exactly its captions' text, in order, one per line (runs of
+  whitespace inside a line become one space, as for pasted text). If it does not, the import fails
+  with `youtube_import_not_representable` instead of handing the form a transcript whose job would
+  read a time aloud or drop spoken words. Cases: a single caption (cleaning keeps one lone time
+  line); captions beginning with a clock time on two or more lines (cleaning strips `H:MM:SS`
+  prefixes, e.g. `00:10:30 is the first meeting time.`); a caption starting with a bracketed time
+  (`(0:05) look`, always stripped); a caption that is a cue timing line (the whole text would be
+  read as SRT). A caption whose whole text is a time (`10:30`, `16:9`) is refused with the same code,
+  because a timed reader of the format would take it for a timestamp line even where cleaning
+  would not. Spoken times elsewhere are kept: `10:30 is our meeting time.`, or one caption starting
+  with `00:10:30`. Pasted transcripts are cleaned exactly as before.
 - The user may edit the text freely; what the job receives is the edited text. The time fields keep
   their `HH:MM:SS` contract, so a millisecond start is shown truncated there.

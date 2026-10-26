@@ -6,6 +6,7 @@ Unicode. One video ID behaves like a video without English captions, so the erro
 exercised without a provider.
 """
 
+import asyncio
 import threading
 
 from app.youtube_import.base import ImportFailure
@@ -31,8 +32,11 @@ class MockCaptionProvider:
         self._delay = delay
         self._closed = threading.Event()
 
-    def english_captions(self, video: YouTubeVideo) -> CaptionTrack:
-        if self._delay and self._closed.wait(self._delay):
+    async def english_captions(self, video: YouTubeVideo) -> CaptionTrack:
+        if self._closed.is_set():
+            raise ImportFailure("youtube_import_cancelled")
+        await asyncio.sleep(self._delay)
+        if self._closed.is_set():
             raise ImportFailure("youtube_import_cancelled")
         if video.video_id == MOCK_NO_ENGLISH_VIDEO_ID:
             raise ImportFailure("youtube_import_no_english_captions")

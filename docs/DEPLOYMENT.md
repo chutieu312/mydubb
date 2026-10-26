@@ -461,11 +461,14 @@ without any network call (`MOCK_STAGE_DELAY_SECONDS` delays it); it is refused w
 - Only captions the video already has, English only (`en`, `en-US`...; the returned language is
   checked because Supadata falls back to another language). Videos without English captions,
   private, members-only, age-restricted, region-blocked or live videos cannot be imported.
-- One import holds a request thread while Supadata answers; at most
-  `YOUTUBE_IMPORT_MAX_CONCURRENT` (default 2) run at once, the next gets `503 youtube_import_busy`.
-  Requests are spaced by one shared limiter (one every two seconds with the Free defaults).
-  Each request has `SUPADATA_TIMEOUT_SECONDS` (30), the whole import `SUPADATA_DEADLINE_SECONDS`
-  (90); the initial request is never retried.
+- At most `YOUTUBE_IMPORT_MAX_CONCURRENT` (default 2) imports run at once, the next gets
+  `503 youtube_import_busy`. Requests are spaced by one shared limiter (one every two seconds with
+  the Free defaults). Each request has `SUPADATA_TIMEOUT_SECONDS` (30), the whole import
+  `SUPADATA_DEADLINE_SECONDS` (90), enforced even while a read is blocked; the initial request is
+  never retried.
+- Captions whose timestamped transcript would not reach a job unchanged (a single caption,
+  captions starting with clock times like `00:10:30`, ...) are refused with
+  `youtube_import_not_representable`; the user pastes the transcript instead.
 - Logs show `Supadata import ok: requests=... polls=... captions=... latency_ms=...
   billed_credits=...` or the status/Supadata error code; never the link or captions.
 

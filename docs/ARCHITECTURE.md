@@ -115,9 +115,12 @@ unbounded task creation. When full, the API reports `503 server_at_capacity` wit
 transcript-length caps; the only size guard is `MAX_REQUEST_BODY_BYTES` (default 10 MB of
 JSON, roughly a million and a half words) to protect a small instance's memory.
 
-The YouTube caption import is not a job: it is one synchronous request that waits for Supadata
-in the server's thread pool (the event loop stays free; the request's database connection is
-released before the wait). At most `YOUTUBE_IMPORT_MAX_CONCURRENT` (default 2) run at once, again
+The YouTube caption import is not a job: it is one request whose async handler awaits Supadata
+(`httpx.AsyncClient`; the event loop stays free, and blocking work such as the session check,
+the rate limiter and parsing runs in threads; the request's database connection is released
+before the wait). It is async so that the import's deadline is a real one: an `asyncio` timeout
+cancels a blocked network read, which httpx's per-operation timeouts alone cannot guarantee (see
+[API.md](API.md#youtube-caption-import)). At most `YOUTUBE_IMPORT_MAX_CONCURRENT` (default 2) run at once, again
 through a non-blocking semaphore (`503 youtube_import_busy` when full, never a queue). Every
 Supadata request of the process, status polls of an asynchronous provider job included, goes
 through one `RequestRateLimiter` (the same class as Azure Speech, here with a deadline so a wait

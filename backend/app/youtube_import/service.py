@@ -1,8 +1,9 @@
 """Admission control in front of the caption provider.
 
-An import holds one request thread while it waits for the provider, so only a few may run at
-once; one more is refused straight away (`youtube_import_busy`) instead of waiting in a queue.
-This bounds threads, not usage: there is no per-user or per-day import quota.
+An import holds a provider connection (and briefly a thread for the rate limiter and for parsing)
+while it waits, so only a few may run at once; one more is refused straight away
+(`youtube_import_busy`) instead of waiting in a queue. This bounds resources, not usage: there is
+no per-user or per-day import quota.
 """
 
 import threading
@@ -17,11 +18,12 @@ class YouTubeImporter:
         self.provider = provider
         self._slots = threading.BoundedSemaphore(max_concurrent)
 
-    def import_captions(self, video: YouTubeVideo) -> CaptionTrack:
+    async def import_captions(self, video: YouTubeVideo) -> CaptionTrack:
+        # Non-blocking, so it is safe on the event loop.
         if not self._slots.acquire(blocking=False):
             raise ImportFailure("youtube_import_busy")
         try:
-            return self.provider.english_captions(video)
+            return await self.provider.english_captions(video)
         finally:
             self._slots.release()
 
