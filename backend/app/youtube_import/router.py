@@ -1,9 +1,10 @@
+import uuid
+
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal
-from app.db import session_scope
 from app.dependencies import get_db, get_services, require_job_csrf
 from app.errors import ApiError, not_authenticated
 from app.guest.access import GuestAccess
@@ -78,15 +79,15 @@ async def _guest_import(
     video = body.video
     slot = importer.admit()
 
-    def reserve():
-        with session_scope(services.session_factory) as db:
-            return reserve_import(
-                db,
-                guest_session_id=guest_session_id,
-                ip_key=ip_key,
-                policy=guest.policy,
-                runner_id=services.instance_id,
-            )
+    def reserve(db: Session) -> uuid.UUID:
+        # Run by the import runner in its own bounded transaction.
+        return reserve_import(
+            db,
+            guest_session_id=guest_session_id,
+            ip_key=ip_key,
+            policy=guest.policy,
+            runner_id=services.instance_id,
+        )
 
     async def work() -> YouTubeImportResponse:
         track = await importer.provider.english_captions(video)

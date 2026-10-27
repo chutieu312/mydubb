@@ -7,7 +7,7 @@ import time
 from app.access.service import delete_stale_sessions
 from app.auth.service import delete_stale_auth_rows, resolve_stale_password_resets
 from app.db import session_scope
-from app.guest.imports import heartbeat_imports, release_stale_imports
+from app.guest.imports import release_stale_imports
 from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
@@ -52,10 +52,11 @@ def heartbeat(services: AppServices) -> None:
     most one extra heartbeat, delaying its interruption by one interval.
     """
     owned = services.pipeline.unfinished_job_ids()
-    imports = services.guest_imports.running_ids() if services.guest_imports else []
     with session_scope(services.session_factory) as db:
         heartbeat_jobs(db, services.instance_id, owned)
-        heartbeat_imports(db, services.instance_id, imports)
+    if services.guest_imports is not None:
+        # On the import runner's bounded engine, like every import step.
+        services.guest_imports.heartbeat(services.instance_id)
 
 
 async def job_liveness_loop(services: AppServices) -> None:

@@ -25,9 +25,22 @@ up a job and a job never uses up an import.
    live instance (overlapping deploy) keeps its place. Recovery never calls the provider again.
 4. Application shutdown is not a client going away. Running imports get the shutdown budget that
    jobs also use (`wait_until`, one deadline); then `stop` cancels what is left (a stalled
-   provider read included), lets no cancelled import touch the database again, waits for any
-   statement already running, and gives the stopped imports' places back in one statement before
-   the engine is disposed. If that last statement fails, recovery releases them later.
+   provider read included), lets no cancelled import start database work again, waits a bounded
+   time for a statement already running, and gives the stopped imports' places back in one
+   bounded statement. If that is not possible in time, the rows stay `reserved` without a
+   heartbeat and recovery releases them later; settling only ever changes `reserved` rows, so a
+   late statement can never charge or release twice.
+
+**Bounded database work.** Every database step of an import (reserve, settle, heartbeat, the
+shutdown release) runs on the runner's own small engine (`create_import_engine`) in a transaction
+with `statement_timeout` and `lock_timeout` set locally (so it also works through a transaction
+pooler), a bounded pool checkout and connect, and TCP keepalives that end a read from a dead
+server. A step therefore ends within about `db_timeout_seconds` (a dead network: a few seconds
+more), in the database and in its thread, instead of just being abandoned by its awaiter. Steps
+run on daemon threads of their own, not the event loop's default executor, which the loop joins
+when it closes: a step that is stuck anyway cannot hold up the process exit. Recovery
+and the quota reads of `GET /api/guest/session` are not import steps and use the application's
+engine.
 
 Releasing a place gives the guest's MyDubb quota back; it does not give back what the provider
 charged (a Supadata request that failed or timed out may still have cost a credit).
@@ -36,6 +49,7 @@ charged (a Supadata request that failed or timed out may still have cost a credi
 """
 
 import asyncio
+import contextlib
 import logging
 import threading
 import time
@@ -45,7 +59,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TypeVar
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import Engine, and_, create_engine, func, or_, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.service import database_now
@@ -54,7 +68,6 @@ from app.guest.models import GuestImportQuota, GuestSession, QuotaState
 from app.guest.service import (
     GuestPolicy,
     GuestSessionGone,
-    _limit_lock_waits,
     _network_lock_key,
     _seconds_until,
 )
@@ -86,9 +99,70 @@ class ImportsStopped(Exception):
     """The application is shutting down: the import was stopped (or refused) by the runner."""
 
 
-# How long `stop` waits for cancelled imports to end and for database statements that were
-# already running (single-row updates, normally milliseconds). Not a drain: nothing new starts.
-_STOP_WAIT_SECONDS = 5.0
+# Upper bound of one database step of an import: statement and lock waits in PostgreSQL, pool
+# checkout and connect on the client. A step is a few single-row statements (milliseconds).
+IMPORT_DB_TIMEOUT_SECONDS = 2.0
+# Margin `stop` allows on top of that bound before it treats a step as not ending.
+_STOP_MARGIN_SECONDS = 1.0
+
+
+def create_import_engine(url: str, timeout_seconds: float = IMPORT_DB_TIMEOUT_SECONDS) -> Engine:
+    """The guest import runner's own engine: small pool, bounded checkout and connect, and TCP
+    keepalives (libpq) so that a read from a server that went away ends too."""
+    seconds = max(2, round(timeout_seconds))  # libpq's connect_timeout minimum is 2 s
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=2,
+        pool_timeout=timeout_seconds,
+        connect_args={
+            "connect_timeout": seconds,
+            "keepalives": 1,
+            "keepalives_idle": 1,
+            "keepalives_interval": 1,
+            "keepalives_count": 2,
+            "tcp_user_timeout": int(seconds * 1000),
+        },
+    )
+
+
+async def _in_daemon_thread[R](fn: Callable[..., R], *args: object) -> R:
+    """Run `fn` on a daemon thread of its own and await its result. Cancelling the awaiter does
+    not stop the thread (callers count it, see `GuestImportRunner._counted`); nothing joins it."""
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[R] = loop.create_future()
+
+    def resolve(result: R | None, error: BaseException | None) -> None:
+        if future.done():  # the awaiter was cancelled
+            return
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(result)  # type: ignore[arg-type]
+
+    def target() -> None:
+        result: R | None = None
+        error: BaseException | None = None
+        try:
+            result = fn(*args)
+        except BaseException as exc:  # handed to the awaiter
+            error = exc
+        # The loop may be closed by now: then nobody waits for this any more.
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(resolve, result, error)
+
+    threading.Thread(target=target, name="guest-import-db", daemon=True).start()
+    return await future
+
+
+@dataclass(frozen=True)
+class StopOutcome:
+    stopped: int  # imports cancelled at shutdown
+    # True when no import database work is running any more: the import engine may be disposed.
+    quiescent: bool
+    # Places given back by the shutdown release (0 when it failed or did not run).
+    released: int
 
 
 @dataclass(frozen=True)
@@ -181,9 +255,9 @@ def reserve_import(
     """Check both import quotas and write the operation's reserved place, atomically.
 
     Raises GuestImportQuotaExceeded (nothing written) or GuestSessionGone. The caller commits,
-    before calling the provider.
+    before calling the provider, and bounds lock waits (GuestImportRunner runs it with
+    `lock_timeout` and `statement_timeout`).
     """
-    _limit_lock_waits(db)
     locked = db.scalar(
         select(GuestSession.id)
         .where(
@@ -302,12 +376,19 @@ class GuestImportRunner:
 
     `running_ids` is what the liveness loop heartbeats. Tasks are referenced here until they end,
     so a request that goes away never lets its import be garbage-collected half way. Every
-    database statement of an import goes through `_db`, which counts it while its thread runs and
-    refuses new ones once `stop` has begun, so shutdown knows when the database is no longer used.
+    database step of an import goes through `_counted`, which counts it while its thread runs and
+    refuses new ones once `stop` has begun, so shutdown knows whether the database is still used;
+    each step runs in `_transaction`, bounded as described in the module docstring.
     """
 
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        db_timeout_seconds: float = IMPORT_DB_TIMEOUT_SECONDS,
+    ) -> None:
         self._session_factory = session_factory
+        self._db_timeout = db_timeout_seconds
         self._lock = threading.Lock()
         self._db_idle = threading.Condition(self._lock)
         self._running: set[uuid.UUID] = set()
@@ -316,20 +397,29 @@ class GuestImportRunner:
         # Set by `stop` (application shutdown): no import may start database work any more.
         self._stopping = False
 
+    @property
+    def stop_bound_seconds(self) -> float:
+        """How long each of the two phases of `stop` may take at most."""
+        return self._db_timeout + _STOP_MARGIN_SECONDS
+
     def running_ids(self) -> list[uuid.UUID]:
         with self._lock:
             return list(self._running)
 
+    def db_calls(self) -> int:
+        with self._lock:
+            return self._db_calls
+
     async def run(
         self,
-        reserve: Callable[[], uuid.UUID],
+        reserve: Callable[[Session], uuid.UUID],
         work: Callable[[], Awaitable[T]],
         *,
         on_done: Callable[[], None] | None = None,
     ) -> T:
-        """Reserve the operation (`reserve`, a short committed transaction run in a thread), run
-        `work` (fetch, check and write the transcript) and settle it; `on_done` runs when the
-        operation has ended, whatever the outcome.
+        """Reserve the operation (`reserve(db)`, a short bounded transaction committed in a
+        thread), run `work` (fetch, check and write the transcript) and settle it; `on_done` runs
+        when the operation has ended, whatever the outcome.
 
         Everything runs in a task of its own and the caller awaits a shield: cancelling the
         caller (a disconnected client) leaves the operation running to its end, and a success is
@@ -343,6 +433,18 @@ class GuestImportRunner:
         if on_done is not None:
             task.add_done_callback(lambda _: on_done())
         return await asyncio.shield(task)
+
+    def heartbeat(self, runner_id: str) -> int:
+        """Liveness loop (in a thread): refresh the heartbeat of the imports running here."""
+        ids = self.running_ids()
+        if not ids:
+            return 0
+        try:
+            return self._counted(
+                self._transaction, lambda db: heartbeat_imports(db, runner_id, ids)
+            )
+        except ImportsStopped:
+            return 0
 
     def _finished(self, task: asyncio.Task) -> None:
         self._tasks.discard(task)
@@ -358,9 +460,15 @@ class GuestImportRunner:
         if tasks and remaining > 0:
             await asyncio.wait(tasks, timeout=remaining)
 
-    async def stop(self) -> int:
-        """Shutdown, after `wait_until`: cancel the imports still running, make sure none of them
-        uses the database afterwards, and give their places back. Returns how many were stopped.
+    async def stop(self) -> StopOutcome:
+        """Shutdown, after `wait_until`: cancel the imports still running, start no import
+        database work any more, and give the stopped imports' places back.
+
+        Two phases of at most `stop_bound_seconds` each: (1) the cancelled imports end and any
+        step already running finishes (it is bounded in the database, so it normally ends within
+        `db_timeout_seconds`); (2) one bounded release of the stopped operations. If phase 1 does
+        not end in time, no release is attempted and the outcome is not quiescent: the caller
+        must not dispose the import engine, and recovery releases the rows later.
         """
         with self._lock:
             self._stopping = True
@@ -368,41 +476,72 @@ class GuestImportRunner:
         tasks = [task for task in self._tasks if not task.done()]
         for task in tasks:
             task.cancel()
+        bound = self.stop_bound_seconds
+        phase_end = time.monotonic() + bound
         if tasks:
-            await asyncio.wait(tasks, timeout=_STOP_WAIT_SECONDS)
-        # A statement already running in a thread (cancelling its awaiter does not stop it).
-        if not await asyncio.to_thread(self._wait_db_idle, _STOP_WAIT_SECONDS):
-            logger.warning("A guest import database statement was still running at shutdown")
+            await asyncio.wait(tasks, timeout=bound)
+        quiescent = await _in_daemon_thread(
+            self._wait_db_idle, max(0.0, phase_end - time.monotonic())
+        )
         if stopped_ids or tasks:
+            logger.warning("Stopped %d guest import(s) at shutdown", len(tasks))
+        if not quiescent:
             logger.warning(
-                "Stopped %d guest import(s) at shutdown", max(len(stopped_ids), len(tasks))
+                "%d guest import database step(s) still running at shutdown; their places are "
+                "left to recovery and the import database engine is not disposed",
+                self.db_calls(),
             )
+            return StopOutcome(stopped=len(tasks), quiescent=False, released=0)
+        released = 0
         if stopped_ids:
-            try:
-                await asyncio.to_thread(self._release, stopped_ids)
-            except Exception:
-                logger.warning("Could not release stopped guest imports; recovery will")
-        return len(tasks)
+            # Counted like any import step, so a release that overruns keeps us from claiming
+            # the database is no longer used.
+            release = asyncio.ensure_future(
+                _in_daemon_thread(
+                    lambda: self._counted(self._release, stopped_ids, allow_stopping=True)
+                )
+            )
+            done, _ = await asyncio.wait({release}, timeout=bound)
+            if release in done and release.exception() is None:
+                released = release.result()
+            else:
+                if release in done:
+                    release.exception()  # retrieved: logged below
+                logger.warning("Could not release stopped guest imports in time; recovery will")
+            quiescent = self.db_calls() == 0
+            if not quiescent:
+                logger.warning(
+                    "The guest import release is still running at shutdown; the import "
+                    "database engine is not disposed"
+                )
+        return StopOutcome(stopped=len(tasks), quiescent=quiescent, released=released)
 
     def _wait_db_idle(self, timeout: float) -> bool:
         with self._db_idle:
             return self._db_idle.wait_for(lambda: self._db_calls == 0, timeout)
 
-    def _release(self, operation_ids: list[uuid.UUID]) -> None:
-        with session_scope(self._session_factory) as db:
-            release_imports(db, operation_ids)
+    def _release(self, operation_ids: list[uuid.UUID]) -> int:
+        return self._transaction(lambda db: release_imports(db, operation_ids))
 
-    async def _db(self, fn: Callable[..., T], *args: object) -> T:
+    def _transaction(self, step: Callable[[Session], T]) -> T:
+        """One import step in its own transaction, its waits bounded inside PostgreSQL."""
+        milliseconds = int(self._db_timeout * 1000)
+        with session_scope(self._session_factory) as db:
+            db.execute(text(f"SET LOCAL statement_timeout = {milliseconds}"))
+            db.execute(text(f"SET LOCAL lock_timeout = {milliseconds}"))
+            return step(db)
+
+    async def _db(self, step: Callable[[Session], T]) -> T:
         """Run one database step of an import in a thread, unless shutdown has begun."""
         if self._stopping:
             raise ImportsStopped
-        return await asyncio.to_thread(self._counted, fn, *args)
+        return await _in_daemon_thread(self._counted, self._transaction, step)
 
-    def _counted(self, fn: Callable[..., T], *args: object) -> T:
+    def _counted(self, fn: Callable[..., T], *args: object, allow_stopping: bool = False) -> T:
         # Counted in the thread itself: it stays counted while it runs even if its awaiter is
         # cancelled.
         with self._lock:
-            if self._stopping:
+            if self._stopping and not allow_stopping:
                 raise ImportsStopped
             self._db_calls += 1
         try:
@@ -412,7 +551,9 @@ class GuestImportRunner:
                 self._db_calls -= 1
                 self._db_idle.notify_all()
 
-    async def _run(self, reserve: Callable[[], uuid.UUID], work: Callable[[], Awaitable[T]]) -> T:
+    async def _run(
+        self, reserve: Callable[[Session], uuid.UUID], work: Callable[[], Awaitable[T]]
+    ) -> T:
         try:
             return await self._operation(reserve, work)
         except asyncio.CancelledError:
@@ -423,7 +564,7 @@ class GuestImportRunner:
             raise
 
     async def _operation(
-        self, reserve: Callable[[], uuid.UUID], work: Callable[[], Awaitable[T]]
+        self, reserve: Callable[[Session], uuid.UUID], work: Callable[[], Awaitable[T]]
     ) -> T:
         operation_id = await self._db(reserve)
         with self._lock:
@@ -435,7 +576,7 @@ class GuestImportRunner:
                 await self._settle_failure(operation_id)
                 raise
             try:
-                recorded = await self._db(self._settle, operation_id, True)
+                recorded = await self._db(lambda db: settle_import(db, operation_id, used=True))
             except ImportsStopped:
                 raise
             except Exception:
@@ -452,13 +593,9 @@ class GuestImportRunner:
 
     async def _settle_failure(self, operation_id: uuid.UUID) -> None:
         try:
-            await self._db(self._settle, operation_id, False)
+            await self._db(lambda db: settle_import(db, operation_id, used=False))
         except ImportsStopped:
             pass  # shutdown: `stop` gives the place back
         except BaseException:
             # The row stays reserved; recovery releases it once its heartbeat is stale.
             logger.warning("Could not release a failed guest import; recovery will")
-
-    def _settle(self, operation_id: uuid.UUID, used: bool) -> bool:
-        with session_scope(self._session_factory) as db:
-            return settle_import(db, operation_id, used=used)

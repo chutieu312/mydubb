@@ -527,6 +527,13 @@ def reserve(factory, session_id: uuid.UUID, ip: str = IP_A, runner: str = "runne
         )
 
 
+def reserving(session_id: uuid.UUID, ip: str = IP_A, runner: str = "runner-1"):
+    """The `reserve` step a GuestImportRunner runs in its own bounded transaction."""
+    return lambda db: guest_imports.reserve_import(
+        db, guest_session_id=session_id, ip_key=ip_key_of(ip), policy=POLICY, runner_id=runner
+    )
+
+
 def test_concurrent_imports_of_one_session_never_pass_its_quota(factory, db_engine):
     session = new_session(factory)
     # Each from another network (the address can change during a session), so only the session
@@ -716,7 +723,7 @@ def test_a_client_that_disconnects_during_the_import_does_not_stop_it(factory, d
                 raise ImportFailure("youtube_import_service_error")
             return "transcript"
 
-        caller = asyncio.create_task(runner.run(lambda: reserve(factory, session), work))
+        caller = asyncio.create_task(runner.run(reserving(session), work))
         await started.wait()
         caller.cancel()  # the request handler goes away (client disconnected)
         with pytest.raises(asyncio.CancelledError):
@@ -741,7 +748,7 @@ def test_a_client_that_disconnects_after_the_captions_arrived_is_still_charged(f
             done.set()  # the captions are checked; the caller is cancelled before settling
             return "transcript"
 
-        await _run_and_cancel_caller(runner, lambda: reserve(factory, session), work, done)
+        await _run_and_cancel_caller(runner, reserving(session), work, done)
 
     asyncio.run(scenario())
     assert states(db_engine) == ["used"]
@@ -793,7 +800,7 @@ def test_a_success_that_cannot_be_recorded_raises(factory, db_engine):
     runner = GuestImportRunner(factory)
     operation: dict = {}
 
-    def reserve_and_release():
+    def reserve_and_release(db):
         operation["id"] = reserve(factory, session)
         with factory.begin() as db:
             guest_imports.settle_import(db, operation["id"], used=False)
@@ -870,21 +877,7 @@ def test_shutdown_gives_a_stalled_import_and_a_long_job_one_shared_budget(
         youtube_import_transport=httpx.MockTransport(stalled),
         cognito_client=fake_cognito,
     )
-    after_dispose: list[str] = []
-    disposed = threading.Event()
-
-    @event.listens_for(services.engine, "before_cursor_execute")
-    def record(conn, cursor, statement, parameters, context, executemany):
-        if disposed.is_set() and "guest_import_quota" in statement:
-            after_dispose.append(statement)
-
-    dispose = services.engine.dispose
-
-    def dispose_and_mark(*args, **kwargs):
-        disposed.set()
-        return dispose(*args, **kwargs)
-
-    services.engine.dispose = dispose_and_mark  # type: ignore[method-assign]
+    database = DatabaseActivity(services)
 
     client = TestClient(create_app(services=services))
     client.__enter__()
@@ -924,8 +917,46 @@ def test_shutdown_gives_a_stalled_import_and_a_long_job_one_shared_budget(
     # The admission slot is free again, and nothing of the import is left running.
     services.youtube_import.admit().release()  # type: ignore[union-attr]
     assert services.guest_imports.running_ids() == []  # type: ignore[union-attr]
+    assert services.guest_imports.db_calls() == 0  # type: ignore[union-attr]
+    # Import statements ran before the engines went away, none after; both engines disposed.
     time.sleep(0.5)
-    assert after_dispose == []
+    assert database.import_statements_before_dispose > 0
+    assert database.import_statements_after_dispose == []
+    assert database.shared_disposed.is_set() and database.import_disposed.is_set()
+
+
+class DatabaseActivity:
+    """Records `guest_import_quota` statements on the application's and the import runner's
+    engines, before and after each engine is disposed (dispose is wrapped to mark the moment)."""
+
+    def __init__(self, services) -> None:
+        self.shared_disposed = threading.Event()
+        self.import_disposed = threading.Event()
+        self.import_statements_before_dispose = 0
+        self.import_statements_after_dispose: list[str] = []
+        for engine, disposed in (
+            (services.engine, self.shared_disposed),
+            (services.guest_import_engine, self.import_disposed),
+        ):
+            self._watch(engine, disposed)
+
+    def _watch(self, engine, disposed: threading.Event) -> None:
+        @event.listens_for(engine, "before_cursor_execute")
+        def record(conn, cursor, statement, parameters, context, executemany):
+            if "guest_import_quota" not in statement:
+                return
+            if disposed.is_set():
+                self.import_statements_after_dispose.append(statement)
+            else:
+                self.import_statements_before_dispose += 1
+
+        dispose = engine.dispose
+
+        def dispose_and_mark(*args, **kwargs):
+            disposed.set()
+            return dispose(*args, **kwargs)
+
+        engine.dispose = dispose_and_mark
 
 
 def _heartbeat(db_engine, operation_id):
@@ -947,16 +978,17 @@ def test_stop_cancels_a_stalled_import_and_refuses_further_database_work(factory
             started.set()
             await asyncio.sleep(3600)
 
-        caller = asyncio.create_task(runner.run(lambda: reserve(factory, session), stalled))
+        caller = asyncio.create_task(runner.run(reserving(session), stalled))
         await started.wait()
         await runner.wait_until(time.monotonic() + 0.2)  # the budget runs out
         assert states(db_engine) == ["reserved"]
-        assert await runner.stop() == 1
+        outcome = await runner.stop()
+        assert (outcome.stopped, outcome.quiescent, outcome.released) == (1, True, 1)
         with pytest.raises(ImportsStopped):
             await caller
         # Nothing new reaches the database after stop.
         with pytest.raises(ImportsStopped):
-            await runner.run(lambda: reserve(factory, session), stalled)
+            await runner.run(reserving(session), stalled)
 
     asyncio.run(scenario())
     assert states(db_engine) == ["released"]
@@ -984,7 +1016,7 @@ def test_stop_waits_for_a_database_statement_already_running(factory, db_engine,
         async def work():
             return "transcript"
 
-        caller = asyncio.create_task(runner.run(lambda: reserve(factory, session), work))
+        caller = asyncio.create_task(runner.run(reserving(session), work))
         while not in_statement.is_set():
             await asyncio.sleep(0.01)
         await runner.stop()
@@ -1015,7 +1047,7 @@ def test_an_import_stop_could_not_release_is_recovered_after_restart(
             started.set()
             await asyncio.sleep(3600)
 
-        caller = asyncio.create_task(runner.run(lambda: reserve(factory, session), stalled))
+        caller = asyncio.create_task(runner.run(reserving(session), stalled))
         await started.wait()
         await runner.stop()
         with pytest.raises(ImportsStopped):
@@ -1045,7 +1077,7 @@ def test_a_client_disconnect_is_not_a_shutdown(factory, db_engine):
             await finish.wait()
             return "transcript"
 
-        caller = asyncio.create_task(runner.run(lambda: reserve(factory, session), work))
+        caller = asyncio.create_task(runner.run(reserving(session), work))
         await started.wait()
         caller.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -1053,7 +1085,191 @@ def test_a_client_disconnect_is_not_a_shutdown(factory, db_engine):
         assert runner.running_ids() != []  # still running
         finish.set()
         await runner.wait_until(time.monotonic() + 10)
-        assert await runner.stop() == 0  # nothing left to stop
+        assert (await runner.stop()).stopped == 0  # nothing left to stop
 
     asyncio.run(scenario())
     assert states(db_engine) == ["used"]
+
+
+# -- shutdown against a slow database (locks held far longer than the import's timeouts) ------
+
+SLOW_TIMEOUT = 1.0  # the runner's database timeout in these tests (production: 2 s)
+
+
+def lock_waiters(db_engine, table: str) -> int:
+    """Other sessions currently waiting on a lock while touching `table`."""
+    with db_engine.connect() as conn:
+        return conn.execute(
+            text(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                "AND query LIKE :pattern AND pid <> pg_backend_pid()"
+            ),
+            {"pattern": f"%{table}%"},
+        ).scalar_one()
+
+
+def test_stop_while_reserve_waits_on_a_lock_longer_than_the_timeout(factory, db_engine):
+    """Cancelled while `reserve` waits on the guest session's row lock, which another client
+    holds for much longer than the timeout: PostgreSQL ends the wait, stop returns quiescent with
+    no statement left, and nothing was written."""
+    session = new_session(factory)
+    runner = GuestImportRunner(factory, db_timeout_seconds=SLOW_TIMEOUT)
+    with db_engine.connect() as holder:
+        hold = holder.begin()
+        holder.execute(
+            text("SELECT id FROM guest_sessions WHERE id = :id FOR UPDATE"), {"id": session}
+        )
+
+        async def scenario():
+            async def work():
+                return "transcript"
+
+            caller = asyncio.create_task(runner.run(reserving(session), work))
+            while lock_waiters(db_engine, "guest_sessions") == 0:
+                await asyncio.sleep(0.02)  # the reserve is blocked in the database
+            started = time.monotonic()
+            outcome = await runner.stop()
+            elapsed = time.monotonic() - started
+            with pytest.raises(ImportsStopped):
+                await caller
+            return outcome, elapsed
+
+        outcome, elapsed = asyncio.run(scenario())
+        # Ended by the database's lock timeout, well before the holder lets go.
+        assert outcome.quiescent and runner.db_calls() == 0
+        assert SLOW_TIMEOUT * 0.8 <= elapsed < runner.stop_bound_seconds, elapsed
+        assert lock_waiters(db_engine, "guest_sessions") == 0
+        time.sleep(SLOW_TIMEOUT)  # the holder keeps its lock past every timeout
+        hold.rollback()
+    assert import_rows(db_engine) == []
+
+
+def test_stop_while_settle_waits_on_a_row_lock_bounds_settle_and_release(factory, db_engine):
+    """The import's row is locked by another client far longer than the timeout: the cancelled
+    settle ends by lock timeout, then the shutdown release waits (also bounded) and fails; the
+    row stays reserved, never charged or released twice, and recovery releases it after a
+    restart."""
+    session = new_session(factory)
+    runner = GuestImportRunner(factory, db_timeout_seconds=SLOW_TIMEOUT)
+    with db_engine.connect() as holder:
+
+        async def scenario():
+            go = asyncio.Event()
+
+            async def work():
+                await go.wait()
+                return "transcript"
+
+            caller = asyncio.create_task(runner.run(reserving(session), work))
+            while not runner.running_ids():
+                await asyncio.sleep(0.01)
+            (operation,) = runner.running_ids()
+            hold = holder.begin()
+            holder.execute(
+                text("SELECT id FROM guest_import_quota WHERE id = :id FOR UPDATE"),
+                {"id": operation},
+            )
+            go.set()
+            while lock_waiters(db_engine, "guest_import_quota") == 0:
+                await asyncio.sleep(0.02)  # settle(used) is blocked in the database
+            started = time.monotonic()
+            outcome = await runner.stop()
+            elapsed = time.monotonic() - started
+            with pytest.raises(ImportsStopped):
+                await caller
+            return outcome, elapsed, hold
+
+        outcome, elapsed, hold = asyncio.run(scenario())
+        assert outcome.quiescent and outcome.released == 0 and runner.db_calls() == 0
+        # Both the settle and the release waited, each ended by the database within its bound.
+        assert 2 * SLOW_TIMEOUT * 0.8 <= elapsed < 2 * runner.stop_bound_seconds, elapsed
+        assert lock_waiters(db_engine, "guest_import_quota") == 0
+        hold.rollback()
+    (row,) = import_rows(db_engine)
+    assert row.state == "reserved"  # neither charged nor released
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE guest_import_quota SET heartbeat_at = now() - interval '10 minutes'")
+        )
+    with factory.begin() as db:  # the next instance's recovery
+        assert (
+            guest_imports.release_stale_imports(db, stale_after_seconds=90, max_age_seconds=180)
+            == 1
+        )
+        assert (
+            guest_imports.release_stale_imports(db, stale_after_seconds=90, max_age_seconds=180)
+            == 0
+        )
+    assert states(db_engine) == ["released"]
+
+
+def test_a_step_the_database_cannot_end_leaves_the_import_engine_open(
+    make_settings, fake_cognito, db_engine, monkeypatch
+):
+    """A step stuck outside the database (as on a dead network, past every timeout): shutdown
+    still ends within its budget, does not claim the import database work is over (no release,
+    the import engine is not disposed), and the late step settles the row exactly once."""
+    grace = 0.5
+    hang = 5.0
+    real_settle = guest_imports.settle_import
+    settling = threading.Event()
+    finished = threading.Event()
+
+    def stuck_settle(db, operation_id, *, used):
+        settling.set()
+        time.sleep(hang)
+        try:
+            return real_settle(db, operation_id, used=used)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(guest_imports, "settle_import", stuck_settle)
+    services = build_services(
+        make_settings(**{**GUEST_SETTINGS, **SUPADATA}, job_shutdown_grace_seconds=grace),
+        youtube_import_transport=httpx.MockTransport(supadata_ok),
+        cognito_client=fake_cognito,
+    )
+    database = DatabaseActivity(services)
+    runner = services.guest_imports
+    assert runner is not None
+    client = TestClient(create_app(services=services))
+    client.__enter__()
+    result: dict = {}
+    try:
+        csrf = start_guest(client)["csrf_token"]
+        worker = threading.Thread(target=lambda: result.update(r=guest_import(client, csrf)))
+        worker.start()
+        assert settling.wait(10)
+    finally:
+        started = time.monotonic()
+        stopping = threading.Thread(target=client.__exit__, args=(None, None, None), daemon=True)
+        stopping.start()
+        stopping.join(grace + 2 * runner.stop_bound_seconds + 5)
+        elapsed = time.monotonic() - started
+    assert not stopping.is_alive(), "shutdown did not finish"
+    worker.join(10)
+
+    # The budget: the shared grace plus at most the first stop phase (no release attempted).
+    assert elapsed < grace + runner.stop_bound_seconds + 1.0, elapsed
+    assert not finished.is_set()  # the stuck step was still running when shutdown returned
+    assert result["r"].json()["error"]["code"] == "youtube_import_cancelled"
+    assert database.shared_disposed.is_set()
+    assert not database.import_disposed.is_set()  # never claimed free while a step may run
+    assert finished.wait(hang + 5)
+    # The late step settled the row once (used); nothing released it as well.
+    assert states(db_engine) == ["used"]
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE guest_import_quota SET heartbeat_at = now() - interval '10 minutes'")
+        )
+    with factory_for(db_engine).begin() as db:
+        assert (
+            guest_imports.release_stale_imports(db, stale_after_seconds=90, max_age_seconds=180)
+            == 0
+        )
+    assert states(db_engine) == ["used"]
+    services.guest_import_engine.dispose()  # type: ignore[union-attr]
+
+
+def factory_for(db_engine) -> sessionmaker:
+    return sessionmaker(bind=db_engine, expire_on_commit=False)

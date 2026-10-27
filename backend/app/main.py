@@ -186,11 +186,13 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
                 services.speech_limiter.close()
             # Running FFmpeg processes are killed instead of outliving the server.
             services.audio.close()
+            imports_quiescent = True
             if services.guest_imports is not None:
-                # Imports still running (e.g. a stalled provider read) are cancelled; none of
-                # them touches the database afterwards, and their places are given back here,
-                # before the engine is disposed (or by the next instance's recovery).
-                await services.guest_imports.stop()
+                # Imports still running (e.g. a stalled provider read) are cancelled, start no
+                # database work any more and are given back in one bounded statement (or by the
+                # next instance's recovery); at most twice the runner's stop bound.
+                outcome = await services.guest_imports.stop()
+                imports_quiescent = outcome.quiescent
             liveness_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await liveness_task
@@ -202,6 +204,13 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             if close is not None:
                 close()
             services.engine.dispose()
+            if services.guest_import_engine is not None:
+                if imports_quiescent:
+                    services.guest_import_engine.dispose()
+                else:
+                    # Never claim the database is free while an import step may still run; the
+                    # process exit closes those connections.
+                    logger.warning("Guest import database engine left open at shutdown")
 
     app = FastAPI(
         title="MyDubb API",

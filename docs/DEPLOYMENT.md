@@ -591,8 +591,9 @@ older code ignores it.
 - Which of the two is active is visible in the Render service: **Settings -> Build & Deploy ->
   Auto-Deploy** is *After CI Checks Pass* before the cutover and *Off* after it.
 - Zero-downtime deploy: the new instance starts and receives traffic once `/api/health`
-  responds; the old instance gets SIGTERM about a minute later, finishes running jobs for up to
-  `JOB_SHUTDOWN_GRACE_SECONDS` (20 s), then exits within Render's default 30 s shutdown delay
+  responds; the old instance gets SIGTERM about a minute later, finishes running jobs and guest
+  YouTube imports for up to `JOB_SHUTDOWN_GRACE_SECONDS` (20 s, one budget for both), stops the
+  imports still running in at most 2 × 3 s more, then exits within Render's default 30 s shutdown delay
   (`maxShutdownDelaySeconds` is not available on the Free plan).
   Jobs it could not finish are marked "interrupted" and must be resubmitted. Results produced
   by the old instance become "result expired".

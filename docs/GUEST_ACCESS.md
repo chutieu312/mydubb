@@ -131,12 +131,29 @@ share **one** budget, `JOB_SHUTDOWN_GRACE_SECONDS` from the start of shutdown, a
 together (heartbeats continue meanwhile); the provider is closed first, so imports waiting for a
 request slot or between polls end at once (released). When the budget is used up, the imports
 still running (for example a provider read that has stalled) are cancelled and answered
-`503 youtube_import_cancelled`; from then on no import starts a database statement, shutdown waits
-(at most a few seconds) for a statement already running in a thread, and then gives the stopped
-imports' places back in one statement, before the database engine is disposed. Their admission
-slots are freed with them. If that last statement fails, the rows stay `reserved` without a
-heartbeat and the next instance's recovery releases them. Imports of other instances are never
-touched (only this instance's stopped operations, and only while still `reserved`).
+`503 youtube_import_cancelled`, and their admission slots are freed with them. From then on no
+import starts a database statement. Shutdown then takes at most two bounded phases of 3 seconds
+each: (1) a statement already running ends; (2) one statement gives the stopped imports' places
+back (only this instance's operations, only while still `reserved`). If that release fails or times
+out, the rows stay `reserved` without a heartbeat and the next instance's recovery releases them;
+settling only ever changes `reserved` rows, so nothing is charged or released twice.
+
+**Bounded database work.** Every database step of a guest import (reserve, settle, heartbeat, the
+shutdown release) runs on a small engine of its own, in a transaction with `statement_timeout` and
+`lock_timeout` of 2 s set locally (`SET LOCAL`, which also works through a transaction pooler),
+with a pool checkout and connect bounded to 2 s and TCP keepalives that notice a server that went
+away within a few seconds. PostgreSQL itself ends a wait for a lock or a slow statement, so the
+step really ends (in the database and in its thread), not just its awaiter. Steps run on daemon
+threads of their own, so one that is stuck anyway cannot hold up the process exit. If phase (1)
+still does not end in time (a case the timeouts cannot end, such as a network that stops
+answering without closing), shutdown says so in the log, attempts no release, and does **not**
+dispose the import engine; the process exit closes its connections, and the late statement
+settles its row at most once (or leaves it to recovery).
+
+**Shutdown budget:** `JOB_SHUTDOWN_GRACE_SECONDS` (20 s) for jobs and imports together, then at
+most 2 × 3 s for imports, plus interrupting the unfinished jobs: about 26 s at worst, within
+Render's 30 s shutdown delay. Recovery (`release_stale_imports`) and the quota reads of
+`GET /api/guest/session` are not import steps and use the application's engine.
 
 ## Guest session and cookie
 

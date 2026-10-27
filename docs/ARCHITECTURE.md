@@ -204,7 +204,9 @@ of an old and a new instance during a zero-downtime deploy is supported:
   YouTube imports share one budget of `JOB_SHUTDOWN_GRACE_SECONDS` and are waited for together
   (heartbeats continue meanwhile); then whatever this process accepted but did not finish is
   marked `interrupted`, and the imports still running are cancelled, kept away from the database
-  and given back before the engine is disposed ([GUEST_ACCESS.md](GUEST_ACCESS.md#youtube-import-quota)). Keep the grace period below
+  and given back in at most 2 × 3 s more; every import database step is bounded by PostgreSQL
+  timeouts on a small engine of its own, which is disposed only once no import step runs
+  ([GUEST_ACCESS.md](GUEST_ACCESS.md#youtube-import-quota)). Keep the grace period below
   the host's kill delay (Render: `maxShutdownDelaySeconds`, fixed at the default 30 s on the
   Free plan).
 - After a hard crash, the crashed process's jobs are failed by the next live instance within

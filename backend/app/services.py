@@ -28,7 +28,7 @@ from app.config import (
 )
 from app.db import create_db_engine, create_session_factory
 from app.guest.access import GuestAccess
-from app.guest.imports import GuestImportRunner
+from app.guest.imports import GuestImportRunner, create_import_engine
 from app.jobs.executor import BoundedThreadJobExecutor, JobExecutor
 from app.jobs.pipeline import JobPipeline
 from app.speech.azure import AzureSpeechProvider
@@ -73,8 +73,10 @@ class AppServices:
     youtube_import: YouTubeImporter | None = None
     # "Try as guest" policy and IP-hash key; None while GUEST_ACCESS_ENABLED=false.
     guest: GuestAccess | None = None
-    # Guest YouTube imports this process is running (their heartbeats and settlement).
+    # Guest YouTube imports this process is running (their heartbeats and settlement), and the
+    # bounded engine every import database step uses; disposed at shutdown only when quiescent.
     guest_imports: GuestImportRunner | None = None
+    guest_import_engine: Engine | None = None
 
 
 def build_translator(
@@ -257,6 +259,7 @@ def build_services(
         glossary=default_glossary(),
     )
 
+    import_engine = create_import_engine(settings.sqlalchemy_url)
     return AppServices(
         settings=settings,
         instance_id=uuid.uuid4().hex,
@@ -281,5 +284,6 @@ def build_services(
         recovery_email_limiter=recovery_email_limiter,
         youtube_import=build_youtube_import(settings, youtube_import_transport),
         guest=GuestAccess.from_settings(settings),
-        guest_imports=GuestImportRunner(session_factory),
+        guest_imports=GuestImportRunner(create_session_factory(import_engine)),
+        guest_import_engine=import_engine,
     )
