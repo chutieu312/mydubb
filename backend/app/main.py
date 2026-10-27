@@ -6,6 +6,7 @@ In production one process serves both the API (/api/*) and the React build (same
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -168,22 +169,28 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
-            # Stop accepting queued work, let running jobs finish within the grace period
-            # (heartbeats continue meanwhile), then interrupt whatever is left.
+            # One shutdown budget (JOB_SHUTDOWN_GRACE_SECONDS) for running jobs and guest imports,
+            # waited for together (heartbeats continue meanwhile); then whatever is left is
+            # stopped: jobs interrupted, guest imports cancelled and given back.
+            deadline = time.monotonic() + services.settings.job_shutdown_grace_seconds
             services.executor.shutdown()
             if services.youtube_import is not None:
                 # Imports waiting for the provider or a request slot stop instead of outliving us.
                 services.youtube_import.close()
+            draining = [drain_running_jobs(services, deadline)]
             if services.guest_imports is not None:
-                # Guest imports end (cancelled) and give their place back before the database
-                # goes away; whatever is left is released by the next instance's recovery.
-                await services.guest_imports.wait_idle(services.settings.job_shutdown_grace_seconds)
-            await drain_running_jobs(services)
+                draining.append(services.guest_imports.wait_until(deadline))
+            await asyncio.gather(*draining)
             if services.speech_limiter is not None:
                 # Jobs still waiting for a speech request slot stop instead of outliving us.
                 services.speech_limiter.close()
             # Running FFmpeg processes are killed instead of outliving the server.
             services.audio.close()
+            if services.guest_imports is not None:
+                # Imports still running (e.g. a stalled provider read) are cancelled; none of
+                # them touches the database afterwards, and their places are given back here,
+                # before the engine is disposed (or by the next instance's recovery).
+                await services.guest_imports.stop()
             liveness_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await liveness_task

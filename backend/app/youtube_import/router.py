@@ -7,7 +7,12 @@ from app.db import session_scope
 from app.dependencies import get_db, get_services, require_job_csrf
 from app.errors import ApiError, not_authenticated
 from app.guest.access import GuestAccess
-from app.guest.imports import GuestImportQuotaExceeded, ImportNotRecorded, reserve_import
+from app.guest.imports import (
+    GuestImportQuotaExceeded,
+    ImportNotRecorded,
+    ImportsStopped,
+    reserve_import,
+)
 from app.guest.router import network_unknown
 from app.guest.service import GuestSessionGone
 from app.services import AppServices
@@ -96,6 +101,9 @@ async def _guest_import(
         raise not_authenticated() from None
     except ImportNotRecorded:
         raise _failure(ImportFailure("youtube_import_not_recorded")) from None
+    except ImportsStopped:
+        # Application shutdown (not the client): stopped, and its place given back.
+        raise _failure(ImportFailure("youtube_import_cancelled")) from None
 
 
 def _failure(exc: ImportFailure) -> ApiError:

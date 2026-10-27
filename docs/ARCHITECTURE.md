@@ -200,9 +200,11 @@ of an old and a new instance during a zero-downtime deploy is supported:
   `interrupted`. Jobs still running on another live instance are left alone. Rows written
   before heartbeats existed fall back to `updated_at`. Jobs are **never re-run
   automatically** because provider call outcomes are unknown; the user resubmits.
-- **Graceful shutdown** (SIGTERM): queued work is cancelled, running jobs get up to
-  `JOB_SHUTDOWN_GRACE_SECONDS` to finish (heartbeats continue meanwhile), and whatever this
-  process accepted but did not finish is marked `interrupted`. Keep the grace period below
+- **Graceful shutdown** (SIGTERM): queued work is cancelled, running jobs and running guest
+  YouTube imports share one budget of `JOB_SHUTDOWN_GRACE_SECONDS` and are waited for together
+  (heartbeats continue meanwhile); then whatever this process accepted but did not finish is
+  marked `interrupted`, and the imports still running are cancelled, kept away from the database
+  and given back before the engine is disposed ([GUEST_ACCESS.md](GUEST_ACCESS.md#youtube-import-quota)). Keep the grace period below
   the host's kill delay (Render: `maxShutdownDelaySeconds`, fixed at the default 30 s on the
   Free plan).
 - After a hard crash, the crashed process's jobs are failed by the next live instance within

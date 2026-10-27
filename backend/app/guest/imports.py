@@ -23,6 +23,11 @@ up a job and a job never uses up an import.
    (startup recovery and the liveness loop) releases only rows whose heartbeat is stale, or that
    have been reserved longer than any import can take: an operation still running on another
    live instance (overlapping deploy) keeps its place. Recovery never calls the provider again.
+4. Application shutdown is not a client going away. Running imports get the shutdown budget that
+   jobs also use (`wait_until`, one deadline); then `stop` cancels what is left (a stalled
+   provider read included), lets no cancelled import touch the database again, waits for any
+   statement already running, and gives the stopped imports' places back in one statement before
+   the engine is disposed. If that last statement fails, recovery releases them later.
 
 Releasing a place gives the guest's MyDubb quota back; it does not give back what the provider
 charged (a Supadata request that failed or timed out may still have cost a credit).
@@ -33,6 +38,7 @@ charged (a Supadata request that failed or timed out may still have cost a credi
 import asyncio
 import logging
 import threading
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
@@ -74,6 +80,15 @@ class GuestImportQuotaExceeded(Exception):
 class ImportNotRecorded(Exception):
     """A successful import could not be recorded as used (its place was already released, or
     the database failed), so it must not be reported as a success."""
+
+
+class ImportsStopped(Exception):
+    """The application is shutting down: the import was stopped (or refused) by the runner."""
+
+
+# How long `stop` waits for cancelled imports to end and for database statements that were
+# already running (single-row updates, normally milliseconds). Not a drain: nothing new starts.
+_STOP_WAIT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -245,6 +260,23 @@ def heartbeat_imports(db: Session, runner_id: str, operation_ids: Collection[uui
     return result.rowcount or 0  # type: ignore[attr-defined]
 
 
+def release_imports(db: Session, operation_ids: Collection[uuid.UUID]) -> int:
+    """Give back the places of these imports if they are still reserved (shutdown of the
+    instance running them). Rows already settled are not touched."""
+    if not operation_ids:
+        return 0
+    result = db.execute(
+        update(GuestImportQuota)
+        .where(
+            GuestImportQuota.id.in_(list(operation_ids)),
+            GuestImportQuota.state == QuotaState.RESERVED.value,
+        )
+        .values(state=QuotaState.RELEASED.value, settled_at=func.clock_timestamp())
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0  # type: ignore[attr-defined]
+
+
 def release_stale_imports(db: Session, *, stale_after_seconds: int, max_age_seconds: float) -> int:
     """Release reserved imports whose worker is gone: the heartbeat is stale (the instance
     stopped or crashed), or the import has been reserved longer than any import can run (its
@@ -269,14 +301,20 @@ class GuestImportRunner:
     """Runs reserved guest imports to their single settlement, whatever happens to the request.
 
     `running_ids` is what the liveness loop heartbeats. Tasks are referenced here until they end,
-    so a request that goes away never lets its import be garbage-collected half way.
+    so a request that goes away never lets its import be garbage-collected half way. Every
+    database statement of an import goes through `_db`, which counts it while its thread runs and
+    refuses new ones once `stop` has begun, so shutdown knows when the database is no longer used.
     """
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
         self._lock = threading.Lock()
+        self._db_idle = threading.Condition(self._lock)
         self._running: set[uuid.UUID] = set()
         self._tasks: set[asyncio.Task] = set()
+        self._db_calls = 0
+        # Set by `stop` (application shutdown): no import may start database work any more.
+        self._stopping = False
 
     def running_ids(self) -> list[uuid.UUID]:
         with self._lock:
@@ -295,7 +333,9 @@ class GuestImportRunner:
 
         Everything runs in a task of its own and the caller awaits a shield: cancelling the
         caller (a disconnected client) leaves the operation running to its end, and a success is
-        still charged. An error of `reserve` (quota exceeded, session gone) wrote nothing.
+        still charged. Only `stop` (application shutdown) cancels the operation itself, which
+        then ends with ImportsStopped. An error of `reserve` (quota exceeded, session gone) wrote
+        nothing.
         """
         task = asyncio.create_task(self._run(reserve, work))
         self._tasks.add(task)
@@ -310,14 +350,82 @@ class GuestImportRunner:
         if not task.cancelled():
             task.exception()
 
-    async def wait_idle(self, timeout: float) -> None:
-        """Shutdown: let running imports settle (they stop early once the provider is closed)."""
+    async def wait_until(self, deadline: float) -> None:
+        """Shutdown: let running imports end until `deadline` (time.monotonic), the budget shared
+        with running jobs. Heartbeats continue meanwhile."""
         tasks = list(self._tasks)
+        remaining = deadline - time.monotonic()
+        if tasks and remaining > 0:
+            await asyncio.wait(tasks, timeout=remaining)
+
+    async def stop(self) -> int:
+        """Shutdown, after `wait_until`: cancel the imports still running, make sure none of them
+        uses the database afterwards, and give their places back. Returns how many were stopped.
+        """
+        with self._lock:
+            self._stopping = True
+            stopped_ids = list(self._running)
+        tasks = [task for task in self._tasks if not task.done()]
+        for task in tasks:
+            task.cancel()
         if tasks:
-            await asyncio.wait(tasks, timeout=timeout)
+            await asyncio.wait(tasks, timeout=_STOP_WAIT_SECONDS)
+        # A statement already running in a thread (cancelling its awaiter does not stop it).
+        if not await asyncio.to_thread(self._wait_db_idle, _STOP_WAIT_SECONDS):
+            logger.warning("A guest import database statement was still running at shutdown")
+        if stopped_ids or tasks:
+            logger.warning(
+                "Stopped %d guest import(s) at shutdown", max(len(stopped_ids), len(tasks))
+            )
+        if stopped_ids:
+            try:
+                await asyncio.to_thread(self._release, stopped_ids)
+            except Exception:
+                logger.warning("Could not release stopped guest imports; recovery will")
+        return len(tasks)
+
+    def _wait_db_idle(self, timeout: float) -> bool:
+        with self._db_idle:
+            return self._db_idle.wait_for(lambda: self._db_calls == 0, timeout)
+
+    def _release(self, operation_ids: list[uuid.UUID]) -> None:
+        with session_scope(self._session_factory) as db:
+            release_imports(db, operation_ids)
+
+    async def _db(self, fn: Callable[..., T], *args: object) -> T:
+        """Run one database step of an import in a thread, unless shutdown has begun."""
+        if self._stopping:
+            raise ImportsStopped
+        return await asyncio.to_thread(self._counted, fn, *args)
+
+    def _counted(self, fn: Callable[..., T], *args: object) -> T:
+        # Counted in the thread itself: it stays counted while it runs even if its awaiter is
+        # cancelled.
+        with self._lock:
+            if self._stopping:
+                raise ImportsStopped
+            self._db_calls += 1
+        try:
+            return fn(*args)
+        finally:
+            with self._db_idle:
+                self._db_calls -= 1
+                self._db_idle.notify_all()
 
     async def _run(self, reserve: Callable[[], uuid.UUID], work: Callable[[], Awaitable[T]]) -> T:
-        operation_id = await asyncio.to_thread(reserve)
+        try:
+            return await self._operation(reserve, work)
+        except asyncio.CancelledError:
+            # Only `stop` cancels an operation (a client going away cancels the shielded caller,
+            # never this task): report it as stopped, not as a cancelled request.
+            if self._stopping:
+                raise ImportsStopped from None
+            raise
+
+    async def _operation(
+        self, reserve: Callable[[], uuid.UUID], work: Callable[[], Awaitable[T]]
+    ) -> T:
+        operation_id = await self._db(reserve)
         with self._lock:
             self._running.add(operation_id)
         try:
@@ -327,7 +435,9 @@ class GuestImportRunner:
                 await self._settle_failure(operation_id)
                 raise
             try:
-                recorded = await asyncio.to_thread(self._settle, operation_id, True)
+                recorded = await self._db(self._settle, operation_id, True)
+            except ImportsStopped:
+                raise
             except Exception:
                 logger.exception("Could not record a successful guest import")
                 recorded = False
@@ -342,7 +452,9 @@ class GuestImportRunner:
 
     async def _settle_failure(self, operation_id: uuid.UUID) -> None:
         try:
-            await asyncio.to_thread(self._settle, operation_id, False)
+            await self._db(self._settle, operation_id, False)
+        except ImportsStopped:
+            pass  # shutdown: `stop` gives the place back
         except BaseException:
             # The row stays reserved; recovery releases it once its heartbeat is stale.
             logger.warning("Could not release a failed guest import; recovery will")

@@ -124,9 +124,19 @@ release a reserved import whose heartbeat is older than `JOB_STALE_AFTER_SECONDS
 stopped or crashed), or that has been reserved longer than any import can run
 (`SUPADATA_DEADLINE_SECONDS + JOB_STALE_AFTER_SECONDS`): a reservation is never held forever, and
 an import still running on another live instance (overlapping deploy) keeps its place. Recovery
-never calls Supadata again to recover a result. At shutdown, running imports are stopped (the
-provider is closed) and given back within `JOB_SHUTDOWN_GRACE_SECONDS`; anything left is released
-by the next instance's recovery.
+never calls Supadata again to recover a result.
+
+**Application shutdown** is not a client going away. Running imports and running dubbing jobs
+share **one** budget, `JOB_SHUTDOWN_GRACE_SECONDS` from the start of shutdown, and are waited for
+together (heartbeats continue meanwhile); the provider is closed first, so imports waiting for a
+request slot or between polls end at once (released). When the budget is used up, the imports
+still running (for example a provider read that has stalled) are cancelled and answered
+`503 youtube_import_cancelled`; from then on no import starts a database statement, shutdown waits
+(at most a few seconds) for a statement already running in a thread, and then gives the stopped
+imports' places back in one statement, before the database engine is disposed. Their admission
+slots are freed with them. If that last statement fails, the rows stay `reserved` without a
+heartbeat and the next instance's recovery releases them. Imports of other instances are never
+touched (only this instance's stopped operations, and only while still `reserved`).
 
 ## Guest session and cookie
 

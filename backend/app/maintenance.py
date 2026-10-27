@@ -70,9 +70,9 @@ async def job_liveness_loop(services: AppServices) -> None:
             logger.exception("Job liveness check failed")
 
 
-async def drain_running_jobs(services: AppServices) -> None:
-    """Wait up to the configured grace period for running jobs to finish."""
-    deadline = time.monotonic() + services.settings.job_shutdown_grace_seconds
+async def drain_running_jobs(services: AppServices, deadline: float) -> None:
+    """Wait until `deadline` (time.monotonic) for running jobs to finish. The deadline is the
+    one shutdown budget shared with guest imports (main.py), never a grace period of its own."""
     running = services.pipeline.running_job_ids()
     if running:
         logger.info("Waiting for %d running job(s) to finish before shutdown", len(running))
