@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -37,6 +37,7 @@ const GUEST_META = {
     jobs_per_ip: 20,
     ip_window_seconds: 86400,
     max_words: 1000,
+    max_output_seconds: 600,
     session_ttl_seconds: 86400,
   },
 };
@@ -53,6 +54,7 @@ const quota = (overrides: Record<string, unknown> = {}) => ({
   ip_window_seconds: 86400,
   ip_retry_after_seconds: null,
   max_words: 1000,
+  max_output_seconds: 600,
   ...overrides,
 });
 const guestBody = (overrides: Record<string, unknown> = {}, id = "g-1", csrf = "guest-csrf") => ({
@@ -130,7 +132,9 @@ describe("Try as guest on the sign-in screen", () => {
     release();
 
     const banner = await screen.findByRole("region", { name: "Guest mode" });
-    expect(within(banner).getByText(/5 jobs left · up to 1,000 words per job/)).toBeTruthy();
+    expect(within(banner).getByText(
+        /5 jobs left · up to 1,000 words and 10 minutes of audio per job/,
+      )).toBeTruthy();
     expect(screen.getByText("Guest")).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "YouTube URL" })).toBeNull();
     expect(screen.queryByText("YouTube URL")).toBeNull();
@@ -351,5 +355,207 @@ describe("identity changes never mix drafts or access", () => {
       "Leaving guest mode failed; your guest session is still active.",
     );
     expect(screen.getByRole("region", { name: "Guest mode" })).toBeTruthy();
+  });
+});
+
+// A response the test releases when it chooses, to reproduce answers that arrive late.
+function deferred() {
+  let release: (response: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => (release = resolve));
+  const handler = () => promise;
+  return { handler, release: (response: Response) => act(async () => release(response)) };
+}
+
+const QUEUED = { ...JOB, status: "queued", error: null };
+
+async function signInAccount(user: User) {
+  await user.type(await screen.findByLabelText("Email", { selector: "input" }), "x@example.com");
+  await user.type(screen.getByLabelText("Password", { selector: "input" }), "pw-123456");
+  await user.click(button("Sign in"));
+  await screen.findByRole("button", { name: "Sign out" });
+}
+
+describe("guest audio length limit", () => {
+  it("previews the limit and warns when baseline / speed is over it, without blocking", async () => {
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession()],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    expect(screen.getByText(/Guest audio can be at most 00:10:00 long\./)).toBeTruthy();
+    // 5 minutes at 0.5x is exactly 10 minutes: allowed.
+    await user.type(screen.getByLabelText("First Sentence Start Time"), "000000");
+    await user.type(screen.getByLabelText("Last Sentence Start Time"), "000500");
+    await user.click(screen.getByRole("radio", { name: "0.5x" }));
+    expect(screen.queryByText(/Choose a shorter stretch/)).toBeNull();
+    // One second more is over it.
+    await user.clear(screen.getByLabelText("Last Sentence Start Time"));
+    await user.type(screen.getByLabelText("Last Sentence Start Time"), "000501");
+    expect(screen.getByText(/Choose a shorter stretch/)).toBeTruthy();
+    expect(button("Generate audio")).toHaveProperty("disabled", false);
+  });
+
+  it("shows the server's refusal on the time field and keeps what was typed", async () => {
+    const message = "Guest audio can be at most 10:00 long; this job would make 10:02.";
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession()],
+      "POST /api/jobs": [
+        () =>
+          json(422, {
+            error: {
+              code: "guest_duration_limit_exceeded",
+              message,
+              fields: [{ field: "last_sentence_start", message }],
+            },
+          }),
+      ],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    await waitFor(() => expect(screen.getAllByText(message).length).toBeGreaterThan(0));
+    expect((screen.getByLabelText("Last Sentence Start Time") as HTMLInputElement).value).toBe(
+      "00:00:25",
+    );
+  });
+
+  it("is not shown to accounts", async () => {
+    setup({ "GET /api/auth/me": [meResponse()] });
+    await screen.findByRole("button", { name: "Sign out" });
+    expect(screen.queryByText(/Guest audio can be at most/)).toBeNull();
+  });
+});
+
+describe("late answers never act on a newer identity", () => {
+  it("a late 401 of a guest quota refresh does not sign out the account that signed in", async () => {
+    const refresh = deferred();
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession(), refresh.handler],
+      "POST /api/jobs": [() => json(202, QUEUED)],
+      "GET /api/jobs/job-1": [always(() => json(200, QUEUED))],
+      "DELETE /api/guest/session": [noContent],
+      "POST /api/auth/login": [authenticated()],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    await waitFor(() => expect(fake.to("/api/guest/session")).toHaveLength(2));
+    await user.click(button("Leave guest mode"));
+    await signInAccount(user);
+
+    await refresh.release(notAuthenticated());
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(screen.queryByText(/session has ended/)).toBeNull();
+    expect(screen.queryByRole("region", { name: "Guest mode" })).toBeNull();
+  });
+
+  it("a late quota of the previous guest session does not replace the new one", async () => {
+    const refresh = deferred();
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession(), refresh.handler],
+      "POST /api/jobs": [() => json(202, QUEUED)],
+      "GET /api/jobs/job-1": [always(() => json(200, QUEUED))],
+      "DELETE /api/guest/session": [noContent],
+      "POST /api/guest/session": [() => json(201, guestBody({}, "g-2", "csrf-2"))],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    await waitFor(() => expect(fake.to("/api/guest/session")).toHaveLength(2));
+    await user.click(button("Leave guest mode"));
+    await user.click(await screen.findByRole("button", { name: "Try as guest" }));
+    await screen.findByText(/5 jobs left/);
+
+    await refresh.release(
+      json(200, guestBody({ session_used: 4, session_remaining: 1 }, "g-1", "guest-csrf")),
+    );
+    expect(screen.getByText(/5 jobs left/)).toBeTruthy();
+    expect(screen.queryByText(/1 job left/)).toBeNull();
+  });
+
+  it("a late 401 of a guest job submission does not sign out the account", async () => {
+    const create = deferred();
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession()],
+      "POST /api/jobs": [create.handler],
+      "DELETE /api/guest/session": [noContent],
+      "POST /api/auth/login": [authenticated()],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    await user.click(button("Leave guest mode"));
+    await signInAccount(user);
+
+    await create.release(notAuthenticated());
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(screen.queryByText(/session has ended/)).toBeNull();
+  });
+
+  it("a late success of a guest job submission shows no job to the account", async () => {
+    const create = deferred();
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession()],
+      "POST /api/jobs": [create.handler],
+      "DELETE /api/guest/session": [noContent],
+      "POST /api/auth/login": [authenticated()],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    await user.click(button("Leave guest mode"));
+    await signInAccount(user);
+
+    await create.release(json(202, QUEUED));
+    // No job panel (and no polling of the guest's job, which the stub would flag as unexpected).
+    expect(screen.queryByRole("heading", { name: /Creating your audio/ })).toBeNull();
+    expect(fake.requests.some((r) => r.path === "/api/jobs/job-1")).toBe(false);
+  });
+
+  it("a late answer to leaving guest mode does not sign out an account that signed in", async () => {
+    const poll = deferred();
+    const leave = deferred();
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [guestSession(), guestSession()],
+      "POST /api/jobs": [() => json(202, QUEUED)],
+      "GET /api/jobs/job-1": [poll.handler],
+      "DELETE /api/guest/session": [leave.handler],
+      "POST /api/auth/login": [authenticated()],
+    });
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    await waitFor(() => expect(fake.to("/api/jobs/job-1")).toHaveLength(1));
+    await user.click(button("Leave guest mode"));
+    // Meanwhile the guest session ends on the server: the job poll answers 401.
+    await poll.release(notAuthenticated());
+    await signInAccount(user);
+
+    await leave.release(noContent());
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Try as guest" })).toBeNull();
+  });
+
+  it("signing in waits while a guest session is being started", async () => {
+    const start = deferred();
+    const { user } = setup({
+      "GET /api/auth/me": [notAuthenticated],
+      "GET /api/guest/session": [notAuthenticated],
+      "POST /api/guest/session": [start.handler],
+    });
+    await user.type(await screen.findByLabelText("Email", { selector: "input" }), "x@example.com");
+    await user.type(screen.getByLabelText("Password", { selector: "input" }), "pw-123456");
+    await user.click(button("Try as guest"));
+    expect(button("Sign in")).toHaveProperty("disabled", true);
+    expect(screen.getByLabelText("Email", { selector: "input" })).toHaveProperty("disabled", true);
+    await start.release(json(201, guestBody()));
+    await screen.findByRole("region", { name: "Guest mode" });
+    expect(fake.requests.some((r) => r.path === "/api/auth/login")).toBe(false);
   });
 });

@@ -56,6 +56,8 @@ class QuotaOut(BaseModel):
     # When the network gets a place back, if it has none left now (null otherwise or unknown).
     ip_retry_after_seconds: int | None
     max_words: int
+    # Longest audio of a guest job (baseline / speed), in seconds.
+    max_output_seconds: int
 
     @classmethod
     def build(cls, status_: QuotaStatus, guest: GuestAccess) -> "QuotaOut":
@@ -71,6 +73,7 @@ class QuotaOut(BaseModel):
             ip_window_seconds=guest.policy.ip_window_seconds,
             ip_retry_after_seconds=status_.ip_retry_after_seconds,
             max_words=guest.policy.max_words,
+            max_output_seconds=guest.policy.max_output_seconds,
         )
 
 

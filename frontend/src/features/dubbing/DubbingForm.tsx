@@ -39,6 +39,7 @@ interface Props {
 
 export interface GuestLimits {
   maxWords: number;
+  maxOutputSeconds: number;
   // A quota answer (429) came back: the caller refreshes the remaining jobs.
   onQuotaExhausted: () => void;
   onSignIn: () => void;
@@ -321,7 +322,11 @@ export function DubbingForm({
       <aside className="panel panel-sand" aria-label="Voice and speed settings">
         <VoiceField voices={voices} value={voice} onChange={setVoice} error={fieldErrors.voice} />
         <SpeedField value={speed} onChange={setSpeed} error={fieldErrors.speed} />
-        <LengthSummary baselineSeconds={preview} speed={speed} />
+        <LengthSummary
+          baselineSeconds={preview}
+          speed={speed}
+          maxOutputSeconds={guest?.maxOutputSeconds}
+        />
 
         {formError && (
           <p className="error" role="alert">

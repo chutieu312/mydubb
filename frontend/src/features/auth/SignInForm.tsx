@@ -18,15 +18,20 @@ export interface GuestOffer {
   onTry: () => Promise<string | null>;
   jobsPerSession: number;
   maxWords: number;
+  maxOutputSeconds: number;
 }
 
 export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest }: Props) {
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
-  const { pending, failure, run } = useSubmit();
+  const { pending: signingIn, failure, run } = useSubmit();
+  // While a guest session is being started, the sign-in form waits (and the other way round).
+  const [guestPending, setGuestPending] = useState(false);
+  const pending = signingIn || guestPending;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (pending) return;
     const outcome = await run(() => onSubmit(email.trim(), password));
     // The password is not needed once the attempt ended, except to retry after a failure that
     // says nothing about it (network, server error).
@@ -57,7 +62,7 @@ export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest }: 
         className="button primary wide"
         disabled={pending || email.trim() === "" || password === ""}
       >
-        {pending ? "Signing in…" : "Sign in"}
+        {signingIn ? "Signing in…" : "Sign in"}
       </button>
       {onForgotPassword && (
         <button
@@ -70,7 +75,9 @@ export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest }: 
         </button>
       )}
       <p className="muted small">Access is currently by invitation only.</p>
-      {guest && <GuestEntry {...guest} disabled={pending} />}
+      {guest && (
+        <GuestEntry {...guest} disabled={signingIn} onPendingChange={setGuestPending} />
+      )}
     </form>
   );
 }

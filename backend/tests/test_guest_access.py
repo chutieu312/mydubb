@@ -23,6 +23,7 @@ from app.guest.client_ip import network_key, network_of
 from app.guest.service import GuestPolicy, GuestQuotaExceeded
 from app.jobs import service as job_service
 from app.jobs.models import JobStatus
+from app.transcript.timestamps import format_seconds
 from tests.conftest import (
     COGNITO_SETTINGS,
     TEST_ENCRYPTION_KEY,
@@ -121,6 +122,7 @@ def test_meta_reports_the_limits(guest_client):
         "jobs_per_ip": 20,
         "ip_window_seconds": 86400,
         "max_words": 1000,
+        "max_output_seconds": 600,
         "session_ttl_seconds": 86400,
     }
 
@@ -155,6 +157,7 @@ def test_starting_a_guest_session_sets_a_secure_cookie_and_stores_only_hashes(
     assert body["status"] == "guest" and body["csrf_token"]
     assert body["quota"]["session_remaining"] == 5 and body["quota"]["ip_remaining"] == 20
     assert body["quota"]["max_words"] == 1000
+    assert body["quota"]["max_output_seconds"] == 600
     raw = response.headers["set-cookie"]
     cookie = raw.lower()
     assert cookie.startswith(f"{GUEST_COOKIE}=")
@@ -357,6 +360,105 @@ def test_word_limit_counts_the_text_to_translate(guest_client, db_engine):
     assert run_guest_job(guest_client, csrf, transcript=plain)["status"] == "completed"
 
 
+# -- output duration limit -------------------------------------------------------------------
+
+# Baselines (seconds) that give exactly 600 s of audio at each speed: baseline = 600 x speed.
+AT_LIMIT = {0.5: 300, 0.75: 450, 1: 600, 1.25: 750, 1.5: 900, 1.75: 1050, 2: 1200}
+
+
+def times(baseline: int) -> dict:
+    return {"first_sentence_start": "00:00:00", "last_sentence_start": format_seconds(baseline)}
+
+
+@pytest.mark.parametrize("speed", list(AT_LIMIT))
+def test_output_duration_limit_at_every_speed(make_guest_client, db_engine, speed):
+    client = make_guest_client()
+    csrf = start_guest(client)["csrf_token"]
+    baseline = AT_LIMIT[speed]
+
+    over = guest_job(client, csrf, speed=speed, **times(baseline + 1))
+    assert over.status_code == 422, over.text
+    error = over.json()["error"]
+    assert error["code"] == "guest_duration_limit_exceeded"
+    assert error["max_output_seconds"] == 600 and error["baseline_seconds"] == baseline + 1
+    assert error["output_seconds"] == pytest.approx((baseline + 1) / speed)
+    assert error["output_seconds"] > 600 and error["speed"] == speed
+    assert error["fields"][0]["field"] == "last_sentence_start"
+    assert "10:00" in error["message"]
+    assert quota_rows(db_engine) == []
+
+    at = guest_job(client, csrf, speed=speed, **times(baseline))
+    assert at.status_code == 202, at.text
+    job = wait_for_terminal(client, at.json()["id"])
+    # The timestamps were taken as sent, never adjusted.
+    assert job["baseline_duration_seconds"] == baseline
+    assert job["output_duration_seconds"] == 600
+
+
+def test_five_minutes_at_half_speed_is_the_limit(guest_client):
+    csrf = start_guest(guest_client)["csrf_token"]
+    at = guest_job(
+        guest_client,
+        csrf,
+        speed=0.5,
+        first_sentence_start="00:01:00",
+        last_sentence_start="00:06:00",
+    )
+    assert at.status_code == 202
+    over = guest_job(
+        guest_client,
+        csrf,
+        speed=0.5,
+        first_sentence_start="00:01:00",
+        last_sentence_start="00:06:01",
+    )
+    assert over.json()["error"]["code"] == "guest_duration_limit_exceeded"
+    assert over.json()["error"]["output_seconds"] == 602
+
+
+def test_a_short_transcript_with_a_ten_hour_baseline_is_refused_before_anything(
+    make_guest_client, db_engine
+):
+    # The review case: two words, 10 h baseline at 1x passes validation and the word limit.
+    client = make_guest_client(job_max_concurrency=1, job_max_queued=0)
+    csrf = start_guest(client)["csrf_token"]
+    response = guest_job(
+        client,
+        csrf,
+        transcript="Hello world.",
+        first_sentence_start="00:00:00",
+        last_sentence_start="10:00:00",
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "guest_duration_limit_exceeded"
+    # No job, no quota place, and the only executor slot is still free.
+    with db_engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 0
+    assert quota_rows(db_engine) == []
+    assert run_guest_job(client, csrf)["status"] == "completed"
+    # Also refused before the network check: a request without the header gets the 422.
+    no_ip = client.post(
+        "/api/jobs",
+        json={**VALID_JOB, "last_sentence_start": "10:00:00"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert no_ip.json()["error"]["code"] == "guest_duration_limit_exceeded"
+
+
+def test_accounts_keep_long_audio(guest_client, fake_cognito, db_engine):
+    fake_cognito.add_user(EMAIL, PASSWORD)
+    csrf = sign_in(guest_client, EMAIL, PASSWORD)["csrf_token"]
+    response = guest_client.post(
+        "/api/jobs",
+        json={**VALID_JOB, "first_sentence_start": "00:00:00", "last_sentence_start": "10:00:00"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert response.status_code == 202
+    assert response.json()["output_duration_seconds"] == 36000
+    wait_for_terminal(guest_client, response.json()["id"])
+    assert quota_rows(db_engine) == []
+
+
 def test_validation_errors_and_a_full_server_use_up_nothing(make_guest_client, db_engine):
     client = make_guest_client(
         job_max_concurrency=1, job_max_queued=0, mock_stage_delay_seconds=1.0
@@ -467,6 +569,7 @@ POLICY = GuestPolicy(
     jobs_per_ip=20,
     ip_window_seconds=86400,
     max_words=1000,
+    max_output_seconds=600,
     sessions_per_ip=1000,
     sessions_global=1000,
     session_rate_window_seconds=3600,

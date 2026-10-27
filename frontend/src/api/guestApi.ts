@@ -18,6 +18,8 @@ export interface GuestQuota {
   ip_window_seconds: number;
   ip_retry_after_seconds: number | null;
   max_words: number;
+  // Longest audio a guest job may produce (baseline / speed), in seconds.
+  max_output_seconds: number;
 }
 
 export interface GuestSession {
@@ -45,7 +47,8 @@ function isQuota(value: unknown): value is GuestQuota {
       isCountOrNull(value[key]),
     ) &&
     isCount(value.ip_window_seconds) &&
-    isCount(value.max_words)
+    isCount(value.max_words) &&
+    isCount(value.max_output_seconds)
   );
 }
 

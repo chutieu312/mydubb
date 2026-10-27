@@ -48,6 +48,7 @@ class GuestPolicy:
     jobs_per_ip: int
     ip_window_seconds: int
     max_words: int
+    max_output_seconds: int
     sessions_per_ip: int
     sessions_global: int
     session_rate_window_seconds: int
@@ -60,6 +61,7 @@ class GuestPolicy:
             jobs_per_ip=settings.guest_jobs_per_ip,
             ip_window_seconds=settings.guest_ip_window_seconds,
             max_words=settings.guest_max_words,
+            max_output_seconds=settings.guest_max_output_seconds,
             sessions_per_ip=settings.guest_sessions_per_ip,
             sessions_global=settings.guest_sessions_global,
             session_rate_window_seconds=settings.guest_session_rate_window_seconds,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { authApi } from "./api/authApi";
 import type { AuthUser } from "./api/authTypes";
@@ -34,8 +34,8 @@ const GUEST_START_REFUSALS = new Set([
 ]);
 
 type Restored =
-  | { kind: "user"; user: AuthUser | null }
-  | { kind: "guest"; guest: GuestSession };
+  | { kind: "user"; user: AuthUser | null; csrf: string }
+  | { kind: "guest"; guest: GuestSession; csrf: string };
 
 // Drafts are kept per identity: a guest's draft never appears for an account, nor the reverse.
 const guestOwner = (guest: GuestSession) => `guest:${guest.guest.id}`;
@@ -55,6 +55,23 @@ export function App() {
   const logoutPending = useRef(false);
   const [theme, toggleTheme] = useTheme();
   const [drafts] = useState(createDraftKeeper);
+
+  // Identity generation. Every change of who is using the page (session restored, sign in, sign
+  // out, session ended, guest session started) starts a new one. The answer to a request sent
+  // under an older generation, success or error, is ignored: a late 401 of a guest request must
+  // not sign out the account that signed in since, and a late guest quota must not replace the
+  // quota of a newer guest session. `identity` mirrors it in state so the callbacks handed to
+  // child components are bound to the generation they were rendered for.
+  const generation = useRef(0);
+  const [identity, setIdentity] = useState(0);
+  const nextIdentity = useCallback(() => {
+    generation.current += 1;
+    setIdentity(generation.current);
+    // A sign out still in flight belongs to the previous identity.
+    logoutPending.current = false;
+    setLoggingOut(false);
+  }, []);
+  const isCurrent = useCallback((gen: number) => generation.current === gen, []);
 
   const mode = authModeOf(meta);
   const guestEnabled = guestAccessOf(meta);
@@ -79,26 +96,28 @@ export function App() {
   useEffect(() => {
     if (mode === null) return;
     let active = true;
+    const gen = generation.current;
+    const current = () => active && isCurrent(gen);
     const restore = async (): Promise<Restored> => {
       if (mode === "cognito") {
         try {
           const session = await authApi.me();
-          setCsrfToken(session.csrf_token);
-          return { kind: "user", user: session.user };
+          return { kind: "user", user: session.user, csrf: session.csrf_token };
         } catch (err) {
           if (!(guestEnabled && err instanceof ApiError && err.isUnauthenticated)) throw err;
         }
-        const current = await guestApi.get();
-        setCsrfToken(current.csrf_token);
-        return { kind: "guest", guest: current };
+        const found = await guestApi.get();
+        return { kind: "guest", guest: found, csrf: found.csrf_token };
       }
       const session = await api.getSession();
-      setCsrfToken(session.csrf_token);
-      return { kind: "user", user: null };
+      return { kind: "user", user: null, csrf: session.csrf_token };
     };
     restore()
       .then((restored) => {
-        if (!active) return;
+        if (!current()) return;
+        // The CSRF token is kept only once the answer is known to belong to this page state.
+        setCsrfToken(restored.csrf);
+        nextIdentity();
         if (restored.kind === "guest") {
           drafts.reconcile(guestOwner(restored.guest));
           setGuest(restored.guest);
@@ -110,7 +129,7 @@ export function App() {
         setAuth("authenticated");
       })
       .catch((err: unknown) => {
-        if (!active) return;
+        if (!current()) return;
         const signedOut = err instanceof ApiError && err.isUnauthenticated;
         if (mode === "cognito" && !signedOut) {
           // Not "signed out": the server could not be asked, so do not pretend either way.
@@ -122,7 +141,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [mode, guestEnabled, drafts, attempt]);
+  }, [mode, guestEnabled, drafts, attempt, isCurrent, nextIdentity]);
 
   const retry = () => {
     setLoadError(null);
@@ -131,10 +150,12 @@ export function App() {
     setAttempt((n) => n + 1);
   };
 
-  // The session ended on the server's side (a 401 on a request). The unsent form stays in page
-  // memory; it comes back only if the same user (or the same guest session) signs in again.
-  const handleSessionExpired = useCallback(() => {
+  // The session ended on the server's side (a 401 on a request of the current identity). The
+  // unsent form stays in page memory; it comes back only if the same user (or the same guest
+  // session) signs in again.
+  const expireSession = useCallback(() => {
     const wasGuest = auth === "guest";
+    nextIdentity();
     setCsrfToken(null);
     setJobId(null);
     setUser(null);
@@ -149,22 +170,28 @@ export function App() {
           ? "Your session has expired or ended. Please sign in again."
           : "Your session has expired or ended. Please enter the Access Code again.",
     );
-  }, [mode, auth]);
+  }, [mode, auth, nextIdentity]);
 
   const handleAuthenticated = useCallback(
     (signedIn: AuthUser | null) => {
+      nextIdentity();
       if (signedIn) drafts.reconcile(signedIn.id);
       setSessionNotice(null);
       setGuest(null);
       setUser(signedIn);
       setAuth("authenticated");
     },
-    [drafts],
+    [drafts, nextIdentity],
   );
 
   const startGuest = useCallback(async (): Promise<string | null> => {
+    const gen = generation.current;
     try {
       const started = await guestApi.start();
+      // The page moved on meanwhile (the sign-in form is disabled while this runs, so this is a
+      // safety net): the answer belongs to nobody on screen.
+      if (!isCurrent(gen)) return null;
+      nextIdentity();
       setCsrfToken(started.csrf_token);
       drafts.reconcile(guestOwner(started));
       setSessionNotice(null);
@@ -173,24 +200,55 @@ export function App() {
       setAuth("guest");
       return null;
     } catch (err) {
+      if (!isCurrent(gen)) return null;
       if (!(err instanceof ApiError)) return GUEST_START_FAILED;
       // The client's own "cannot reach the server", or a refusal whose message the server writes
       // for the user. Anything else gets a generic message.
       if (err.status === 0 || GUEST_START_REFUSALS.has(err.code)) return err.message;
       return GUEST_START_FAILED;
     }
-  }, [drafts]);
+  }, [drafts, isCurrent, nextIdentity]);
 
-  // Remaining guest jobs come from the server only; refreshed after each submission and job end.
-  const refreshGuest = useCallback(() => {
-    guestApi
-      .get()
-      .then((current) => setGuest((previous) => (previous ? current : previous)))
-      .catch((err: unknown) => {
-        if (err instanceof ApiError && err.isUnauthenticated) handleSessionExpired();
-        // Otherwise keep the last known numbers; the server still enforces the quota.
-      });
-  }, [handleSessionExpired]);
+  // Remaining guest jobs come from the server only; refreshed after each submission and job end,
+  // and applied only within the generation (and to the guest session) that asked.
+  const refreshGuest = useCallback(
+    (gen: number) => {
+      guestApi
+        .get()
+        .then((current) => {
+          if (!isCurrent(gen)) return;
+          setGuest((previous) =>
+            previous && previous.guest.id === current.guest.id ? current : previous,
+          );
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent(gen)) return;
+          if (err instanceof ApiError && err.isUnauthenticated) expireSession();
+          // Otherwise keep the last known numbers; the server still enforces the quota.
+        });
+    },
+    [isCurrent, expireSession],
+  );
+
+  // Callbacks for child components, bound to the identity they were rendered for: when a request
+  // a component sent before an identity change answers, it cannot act on the new identity.
+  const bound = useMemo(() => {
+    const gen = identity;
+    const guestMode = auth === "guest";
+    return {
+      sessionExpired: () => {
+        if (isCurrent(gen)) expireSession();
+      },
+      jobCreated: (job: Job) => {
+        if (!isCurrent(gen)) return;
+        setJobId(job.id);
+        if (guestMode) refreshGuest(gen);
+      },
+      guestChanged: () => {
+        if (isCurrent(gen)) refreshGuest(gen);
+      },
+    };
+  }, [identity, auth, isCurrent, expireSession, refreshGuest]);
 
   const rememberDraft = useCallback(
     (draft: StudioDraft) => {
@@ -199,16 +257,9 @@ export function App() {
     [draftOwner, drafts],
   );
 
-  const handleJobCreated = useCallback(
-    (job: Job) => {
-      setJobId(job.id);
-      if (auth === "guest") refreshGuest();
-    },
-    [auth, refreshGuest],
-  );
-
   const signedOut = () => {
     // An explicit sign out (or a session the server confirms is gone) discards the draft.
+    nextIdentity();
     drafts.clear();
     setCsrfToken(null);
     setJobId(null);
@@ -222,13 +273,17 @@ export function App() {
     // A ref (not state) blocks a second click before React re-renders the disabled button.
     if (logoutPending.current) return;
     logoutPending.current = true;
+    const gen = generation.current;
+    const leavingGuest = auth === "guest";
     setLoggingOut(true);
     setLogoutError(null);
     try {
-      if (auth === "guest") await guestApi.end();
+      if (leavingGuest) await guestApi.end();
       else await (mode === "cognito" ? authApi.logout() : api.logout());
-      signedOut();
+      // If the session already ended another way, someone else may be signed in by now.
+      if (isCurrent(gen)) signedOut();
     } catch (err) {
+      if (!isCurrent(gen)) return;
       if (err instanceof ApiError && err.isUnauthenticated) {
         // The server confirms there is no valid session any more.
         signedOut();
@@ -238,14 +293,17 @@ export function App() {
         // token, and let the user retry.
         const detail = err instanceof ApiError ? ` ${err.message}` : "";
         setLogoutError(
-          auth === "guest"
+          leavingGuest
             ? `Leaving guest mode failed; your guest session is still active.${detail} Please try again.`
             : `${mode === "cognito" ? "Sign out" : "Logout"} failed; you are still signed in.${detail} Please try again.`,
         );
       }
     } finally {
-      logoutPending.current = false;
-      setLoggingOut(false);
+      // After an identity change the new identity owns this state (reset by nextIdentity).
+      if (isCurrent(gen)) {
+        logoutPending.current = false;
+        setLoggingOut(false);
+      }
     }
   };
 
@@ -299,6 +357,7 @@ export function App() {
                       onTry: startGuest,
                       jobsPerSession: guestLimits?.jobs_per_session ?? 0,
                       maxWords: guestLimits?.max_words ?? 0,
+                      maxOutputSeconds: guestLimits?.max_output_seconds ?? 0,
                     }
                   : undefined
               }
@@ -324,15 +383,16 @@ export function App() {
                 disclosure={azureDisclosureShort(meta.providers)}
                 // YouTube import needs an account; the server refuses guests as well.
                 youtubeImport={auth === "authenticated" && meta.youtube_import?.enabled === true}
-                onJobCreated={handleJobCreated}
-                onSessionExpired={handleSessionExpired}
+                onJobCreated={bound.jobCreated}
+                onSessionExpired={bound.sessionExpired}
                 initialDraft={draftOwner ? drafts.draftFor(draftOwner) : undefined}
                 onDraftChange={draftOwner ? rememberDraft : undefined}
                 guest={
                   auth === "guest" && guest
                     ? {
                         maxWords: guest.quota.max_words,
-                        onQuotaExhausted: refreshGuest,
+                        maxOutputSeconds: guest.quota.max_output_seconds,
+                        onQuotaExhausted: bound.guestChanged,
                         onSignIn: logout,
                       }
                     : undefined
@@ -343,8 +403,8 @@ export function App() {
                   key={jobId}
                   jobId={jobId}
                   voices={meta.voices}
-                  onSessionExpired={handleSessionExpired}
-                  onFinished={auth === "guest" ? refreshGuest : undefined}
+                  onSessionExpired={bound.sessionExpired}
+                  onFinished={auth === "guest" ? bound.guestChanged : undefined}
                 />
               )}
             </>

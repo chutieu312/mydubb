@@ -36,6 +36,7 @@ def _guest_access(services: AppServices) -> dict:
         "jobs_per_ip": policy.jobs_per_ip,
         "ip_window_seconds": policy.ip_window_seconds,
         "max_words": policy.max_words,
+        "max_output_seconds": policy.max_output_seconds,
         "session_ttl_seconds": policy.session_ttl_seconds,
     }
 

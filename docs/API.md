@@ -46,7 +46,7 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, session_ttl_seconds}`; see [Guest access](#guest-access)) |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds}`; see [Guest access](#guest-access)) |
 
 ## Session (Private Beta access)
 
@@ -390,7 +390,8 @@ Guest session body (`POST` and `GET`):
   "quota": {
     "session_limit": 5, "session_used": 1, "session_in_progress": 0, "session_remaining": 4,
     "ip_limit": 20, "ip_used": 3, "ip_in_progress": 1, "ip_remaining": 16,
-    "ip_window_seconds": 86400, "ip_retry_after_seconds": null, "max_words": 1000
+    "ip_window_seconds": 86400, "ip_retry_after_seconds": null, "max_words": 1000,
+    "max_output_seconds": 600
   }
 }
 ```
@@ -428,6 +429,7 @@ checks, in this order, before anything is written:
 | Status | Code | When |
 |---|---|---|
 | `422` | `guest_word_limit_exceeded` | More than `GUEST_MAX_WORDS` words in the text to translate (timestamp lines and markup not counted). Extra: `word_count`, `max_words`, and `fields: [{field: "transcript", …}]` |
+| `422` | `guest_duration_limit_exceeded` | The audio would be longer than `GUEST_MAX_OUTPUT_SECONDS` (default 600 s): baseline (last - first sentence start) / speed, as for the audio target; exactly the limit is accepted (5 minutes at 0.5x). The timestamps are never adjusted. Extra: `output_seconds`, `max_output_seconds`, `baseline_seconds`, `speed`, and `fields: [{field: "last_sentence_start", …}]` |
 | `503` | `guest_network_unknown` | As above |
 | `503` | `server_at_capacity` | As for everyone; nothing is charged |
 | `429` | `guest_session_quota_exhausted` | The guest session has used (or holds) all its jobs. Extra: `limit` |

@@ -37,6 +37,7 @@ export interface AppMeta {
     jobs_per_ip?: number;
     ip_window_seconds?: number;
     max_words?: number;
+    max_output_seconds?: number;
     session_ttl_seconds?: number;
   };
 }

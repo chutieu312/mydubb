@@ -1,4 +1,6 @@
+import math
 import uuid
+from fractions import Fraction
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import FileResponse
@@ -27,7 +29,7 @@ from app.jobs.schemas import (
 )
 from app.services import AppServices
 from app.storage.result_store import StoredResult
-from app.transcript.timestamps import parse_timestamp
+from app.transcript.timestamps import parse_timestamp, target_duration_seconds
 from app.transcript.words import count_words
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -102,6 +104,7 @@ def create_job(
         # Checked before any slot or row: a refused guest request uses up nothing.
         assert guest is not None  # a guest principal exists only with guest access on
         _check_guest_words(body, guest)
+        _check_guest_duration(body, guest)
         ip_key = guest.network_key(request)
         if ip_key is None:
             raise network_unknown()
@@ -191,6 +194,44 @@ def _check_guest_words(body: CreateJobRequest, guest: GuestAccess) -> None:
                 "max_words": limit,
             },
         )
+
+
+def _check_guest_duration(body: CreateJobRequest, guest: GuestAccess) -> None:
+    """The guest audio length limit, on the output length the job would produce (baseline /
+    speed, the same calculation as the audio target). The timestamps are never adjusted."""
+    baseline = target_duration_seconds(
+        parse_timestamp(body.first_sentence_start), parse_timestamp(body.last_sentence_start)
+    )
+    output = DurationTarget(baseline, body.speed).output_seconds
+    limit = guest.policy.max_output_seconds
+    if output <= limit:
+        return
+    message = (
+        f"Guest audio can be at most {_clock(limit)} long; this job would make "
+        f"{_clock(output)} ({_clock(baseline)} between the two start times at "
+        f"{body.speed.label}). Choose a shorter stretch or a faster speed, or sign in with "
+        "your invitation."
+    )
+    raise ApiError(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        "guest_duration_limit_exceeded",
+        message,
+        extra={
+            "fields": [{"field": "last_sentence_start", "message": message}],
+            "output_seconds": float(output),
+            "max_output_seconds": limit,
+            "baseline_seconds": baseline,
+            "speed": body.speed.number,
+        },
+    )
+
+
+def _clock(seconds: int | Fraction) -> str:
+    """12:30 or 1:02:03 (seconds rounded up, so a length just over a limit never reads as it)."""
+    whole = math.ceil(seconds)
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
 def _quota_error(exc: GuestQuotaExceeded, guest: GuestAccess) -> ApiError:

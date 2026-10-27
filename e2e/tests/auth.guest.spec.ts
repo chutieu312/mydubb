@@ -39,7 +39,9 @@ test("a guest creates, plays and downloads audio, and sees the jobs left", async
   await page.getByRole("button", { name: "Try as guest" }).click();
   expect((await started).status()).toBe(201);
 
-  await expect(banner(page)).toContainText("5 jobs left · up to 1,000 words per job");
+  await expect(banner(page)).toContainText(
+    "5 jobs left · up to 1,000 words and 10 minutes of audio per job",
+  );
   await expect(page.getByText("Guest", { exact: true })).toBeVisible();
   // YouTube import is enabled on this stack, but never offered to a guest.
   await expect(page.getByRole("radio", { name: "YouTube URL" })).toHaveCount(0);
@@ -130,6 +132,31 @@ test("guests on one network share its quota; another network is separate", async
   await asClient(page, randomAddress());
   await page.reload();
   await expect(banner(page)).toContainText("5 jobs left");
+});
+
+test("audio longer than 10 minutes is refused before anything runs", async ({ page }) => {
+  await asClient(page);
+  await startGuest(page);
+  await studio(page).fill("Short transcript, long stretch.");
+  const first = page.getByLabel("First Sentence Start Time");
+  const last = page.getByLabel("Last Sentence Start Time");
+  await first.fill("00:00:00");
+  await last.fill("00:05:01");
+  await page.getByRole("radio", { name: "0.5x" }).check();
+  await expect(page.getByText(/Choose a shorter stretch/)).toBeVisible();
+
+  const refused = page.waitForResponse((r) => r.url().endsWith("/api/jobs"));
+  await page.getByRole("button", { name: "Generate audio" }).click();
+  expect((await refused).status()).toBe(422);
+  await expect(page.getByText(/Guest audio can be at most 10:00 long/).first()).toBeVisible();
+  await expect(last).toHaveValue("00:05:01"); // never adjusted
+  await expect(banner(page)).toContainText("5 jobs left");
+
+  // Exactly 10 minutes (5 minutes at 0.5x) is accepted.
+  await last.fill("00:05:00");
+  await page.getByRole("button", { name: "Generate audio" }).click();
+  await expect(page.getByRole("heading", { name: "Your audio" })).toBeVisible({ timeout: 30_000 });
+  await expect(banner(page)).toContainText("4 jobs left");
 });
 
 test("a word count over the limit is refused by the server", async ({ page }) => {

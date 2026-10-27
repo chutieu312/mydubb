@@ -15,7 +15,8 @@ export function GuestBanner({ quota, onSignIn, leaving }: Props) {
     <section className="callout guest-banner" aria-label="Guest mode">
       <p>
         <strong>Guest mode.</strong> {left} {left === 1 ? "job" : "jobs"} left · up to{" "}
-        {quota.max_words.toLocaleString("en-US")} words per job.
+        {quota.max_words.toLocaleString("en-US")} words and {Math.round(quota.max_output_seconds / 60)} minutes of
+        audio per job.
       </p>
       {limit ? (
         <p role="status">{limit}</p>

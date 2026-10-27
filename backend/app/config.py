@@ -219,6 +219,8 @@ class Settings(BaseSettings):
     guest_ip_window_seconds: int = Field(default=24 * 3600, ge=600, le=30 * 24 * 3600)
     # Words of a guest job: the text sent for translation, timestamps and markup not counted.
     guest_max_words: int = Field(default=1000, ge=10, le=100_000)
+    # Longest audio a guest job may produce: baseline / speed (the output length), in seconds.
+    guest_max_output_seconds: int = Field(default=600, ge=10, le=3 * 3600)
     # Guest sessions that may be started per client network and overall in a sliding window, so
     # starting sessions cannot grow the database without bound.
     guest_sessions_per_ip: int = Field(default=10, ge=1, le=10_000)
