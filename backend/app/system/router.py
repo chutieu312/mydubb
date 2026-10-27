@@ -26,6 +26,21 @@ def ready(services: AppServices = Depends(get_services)) -> JSONResponse:
     )
 
 
+def _guest_access(services: AppServices) -> dict:
+    if services.guest is None:
+        return {"enabled": False}
+    policy = services.guest.policy
+    return {
+        "enabled": True,
+        "jobs_per_session": policy.jobs_per_session,
+        "jobs_per_ip": policy.jobs_per_ip,
+        "ip_window_seconds": policy.ip_window_seconds,
+        "max_words": policy.max_words,
+        "max_output_seconds": policy.max_output_seconds,
+        "session_ttl_seconds": policy.session_ttl_seconds,
+    }
+
+
 @router.get("/meta")
 def meta(services: AppServices = Depends(get_services)) -> dict:
     """Public, non-sensitive configuration the UI needs before login."""
@@ -52,6 +67,8 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
                 services.youtube_import.provider.name if services.youtube_import else None
             ),
         },
+        # "Try as guest": whether the sign-in screen offers it, and the limits a guest sees.
+        "guest_access": _guest_access(services),
         "result_ttl_seconds": settings.result_ttl_seconds,
         # Which login UI to show. Accounts are created by an administrator: no sign-up.
         "auth": {

@@ -219,13 +219,9 @@ class JobPipeline:
             expires_at,
         )
         with session_scope(self._session_factory) as db:
-            completed = service.transition(
-                db,
-                job.job_id,
-                JobStatus.PROCESSING,
-                JobStatus.COMPLETED,
-                completed_at=completed_at,
-                result_expires_at=expires_at,
+            # A guest job's quota place is charged in this same transaction.
+            completed = service.complete_job(
+                db, job.job_id, completed_at=completed_at, result_expires_at=expires_at
             )
         if not completed:
             self._result_store.delete(job.job_id)

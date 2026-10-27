@@ -37,6 +37,10 @@ if [ -z "${E2E_AUTH_KEY:-}" ]; then
   E2E_AUTH_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n')"
 fi
 export E2E_AUTH_KEY
+if [ -z "${E2E_GUEST_KEY:-}" ]; then
+  E2E_GUEST_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n')"
+fi
+export E2E_GUEST_KEY
 
 # Another checkout can run its own stack at the same time with E2E_COMPOSE_PROJECT=<unique name>
 # and its own ports. The default is the name used by CI.

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
+import { GUEST_QUOTA_CODES } from "../../api/guestApi";
 import type { Job, VoiceOption, YouTubeImport } from "../../api/types";
 import { DEFAULT_SPEED } from "../../lib/speed";
 import type { StudioDraft } from "../../lib/studioDraft";
 import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
 import { analyzeTranscriptTiming, type TranscriptTiming } from "../../lib/transcriptTiming";
+import { previewWordCount } from "../../lib/wordCount";
 import { FieldMessage } from "./FieldMessage";
 import { LengthSummary } from "./LengthSummary";
 import { SpeedField } from "./SpeedField";
@@ -31,6 +33,16 @@ interface Props {
   // An unsent draft of the same signed-in user, kept in page memory by the caller.
   initialDraft?: StudioDraft;
   onDraftChange?: (draft: StudioDraft) => void;
+  // Guest mode: the word limit preview, and what to do when the server says no job is left.
+  guest?: GuestLimits;
+}
+
+export interface GuestLimits {
+  maxWords: number;
+  maxOutputSeconds: number;
+  // A quota answer (429) came back: the caller refreshes the remaining jobs.
+  onQuotaExhausted: () => void;
+  onSignIn: () => void;
 }
 
 type FieldErrors = Partial<Record<string, string>>;
@@ -56,6 +68,7 @@ export function DubbingForm({
   onSessionExpired,
   initialDraft,
   onDraftChange,
+  guest,
 }: Props) {
   const [transcript, setTranscript] = useState(initialDraft?.transcript ?? "");
   const [firstStart, setFirstStart] = useState(initialDraft?.firstStart ?? "");
@@ -75,6 +88,8 @@ export function DubbingForm({
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
+  // The server refused because no guest job is left: offer signing in next to the message.
+  const [quotaRefused, setQuotaRefused] = useState(false);
   const [source, setSource] = useState<Source>("paste");
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const importer = useYouTubeImport(onSessionExpired);
@@ -84,6 +99,10 @@ export function DubbingForm({
   }, [onDraftChange, transcript, firstStart, lastStart, voice, speed, ignoreTimestamps]);
 
   const timing = useMemo(() => analyzeTranscriptTiming(transcript), [transcript]);
+  const wordCount = useMemo(
+    () => (guest ? previewWordCount(transcript) : 0),
+    [guest, transcript],
+  );
   const preview = previewTargetDuration(firstStart, lastStart);
   const usesTimestamps =
     (timing.kind === "timed" || timing.kind === "invalid") && !ignoreTimestamps;
@@ -184,6 +203,7 @@ export function DubbingForm({
     setSubmitting(true);
     setFieldErrors({});
     setFormError(null);
+    setQuotaRefused(false);
     try {
       const job = await api.createJob({
         transcript,
@@ -202,6 +222,10 @@ export function DubbingForm({
       }
       if (err instanceof ApiError && err.fields.length > 0) {
         setFieldErrors(Object.fromEntries(err.fields.map((f) => [f.field, f.message])));
+      }
+      if (err instanceof ApiError && GUEST_QUOTA_CODES.has(err.code)) {
+        setQuotaRefused(true);
+        guest?.onQuotaExhausted();
       }
       setFormError(err instanceof ApiError ? err.message : "Could not start dubbing.");
     } finally {
@@ -241,6 +265,17 @@ export function DubbingForm({
           placeholder="Paste the English transcript (with or without timestamps)…"
           aria-invalid={Boolean(fieldErrors.transcript)}
         />
+        {guest && (
+          <p
+            className={wordCount > guest.maxWords ? "small error" : "small muted"}
+            id="word-count"
+            aria-live="polite"
+          >
+            About {wordCount.toLocaleString("en-US")} of {guest.maxWords.toLocaleString("en-US")}{" "}
+            words (timestamps not counted).
+            {wordCount > guest.maxWords && " Guest jobs are limited to this length; shorten it."}
+          </p>
+        )}
         <FieldMessage message={fieldErrors.transcript} />
         <TranscriptTimingPanel
           timing={timing}
@@ -287,12 +322,21 @@ export function DubbingForm({
       <aside className="panel panel-sand" aria-label="Voice and speed settings">
         <VoiceField voices={voices} value={voice} onChange={setVoice} error={fieldErrors.voice} />
         <SpeedField value={speed} onChange={setSpeed} error={fieldErrors.speed} />
-        <LengthSummary baselineSeconds={preview} speed={speed} />
+        <LengthSummary
+          baselineSeconds={preview}
+          speed={speed}
+          maxOutputSeconds={guest?.maxOutputSeconds}
+        />
 
         {formError && (
           <p className="error" role="alert">
             {formError}
           </p>
+        )}
+        {formError && quotaRefused && guest && (
+          <button type="button" className="link-button" onClick={guest.onSignIn}>
+            Sign in with an invitation
+          </button>
         )}
         {disclosure && (
           <p className="small muted" id="azure-disclosure">

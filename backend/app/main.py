@@ -18,6 +18,7 @@ from app.access.router import router as access_router
 from app.auth.router import router as auth_router
 from app.config import AppEnv, AuthMode, Settings, load_settings
 from app.errors import error_response, install_error_handlers
+from app.guest.router import router as guest_router
 from app.jobs.router import router as jobs_router
 from app.maintenance import (
     cleanup_loop,
@@ -214,6 +215,8 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     else:
         app.include_router(access_router)
     app.include_router(jobs_router)
+    # Always mounted: with guest access off it answers 404 guest_access_disabled.
+    app.include_router(guest_router)
     # Always mounted: with the import off it answers 404 youtube_import_disabled after the
     # session and CSRF checks, and /api/meta tells the UI not to offer it.
     app.include_router(youtube_import_router)

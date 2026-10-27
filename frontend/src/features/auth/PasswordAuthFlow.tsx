@@ -7,7 +7,7 @@ import { AuthCard, type AuthNotice } from "./AuthCard";
 import { endedStepNotice, toFailure, toResetFailure, type Outcome } from "./errors";
 import { ForgotPasswordForm, ResetPasswordForm } from "./ForgotPasswordForms";
 import { NewPasswordForm } from "./NewPasswordForm";
-import { SignInForm } from "./SignInForm";
+import { SignInForm, type GuestOffer } from "./SignInForm";
 import { VerifyEmailForm } from "./VerifyEmailForm";
 
 // Everything here lives in component state (memory). The challenge id is an opaque server
@@ -25,13 +25,15 @@ interface Props {
   notice?: string | null;
   // From GET /api/meta (auth.password_reset): without it there is no Forgot password.
   passwordReset?: boolean;
+  // From GET /api/meta (guest_access): "Try as guest" under the sign-in form.
+  guest?: GuestOffer;
   onAuthenticated: (user: AuthUser) => void;
 }
 
 const warning = (text: string): AuthNotice => ({ text, tone: "warning" });
 const info = (text: string): AuthNotice => ({ text, tone: "info" });
 
-export function PasswordAuthFlow({ notice, passwordReset = true, onAuthenticated }: Props) {
+export function PasswordAuthFlow({ notice, passwordReset = true, guest, onAuthenticated }: Props) {
   const [screen, setScreen] = useState<Screen>({ name: "sign-in" });
   const [screenNotice, setScreenNotice] = useState<AuthNotice | null>(
     notice ? warning(notice) : null,
@@ -164,6 +166,7 @@ export function PasswordAuthFlow({ notice, passwordReset = true, onAuthenticated
           <SignInForm
             initialEmail={email}
             onSubmit={signIn}
+            guest={guest}
             onForgotPassword={
               passwordReset
                 ? (address) => {

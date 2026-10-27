@@ -1,13 +1,18 @@
+import math
 import uuid
+from fractions import Fraction
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.audio.speed import AudioSpeed, DurationTarget
 from app.auth.principal import Principal
-from app.dependencies import get_db, get_services, require_csrf, require_session
-from app.errors import ApiError
+from app.dependencies import get_db, get_services, require_job_csrf, require_job_session
+from app.errors import ApiError, not_authenticated
+from app.guest.access import GuestAccess
+from app.guest.router import network_unknown
+from app.guest.service import GuestQuotaExceeded, GuestSessionGone, reserve_job
 from app.jobs import service
 from app.jobs.executor import ExecutorAtCapacity
 from app.jobs.models import Job, JobStatus
@@ -24,7 +29,8 @@ from app.jobs.schemas import (
 )
 from app.services import AppServices
 from app.storage.result_store import StoredResult
-from app.transcript.timestamps import parse_timestamp
+from app.transcript.timestamps import parse_timestamp, target_duration_seconds
+from app.transcript.words import count_words
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -78,8 +84,9 @@ GLOSSARY_NOTICE = (
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=JobResponse)
 def create_job(
     body: CreateJobRequest,
+    request: Request,
     response: Response,
-    principal: Principal = Depends(require_csrf),
+    principal: Principal = Depends(require_job_csrf),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResponse:
@@ -91,6 +98,16 @@ def create_job(
             "Timed transcripts need the server's audio processing, which is not enabled on this "
             "server. Process the transcript as plain text (tick 'Ignore the timestamps').",
         )
+    guest = services.guest
+    ip_key: str | None = None
+    if principal.guest:
+        # Checked before any slot or row: a refused guest request uses up nothing.
+        assert guest is not None  # a guest principal exists only with guest access on
+        _check_guest_words(body, guest)
+        _check_guest_duration(body, guest)
+        ip_key = guest.network_key(request)
+        if ip_key is None:
+            raise network_unknown()
     try:
         slot = services.executor.reserve()
     except ExecutorAtCapacity:
@@ -102,12 +119,13 @@ def create_job(
             headers={"Retry-After": "30"},
         ) from None
 
-    try:
-        job = service.create_job(
+    def new_job() -> Job:
+        return service.create_job(
             db,
             # The owner comes from the session, never from the request body.
-            session_id=principal.session_id if principal.user is None else None,
+            session_id=None if principal.user or principal.guest else principal.session_id,
             user_id=principal.user_id,
+            guest_session_id=principal.guest_session_id,
             voice=body.voice.value,
             first_sentence_start_seconds=parse_timestamp(body.first_sentence_start),
             last_sentence_start_seconds=parse_timestamp(body.last_sentence_start),
@@ -116,8 +134,30 @@ def create_job(
             **services.pipeline.provider_names(),
             runner_id=services.instance_id,
         )
+
+    try:
+        if principal.guest:
+            assert guest is not None and principal.guest_session_id is not None
+            assert ip_key is not None
+            # The job row and its quota place are written together, under the quota locks.
+            job = reserve_job(
+                db,
+                guest_session_id=principal.guest_session_id,
+                ip_key=ip_key,
+                policy=guest.policy,
+                create_job=new_job,
+            )
+        else:
+            job = new_job()
         # Commit before starting so the worker always sees the queued row.
         db.commit()
+    except GuestQuotaExceeded as exc:
+        slot.cancel()
+        assert guest is not None
+        raise _quota_error(exc, guest) from None
+    except GuestSessionGone:
+        slot.cancel()
+        raise not_authenticated() from None
     except Exception:
         slot.cancel()
         raise
@@ -135,9 +175,103 @@ def create_job(
     return JobResponse.from_job(job)
 
 
+def _check_guest_words(body: CreateJobRequest, guest: GuestAccess) -> None:
+    """The guest word limit, on the text that would be translated (no timestamps or markup)."""
+    words = count_words(body.spoken_text)
+    limit = guest.policy.max_words
+    if words > limit:
+        message = (
+            f"Guest jobs can have at most {limit:,} words; this transcript has {words:,} "
+            "(timestamps not counted). Shorten it, or sign in with your invitation."
+        )
+        raise ApiError(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "guest_word_limit_exceeded",
+            message,
+            extra={
+                "fields": [{"field": "transcript", "message": message}],
+                "word_count": words,
+                "max_words": limit,
+            },
+        )
+
+
+def _check_guest_duration(body: CreateJobRequest, guest: GuestAccess) -> None:
+    """The guest audio length limit, on the output length the job would produce (baseline /
+    speed, the same calculation as the audio target). The timestamps are never adjusted."""
+    baseline = target_duration_seconds(
+        parse_timestamp(body.first_sentence_start), parse_timestamp(body.last_sentence_start)
+    )
+    output = DurationTarget(baseline, body.speed).output_seconds
+    limit = guest.policy.max_output_seconds
+    if output <= limit:
+        return
+    message = (
+        f"Guest audio can be at most {_clock(limit)} long; this job would make "
+        f"{_clock(output)} ({_clock(baseline)} between the two start times at "
+        f"{body.speed.label}). Choose a shorter stretch or a faster speed, or sign in with "
+        "your invitation."
+    )
+    raise ApiError(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        "guest_duration_limit_exceeded",
+        message,
+        extra={
+            "fields": [{"field": "last_sentence_start", "message": message}],
+            "output_seconds": float(output),
+            "max_output_seconds": limit,
+            "baseline_seconds": baseline,
+            "speed": body.speed.number,
+        },
+    )
+
+
+def _clock(seconds: int | Fraction) -> str:
+    """12:30 or 1:02:03 (seconds rounded up, so a length just over a limit never reads as it)."""
+    whole = math.ceil(seconds)
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def _quota_error(exc: GuestQuotaExceeded, guest: GuestAccess) -> ApiError:
+    policy = guest.policy
+    running = (
+        f" ({exc.in_flight} still processing; a job that fails gives its place back)"
+        if exc.in_flight
+        else ""
+    )
+    if exc.scope == "session":
+        return ApiError(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "guest_session_quota_exhausted",
+            f"This guest session has used all {policy.jobs_per_session} of its jobs{running}. "
+            "Sign in with your invitation to keep dubbing.",
+            extra={"limit": policy.jobs_per_session},
+        )
+    hours = policy.ip_window_seconds / 3600
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    extra: dict = {"limit": policy.jobs_per_ip, "window_seconds": policy.ip_window_seconds}
+    if exc.retry_after:
+        extra["retry_after_seconds"] = exc.retry_after
+    return ApiError(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "guest_ip_quota_exhausted",
+        f"Guests on your network have used all {policy.jobs_per_ip} guest jobs allowed in "
+        f"{hours:g} hours{running}. Everyone on the same network shares this limit. Try again "
+        "later, or sign in with your invitation.",
+        headers=headers,
+        extra=extra,
+    )
+
+
 def _owned_job_or_404(db: Session, job_id: uuid.UUID, principal: Principal) -> Job:
     job = service.get_owned_job(
-        db, job_id, session_id=principal.session_id, user_id=principal.user_id
+        db,
+        job_id,
+        session_id=None if principal.guest else principal.session_id,
+        user_id=principal.user_id,
+        guest_session_id=principal.guest_session_id,
     )
     if job is None:
         raise ApiError(status.HTTP_404_NOT_FOUND, "job_not_found", "Job not found.")
@@ -170,7 +304,7 @@ def _available_result(job: Job, services: AppServices) -> StoredResult:
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: uuid.UUID,
-    principal: Principal = Depends(require_session),
+    principal: Principal = Depends(require_job_session),
     db: Session = Depends(get_db),
 ) -> JobResponse:
     return JobResponse.from_job(_owned_job_or_404(db, job_id, principal))
@@ -179,7 +313,7 @@ def get_job(
 @router.get("/{job_id}/result", response_model=JobResultResponse)
 def get_result(
     job_id: uuid.UUID,
-    principal: Principal = Depends(require_session),
+    principal: Principal = Depends(require_job_session),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResultResponse:
@@ -248,7 +382,7 @@ def get_result(
 def get_result_audio(
     job_id: uuid.UUID,
     download: bool = False,
-    principal: Principal = Depends(require_session),
+    principal: Principal = Depends(require_job_session),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> FileResponse:

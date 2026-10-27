@@ -27,6 +27,7 @@ from app.config import (
     decode_encryption_key,
 )
 from app.db import create_db_engine, create_session_factory
+from app.guest.access import GuestAccess
 from app.jobs.executor import BoundedThreadJobExecutor, JobExecutor
 from app.jobs.pipeline import JobPipeline
 from app.speech.azure import AzureSpeechProvider
@@ -69,6 +70,8 @@ class AppServices:
     recovery_email_limiter: FailedAttemptLimiter | None = None
     # YouTube caption import; None while YOUTUBE_IMPORT_PROVIDER=off. Closed at shutdown.
     youtube_import: YouTubeImporter | None = None
+    # "Try as guest" policy and IP-hash key; None while GUEST_ACCESS_ENABLED=false.
+    guest: GuestAccess | None = None
 
 
 def build_translator(
@@ -274,4 +277,5 @@ def build_services(
         recovery_limiter=recovery_limiter,
         recovery_email_limiter=recovery_email_limiter,
         youtube_import=build_youtube_import(settings, youtube_import_transport),
+        guest=GuestAccess.from_settings(settings),
     )

@@ -30,6 +30,16 @@ export interface AppMeta {
   auth?: { mode?: string; self_registration?: boolean; password_reset?: boolean };
   // Whether the form offers importing a YouTube video's captions. Missing means not offered.
   youtube_import?: { enabled?: boolean; provider?: string | null };
+  // "Try as guest" and its limits. Read it with guestAccessOf(); missing means not offered.
+  guest_access?: {
+    enabled?: boolean;
+    jobs_per_session?: number;
+    jobs_per_ip?: number;
+    ip_window_seconds?: number;
+    max_words?: number;
+    max_output_seconds?: number;
+    session_ttl_seconds?: number;
+  };
 }
 
 /** The existing English captions of a video, written as a timestamped transcript. */
