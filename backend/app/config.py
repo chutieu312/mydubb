@@ -204,6 +204,27 @@ class Settings(BaseSettings):
     # Extra origins allowed on state-changing requests (e.g. the Vite dev server).
     trusted_origins: list[str] = Field(default_factory=list)
 
+    # "Try as guest" (needs AUTH_MODE=cognito): people without an invitation use the Studio with
+    # a guest session and quotas (docs/GUEST_ACCESS.md). Off by default.
+    guest_access_enabled: bool = False
+    # 32 random bytes (URL-safe base64) keying the hash that identifies a client network for the
+    # guest quotas, so no raw IP address is stored. Its own key: never AUTH_TOKEN_ENCRYPTION_KEY.
+    guest_ip_hash_key: SecretStr | None = None
+    # Absolute lifetime of a guest session (and its cookie); never extended. At most the IP
+    # window, so a session's used jobs are never forgotten while it is still valid.
+    guest_session_ttl_seconds: int = Field(default=24 * 3600, ge=600, le=7 * 24 * 3600)
+    # Completed jobs allowed per guest session, and per client network in a sliding window.
+    guest_jobs_per_session: int = Field(default=5, ge=1, le=1000)
+    guest_jobs_per_ip: int = Field(default=20, ge=1, le=10_000)
+    guest_ip_window_seconds: int = Field(default=24 * 3600, ge=600, le=30 * 24 * 3600)
+    # Words of a guest job: the text sent for translation, timestamps and markup not counted.
+    guest_max_words: int = Field(default=1000, ge=10, le=100_000)
+    # Guest sessions that may be started per client network and overall in a sliding window, so
+    # starting sessions cannot grow the database without bound.
+    guest_sessions_per_ip: int = Field(default=10, ge=1, le=10_000)
+    guest_sessions_global: int = Field(default=300, ge=1, le=1_000_000)
+    guest_session_rate_window_seconds: int = Field(default=3600, ge=60, le=24 * 3600)
+
     access_max_failures_per_client: int = Field(default=5, ge=1)
     access_max_failures_global: int = Field(default=50, ge=1)
     access_failure_window_seconds: int = Field(default=900, ge=1)
@@ -312,6 +333,8 @@ class Settings(BaseSettings):
                 "YOUTUBE_IMPORT_PROVIDER=mock is not allowed when APP_ENV=production (it "
                 "returns fixed captions, not the video's); use supadata or off"
             )
+        if self.guest_access_enabled:
+            self._check_guest_access()
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
             raise ValueError(
                 "JOB_STALE_AFTER_SECONDS must be at least 3x JOB_HEARTBEAT_INTERVAL_SECONDS"
@@ -358,6 +381,30 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AUTH_TOKEN_ENCRYPTION_KEY is required when AUTH_MODE=cognito and must be "
                 "32 random bytes in URL-safe base64 (44 characters)"
+            )
+
+    def _check_guest_access(self) -> None:
+        if self.auth_mode is not AuthMode.COGNITO:
+            raise ValueError("GUEST_ACCESS_ENABLED=true needs AUTH_MODE=cognito")
+        key = self.guest_ip_hash_key
+        if key is None or decode_encryption_key(key.get_secret_value()) is None:
+            raise ValueError(
+                "GUEST_IP_HASH_KEY is required when GUEST_ACCESS_ENABLED=true and must be 32 "
+                "random bytes in URL-safe base64 (44 characters)"
+            )
+        auth_key = self.auth_token_encryption_key
+        if auth_key is not None and decode_encryption_key(
+            key.get_secret_value()
+        ) == decode_encryption_key(auth_key.get_secret_value()):
+            raise ValueError("GUEST_IP_HASH_KEY must differ from AUTH_TOKEN_ENCRYPTION_KEY")
+        if self.guest_session_ttl_seconds > self.guest_ip_window_seconds:
+            raise ValueError("GUEST_SESSION_TTL_SECONDS must not exceed GUEST_IP_WINDOW_SECONDS")
+        if self.app_env is AppEnv.PRODUCTION and not self.client_ip_header:
+            # Behind the host's proxy the peer address is the proxy, or comes from a
+            # client-supplied X-Forwarded-For: neither can identify a guest's network.
+            raise ValueError(
+                "GUEST_ACCESS_ENABLED=true needs CLIENT_IP_HEADER (the header the edge proxy "
+                "overwrites with the client IP) when APP_ENV=production"
             )
 
     @property

@@ -649,6 +649,12 @@ deployed, every deploy built before it is no longer a supported Render rollback 
 expand-only), so after it is deployed the database is at `0006`: check targets with
 `docker/rollback-target-check.sh <commit> 0006`. Switching `AUTH_MODE` back to `access_code` is a
 configuration change, not a code rollback (see [AUTHENTICATION.md](AUTHENTICATION.md#rollback)).
+The guest access pull request adds migration `0007` (tables `guest_sessions` and
+`guest_job_quota`, and the nullable column `jobs.guest_session_id`, expand-only; it runs even while
+`GUEST_ACCESS_ENABLED=false`). Once it is deployed, every deploy built before it is no longer a
+supported Render rollback target; check with `docker/rollback-target-check.sh <commit> 0007`.
+Turning guest access off is a configuration change (`GUEST_ACCESS_ENABLED=false`), not a code
+rollback ([GUEST_ACCESS.md](GUEST_ACCESS.md#enabling-a-product-owner-decision-not-done)).
 
 **Before rolling back** (read-only checks):
 
@@ -766,6 +772,25 @@ image at commit `c4407ab` (knows `0001`-`0006`), same procedure:
 | 5 | new | default, after step 4 | Starts; smoke test passes; four jobs completed, none assigned to a user |
 | 6 | new | `AUTH_MODE=cognito`, dummy pool, one stale `pending` reset attempt seeded by SQL | Starts; the startup recovery logs `Recorded 1 unresolved password reset(s) as unknown` and the row is `unknown`; `/api/meta` `auth.mode=cognito`; `POST /api/session` 405; `/api/auth/me` and `POST /api/jobs` 401 |
 | 7 | new | `AUTH_MODE=cognito` without `AUTH_TOKEN_ENCRYPTION_KEY` | Refuses to start; the error names the variable only |
+
+Rehearsal for migration `0007` (guest access), local throwaway PostgreSQL 17 on tmpfs (its own
+Docker network), commit `959bad6` (`origin/main` when the story started, knows `0001`-`0006`)
+against the image of the guest access branch (knows `0007`), `docker/smoke-test.sh` (Access Code
+mode, one mock job) each time:
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `959bad6` | default, empty database | Migrates to `0006`; smoke test passes |
+| 2 | new | default | `0006` -> `0007`; smoke test passes; `guest_sessions` and `guest_job_quota` exist; both jobs completed, none owned by a guest |
+| 3 | `959bad6` | default, database at `0007` | Exits 1: `Can't locate revision identified by '0007'`; database unchanged (`0007`) |
+| 4 | `959bad6` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (it never reads the new tables or column; its inserts leave `guest_session_id NULL`) |
+| 5 | new | default, after step 4 | Starts; smoke test passes; four jobs completed, none owned by a guest |
+| 6 | new | `AUTH_MODE=cognito` (dummy pool), `GUEST_ACCESS_ENABLED=true`, `CLIENT_IP_HEADER=cf-connecting-ip` | `/api/meta` reports the guest limits; `POST /api/guest/session` without the header `503`; with it a guest session, one guest job `completed`, its quota row `used`; YouTube import as a guest `403`; no raw address in the database or the container log |
+| 7 | `959bad6` | `RUN_MIGRATIONS_ON_START=false`, guest rows in the database | Starts; smoke test passes |
+| 8 | new | guest access on without `GUEST_IP_HASH_KEY` | Refuses to start; the error names the variable only |
+| 9 | new | `APP_ENV=production`, guest access on without `CLIENT_IP_HEADER` | Refuses to start; the key value does not appear in the log |
+
+Production was not touched.
 
 Repeat it for any pull request that adds a migration: build the previous production commit
 and the new one (`git worktree add <dir> <commit>` + `docker build`), migrate a throwaway

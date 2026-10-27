@@ -8,11 +8,21 @@ interface Props {
   signedIn: boolean;
   // Known only with email + password sign-in; the Access Code session has no user.
   user?: Pick<AuthUser, "email" | "display_name"> | null;
+  // A guest session ("Try as guest"): no account; the button leaves guest mode.
+  guest?: boolean;
   loggingOut: boolean;
   onLogout: () => void;
 }
 
-export function AppHeader({ theme, onToggleTheme, signedIn, user, loggingOut, onLogout }: Props) {
+export function AppHeader({
+  theme,
+  onToggleTheme,
+  signedIn,
+  user,
+  guest = false,
+  loggingOut,
+  onLogout,
+}: Props) {
   const account = user ? user.display_name?.trim() || user.email : null;
   return (
     <header className="header">
@@ -27,7 +37,15 @@ export function AppHeader({ theme, onToggleTheme, signedIn, user, loggingOut, on
         </div>
         <div className="header-actions">
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-          {signedIn && (
+          {guest && (
+            <>
+              <span className="signed-in muted">Guest</span>
+              <button type="button" className="button ghost" onClick={onLogout} disabled={loggingOut}>
+                {loggingOut ? "Leaving…" : "Leave guest mode"}
+              </button>
+            </>
+          )}
+          {signedIn && !guest && (
             <>
               {account ? (
                 <span className="signed-in muted account" title={user?.email}>

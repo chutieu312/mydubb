@@ -57,6 +57,7 @@ from app.auth.service import (
 from app.db import session_scope
 from app.dependencies import (
     AUTH_COOKIE,
+    GUEST_COOKIE,
     client_key,
     get_db,
     get_services,
@@ -64,6 +65,7 @@ from app.dependencies import (
     require_session,
 )
 from app.errors import ApiError
+from app.guest.service import revoke_session_by_token as revoke_guest_session_by_token
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
@@ -349,6 +351,7 @@ def _release(
 
 def _finish_sign_in(
     services: AppServices,
+    request: Request,
     response: Response,
     access_token: str,
     auth_started_at: datetime,
@@ -408,6 +411,7 @@ def _finish_sign_in(
         path="/",
     )
     _clear_challenge_cookie(response, services)
+    _end_guest_session(services, request, response)
     return AuthenticatedResponse(
         user=UserOut(id=user.id, email=user.email, display_name=user.display_name),
         csrf_token=issued.csrf_token,
@@ -415,14 +419,35 @@ def _finish_sign_in(
     )
 
 
+def _end_guest_session(services: AppServices, request: Request, response: Response) -> None:
+    """An account sign-in ends the browser's guest session: its jobs stay with that guest
+    session (nothing moves to the account), and signing out later never falls back to it."""
+    token = request.cookies.get(GUEST_COOKIE)
+    if not token:
+        return
+    try:
+        _in_transaction(services, lambda db: revoke_guest_session_by_token(db, token))
+    except SQLAlchemyError as exc:
+        # The account session exists; the guest session simply lasts until it expires.
+        logger.warning("Guest session not ended at sign-in (%s)", type(exc).__name__)
+    response.delete_cookie(
+        GUEST_COOKIE,
+        path="/",
+        httponly=True,
+        secure=services.settings.cookie_secure,
+        samesite="strict",
+    )
+
+
 def _after_auth(
     services: AppServices,
+    request: Request,
     response: Response,
     outcome: AuthTokens | AuthChallengeStep,
     auth_started_at: datetime,
 ) -> AuthStep:
     if isinstance(outcome, AuthTokens):
-        return _finish_sign_in(services, response, outcome.access_token, auth_started_at)
+        return _finish_sign_in(services, request, response, outcome.access_token, auth_started_at)
     if outcome.name == NEW_PASSWORD_REQUIRED and outcome.username:
         return _start_challenge(
             services,
@@ -505,7 +530,7 @@ def login(
                 status.HTTP_401_UNAUTHORIZED, "invalid_credentials", INVALID_CREDENTIALS_MESSAGE
             ) from None
         _cognito_failure(exc)
-    return _after_auth(services, response, outcome, auth_started_at)
+    return _after_auth(services, request, response, outcome, auth_started_at)
 
 
 @router.post("/new-password", response_model=AuthStep)
@@ -540,7 +565,7 @@ def new_password(
     # Cognito has set the new password; if this request lost the step meanwhile, the user signs
     # in with the new password.
     _consume(services, claimed)
-    return _after_auth(services, response, outcome, claimed.auth_started_at)
+    return _after_auth(services, request, response, outcome, claimed.auth_started_at)
 
 
 @router.post("/email-verification/send", response_model=CodeSentResponse)
@@ -596,7 +621,12 @@ def confirm_email_verification(
     # finds the email verified.
     _consume(services, claimed)
     return _finish_sign_in(
-        services, response, access_token, claimed.auth_started_at, after_verification=True
+        services,
+        request,
+        response,
+        access_token,
+        claimed.auth_started_at,
+        after_verification=True,
     )
 
 

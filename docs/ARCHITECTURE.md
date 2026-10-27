@@ -82,6 +82,13 @@ while keeping the session model above: an opaque HttpOnly `mydubb_auth` cookie w
 issuer + `sub`; jobs carry `user_id` and are owned by the user (Access Code jobs keep `user_id NULL`
 and are never assigned to a user). Design, AWS setup and limits: [AUTHENTICATION.md](AUTHENTICATION.md).
 
+**Guest access** (`GUEST_ACCESS_ENABLED=true`, Cognito mode only, off by default): "Try as guest"
+gives a separate principal with its own HttpOnly `mydubb_guest` cookie and `guest_sessions` table,
+accepted only by the job endpoints and `/api/guest/session`. Guest jobs carry
+`jobs.guest_session_id` and go through the same pipeline; quotas per guest session and per client
+network are reserved with the job and settled with its terminal state in the same transactions.
+Design and limits: [GUEST_ACCESS.md](GUEST_ACCESS.md).
+
 ## Job lifecycle
 
 ```
@@ -143,12 +150,15 @@ database table) is involved; this fits the single-instance design.
 | Pending sign-in steps (encrypted Cognito session/access token) | PostgreSQL `auth_challenges` | Payload erased when the step ends; row deleted by cleanup once consumed or expired (minutes) |
 | Password-reset events (hashed email, time) | PostgreSQL `password_reset_events` | Deleted by cleanup after one day |
 | Password-reset attempts (hashed email, state, times) | PostgreSQL `password_reset_attempts` | Recorded before each Cognito reset request; a `pending` one is never deleted (it is enforced and resolved as `unknown` once settled); resolved ones are deleted by cleanup after one day |
+| Guest sessions (token hash, CSRF token, keyed hash of the client network, times) | PostgreSQL `guest_sessions` | Absolute 24 h lifetime; deleted by cleanup once expired or ended and older than the session-start window (1 h); their jobs keep metadata with `guest_session_id = NULL` |
+| Guest quota places (job, guest session, keyed network hash, state, times) | PostgreSQL `guest_job_quota` | `reserved` rows are never deleted (their job settles them); `used`/`released` rows are deleted by cleanup once they left the network window (24 h). See [GUEST_ACCESS.md](GUEST_ACCESS.md) |
 | Glossary candidates (term, key, kind, job count, first/last seen, review status) | PostgreSQL `glossary_candidates` | No automatic deletion and no retention of its own; independent of results, jobs and sessions (no foreign key). No transcript, translation, excerpt, job or session is stored with a term |
 
 Cleanup runs at startup and every `CLEANUP_INTERVAL_SECONDS` (in a thread): removes expired
 or unreadable result directories, abandoned `.staging-*` directories, stale sessions (both kinds),
 finished sign-in steps and old password-reset events; it also records password resets whose
-outcome was never written (database error, crash) as `unknown` and revokes for them (fail closed).
+outcome was never written (database error, crash) as `unknown` and revokes for them (fail closed),
+settles guest quota places of jobs that already ended, and removes old guest rows.
 Reads also check expiry, so an expired result is never served even between cleanup runs.
 
 Result publication and cleanup are race-safe within the single process:

@@ -15,3 +15,8 @@ export function authModeOf(meta: AppMeta | null): AuthMode | null {
 export function passwordResetOf(meta: AppMeta | null): boolean {
   return meta?.auth?.password_reset === true;
 }
+
+/** "Try as guest" is offered only with email + password sign-in and when the backend says so. */
+export function guestAccessOf(meta: AppMeta | null): boolean {
+  return authModeOf(meta) === "cognito" && meta?.guest_access?.enabled === true;
+}

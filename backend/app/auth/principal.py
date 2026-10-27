@@ -16,13 +16,21 @@ class Principal:
 
     Access Code mode: `session_id` is the `access_sessions` row and owns jobs; `user` is None.
     Cognito mode: `session_id` is the `user_sessions` row and the `user` owns jobs.
+    Guest ("Try as guest"): `guest` is True, `session_id` is the `guest_sessions` row and owns
+    jobs; `user` is None. A guest is resolved only by the job endpoints and the guest endpoints
+    (dependencies.py), never by `require_session`.
     """
 
     session_id: uuid.UUID
     csrf_token: str
     expires_at: datetime
     user: UserProfile | None = None
+    guest: bool = False
 
     @property
     def user_id(self) -> uuid.UUID | None:
         return self.user.id if self.user is not None else None
+
+    @property
+    def guest_session_id(self) -> uuid.UUID | None:
+        return self.session_id if self.guest else None

@@ -165,6 +165,12 @@ Requires the session and `X-CSRF-Token`. `204`, revokes the session server-side 
 cookie. `401 not_authenticated` when the session is already invalid (treat as logged out, like the
 Access Code logout). `403 csrf_failed` leaves the session active.
 
+### Guest sessions and sign-in
+With guest access on ([API.md](API.md#guest-access)), every response that establishes a session
+(`authenticated`) also ends the browser's guest session, if any, and clears its `mydubb_guest`
+cookie: guest jobs never move to the account, and signing out never falls back into guest mode.
+`/api/auth/me` and `/api/auth/logout` never accept a guest session (`401`).
+
 ## Jobs in Cognito mode
 
 `/api/jobs*` are unchanged for the UI. Ownership is by user, taken from the session (never from the

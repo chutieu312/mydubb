@@ -16,6 +16,7 @@ from app.auth.models import (  # noqa: F401
 from app.config import to_sqlalchemy_url
 from app.db import Base
 from app.glossary_candidates.models import GlossaryCandidate  # noqa: F401
+from app.guest.models import GuestJobQuota, GuestSession  # noqa: F401
 from app.jobs.models import Job  # noqa: F401
 
 target_metadata = Base.metadata

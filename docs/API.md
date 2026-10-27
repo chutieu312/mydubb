@@ -24,9 +24,16 @@ are JSON unless noted.
 
 Everything below about CSRF, jobs and errors applies to both session kinds.
 
+- Guest (`GUEST_ACCESS_ENABLED=true`, Cognito mode only): an HttpOnly `mydubb_guest` cookie from
+  `POST /api/guest/session` ([Guest access](#guest-access)). It is accepted **only** by the job
+  endpoints and `/api/guest/session`; every other endpoint treats a guest as not signed in. With
+  both an account and a guest cookie, the job endpoints use the account.
+
 **CSRF**: state-changing requests made with a session (`POST /api/jobs`,
-`POST /api/transcripts/youtube`, `DELETE /api/session`, `POST /api/auth/logout`) must send `X-CSRF-Token` with the token returned by `POST`/`GET
-/api/session` (Access Code) or by the `authenticated` response / `GET /api/auth/me` (Cognito). In addition, any
+`POST /api/transcripts/youtube`, `DELETE /api/session`, `POST /api/auth/logout`,
+`DELETE /api/guest/session`) must send `X-CSRF-Token` with the token returned by `POST`/`GET
+/api/session` (Access Code), by the `authenticated` response / `GET /api/auth/me` (Cognito) or by
+`POST`/`GET /api/guest/session` (guest). In addition, any
 `POST/PUT/PATCH/DELETE` with an `Origin` header that is neither the request's own host nor in
 `TRUSTED_ORIGINS` is rejected (`403 origin_rejected`).
 
@@ -39,7 +46,7 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)) |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, session_ttl_seconds}`; see [Guest access](#guest-access)) |
 
 ## Session (Private Beta access)
 
@@ -364,6 +371,72 @@ Requires session and ownership.
 ### `GET /api/jobs/{id}/result/audio[?download=1]`
 Same authorization and error rules. Streams `audio/mpeg` (supports HTTP Range).
 `Content-Disposition: inline` by default, `attachment` with `download=1`.
+
+## Guest access
+
+"Try as guest": a guest session with quotas instead of an invitation. Off unless
+`GUEST_ACCESS_ENABLED=true` (needs `AUTH_MODE=cognito`); while off, every `/api/guest/session`
+request answers `404 guest_access_disabled` and a guest cookie is ignored everywhere. Design,
+quotas, IP handling and retention: [GUEST_ACCESS.md](GUEST_ACCESS.md).
+
+Guest session body (`POST` and `GET`):
+
+```json
+{
+  "status": "guest",
+  "guest": { "id": "<uuid>" },
+  "csrf_token": "…",
+  "expires_at": "<ISO 8601>",
+  "quota": {
+    "session_limit": 5, "session_used": 1, "session_in_progress": 0, "session_remaining": 4,
+    "ip_limit": 20, "ip_used": 3, "ip_in_progress": 1, "ip_remaining": 16,
+    "ip_window_seconds": 86400, "ip_retry_after_seconds": null, "max_words": 1000
+  }
+}
+```
+
+A job still processing holds a place (`*_in_progress`); a failed one gives it back. The network
+fields are `null` when this request's network cannot be told. Jobs left = the smaller of
+`session_remaining` and `ip_remaining`.
+
+### `POST /api/guest/session`
+No session needed; the Origin rule applies. Never calls a provider and creates no job.
+- `201` + body + `Set-Cookie: mydubb_guest=…` (HttpOnly, `SameSite=Strict`, `Secure` when
+  `COOKIE_SECURE=true`, `Max-Age` = the remaining absolute lifetime, 24 h by default).
+- `200` + body, no `Set-Cookie`: the browser already has a valid guest session; it is returned
+  unchanged (same id, expiry and quota; never renewed).
+- `409 already_signed_in`: the browser has a valid account session.
+- `429 guest_sessions_exhausted` with `Retry-After`: too many guest sessions started recently
+  from this network (`GUEST_SESSIONS_PER_IP`) or overall (`GUEST_SESSIONS_GLOBAL`) within
+  `GUEST_SESSION_RATE_WINDOW_SECONDS`.
+- `503 guest_network_unknown`: the client network cannot be told (with `CLIENT_IP_HEADER`: the
+  header is missing, repeated, a list or not an IP address). Never a shared fallback identity.
+
+### `GET /api/guest/session`
+`200` + body (current counts), or `401 not_authenticated` (missing, unknown, expired or ended).
+
+### `DELETE /api/guest/session`
+Requires the guest session + CSRF. `204`, revokes it and clears the cookie. Its jobs are not moved
+anywhere and become unreachable. Signing in to an account (`/api/auth/*` `authenticated`
+responses) also ends the browser's guest session and clears its cookie.
+
+### Jobs as a guest
+`POST /api/jobs`, `GET /api/jobs/{id}`, `/result` and `/result/audio` work as documented above,
+for the guest session's own jobs only (any other job: `404 job_not_found`). `POST /api/jobs` also
+checks, in this order, before anything is written:
+
+| Status | Code | When |
+|---|---|---|
+| `422` | `guest_word_limit_exceeded` | More than `GUEST_MAX_WORDS` words in the text to translate (timestamp lines and markup not counted). Extra: `word_count`, `max_words`, and `fields: [{field: "transcript", …}]` |
+| `503` | `guest_network_unknown` | As above |
+| `503` | `server_at_capacity` | As for everyone; nothing is charged |
+| `429` | `guest_session_quota_exhausted` | The guest session has used (or holds) all its jobs. Extra: `limit` |
+| `429` | `guest_ip_quota_exhausted` | Guests on this network used (or hold) all jobs of the window. `Retry-After` and `retry_after_seconds` when a completed job will leave the window; extra `limit`, `window_seconds` |
+
+A `202` reserves one place in both quotas: completed → used, failed (any reason, including
+`interrupted`) → given back.
+
+`POST /api/transcripts/youtube` with a guest session: `403 guest_not_allowed`.
 
 ## YouTube caption import
 

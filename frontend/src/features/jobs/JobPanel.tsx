@@ -1,4 +1,6 @@
-import type { JobStatus, VoiceOption } from "../../api/types";
+import { useEffect, useRef } from "react";
+
+import { TERMINAL_STATUSES, type JobStatus, type VoiceOption } from "../../api/types";
 import { formatClock, speedLabel } from "../../lib/speed";
 import { ResultView } from "./ResultView";
 import { useJobPolling } from "./useJobPolling";
@@ -15,10 +17,20 @@ interface Props {
   jobId: string;
   voices: VoiceOption[];
   onSessionExpired: () => void;
+  // Called once when the job is completed or failed (e.g. to refresh a guest's quota).
+  onFinished?: () => void;
 }
 
-export function JobPanel({ jobId, voices, onSessionExpired }: Props) {
+export function JobPanel({ jobId, voices, onSessionExpired, onFinished }: Props) {
   const { job, error } = useJobPolling(jobId, onSessionExpired);
+  const finished = job !== null && TERMINAL_STATUSES.includes(job.status);
+  const reported = useRef(false);
+  useEffect(() => {
+    if (finished && !reported.current) {
+      reported.current = true;
+      onFinished?.();
+    }
+  }, [finished, onFinished]);
 
   if (!job) {
     return (

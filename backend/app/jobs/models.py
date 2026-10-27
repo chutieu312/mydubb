@@ -65,6 +65,11 @@ class Job(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    # Owner guest session ("Try as guest"; then `session_id` and `user_id` are NULL). Guest jobs
+    # are never visible to an account or an Access Code session, nor theirs to a guest.
+    guest_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("guest_sessions.id", ondelete="SET NULL"), index=True
+    )
     status: Mapped[str] = mapped_column(String(20), index=True)
     # Instance (process) that accepted and runs the job, and its last liveness signal.
     # Nullable so the schema change stays backward compatible with older code.

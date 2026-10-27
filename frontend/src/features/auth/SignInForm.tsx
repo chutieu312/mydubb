@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 
+import { GuestEntry } from "../guest/GuestEntry";
 import { FormError, PasswordField, TextField } from "./fields";
 import type { Outcome } from "./errors";
 import { useSubmit } from "./useSubmit";
@@ -9,9 +10,17 @@ interface Props {
   onSubmit: (email: string, password: string) => Promise<Outcome>;
   // Absent when the backend does not offer password reset.
   onForgotPassword?: (email: string) => void;
+  // Absent when the backend does not offer guest access.
+  guest?: GuestOffer;
 }
 
-export function SignInForm({ initialEmail, onSubmit, onForgotPassword }: Props) {
+export interface GuestOffer {
+  onTry: () => Promise<string | null>;
+  jobsPerSession: number;
+  maxWords: number;
+}
+
+export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest }: Props) {
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const { pending, failure, run } = useSubmit();
@@ -61,6 +70,7 @@ export function SignInForm({ initialEmail, onSubmit, onForgotPassword }: Props) 
         </button>
       )}
       <p className="muted small">Access is currently by invitation only.</p>
+      {guest && <GuestEntry {...guest} disabled={pending} />}
     </form>
   );
 }

@@ -3,7 +3,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.auth.principal import Principal
-from app.dependencies import get_db, get_services, require_csrf
+from app.dependencies import get_db, get_services, require_account_csrf
 from app.errors import ApiError
 from app.services import AppServices
 from app.youtube_import.base import ImportFailure
@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/transcripts", tags=["transcripts"])
 @router.post("/youtube", response_model=YouTubeImportResponse)
 async def import_youtube_captions(
     body: YouTubeImportRequest,
-    principal: Principal = Depends(require_csrf),
+    # Accounts only: a guest session gets 403 guest_not_allowed.
+    principal: Principal = Depends(require_account_csrf),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> YouTubeImportResponse:

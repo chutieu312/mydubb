@@ -7,6 +7,7 @@ import time
 from app.access.service import delete_stale_sessions
 from app.auth.service import delete_stale_auth_rows, resolve_stale_password_resets
 from app.db import session_scope
+from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
 
@@ -89,13 +90,27 @@ def run_cleanup(services: AppServices) -> None:
         unresolved = resolve_stale_password_resets(db)
     if unresolved:
         logger.warning("Recorded %d unresolved password reset(s) as unknown", unresolved)
-    if removed or sessions or auth_rows:
+    # Guest quota places whose job already ended without settling them (e.g. failed by an
+    # instance running code from before guest access), then expired guest data. Also with guest
+    # access off, so nothing lingers after turning it off.
+    with session_scope(services.session_factory) as db:
+        settled = settle_jobs(db)
+        guest_rows = delete_stale_rows(db, _guest_retention(services))
+    if settled:
+        logger.warning("Settled %d guest quota place(s) of jobs that had ended", settled)
+    if removed or sessions or auth_rows or guest_rows:
         logger.info(
-            "Cleanup removed %d result(s), %d stale session(s) and %d auth row(s)",
+            "Cleanup removed %d result(s), %d stale session(s), %d auth row(s) and %d guest row(s)",
             removed,
             sessions,
             auth_rows,
+            guest_rows,
         )
+
+
+def _guest_retention(services: AppServices) -> GuestPolicy:
+    # The configured windows even with guest access off (they have defaults).
+    return GuestPolicy.from_settings(services.settings)
 
 
 async def cleanup_loop(services: AppServices) -> None:

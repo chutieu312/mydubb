@@ -9,6 +9,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.audio.speed import DEFAULT_SPEED, AudioSpeed
+from app.guest.service import settle_jobs
 from app.jobs.models import ACTIVE_STATUSES, Job, JobStatus
 from app.transcript.timestamps import target_duration_seconds
 
@@ -33,11 +34,13 @@ def create_job(
     runner_id: str,
     audio_speed: AudioSpeed = DEFAULT_SPEED,
     user_id: uuid.UUID | None = None,
+    guest_session_id: uuid.UUID | None = None,
 ) -> Job:
     now = datetime.now(UTC)
     job = Job(
         session_id=session_id,
         user_id=user_id,
+        guest_session_id=guest_session_id,
         status=JobStatus.QUEUED,
         runner_id=runner_id,
         heartbeat_at=now,
@@ -61,18 +64,28 @@ def create_job(
 
 
 def get_owned_job(
-    db: Session, job_id: uuid.UUID, *, session_id: uuid.UUID, user_id: uuid.UUID | None
+    db: Session,
+    job_id: uuid.UUID,
+    *,
+    session_id: uuid.UUID | None,
+    user_id: uuid.UUID | None,
+    guest_session_id: uuid.UUID | None = None,
 ) -> Job | None:
     """Return the job only if it belongs to the caller.
 
-    Cognito mode (`user_id` set): jobs of that user, from any of their sessions. Access Code
-    mode: jobs of that session that belong to no user. A job ID alone never grants access;
-    other callers' jobs look like missing jobs.
+    Guest (`guest_session_id` set): jobs of that guest session only. Cognito mode (`user_id`
+    set): jobs of that user, from any of their sessions. Access Code mode: jobs of that session
+    that belong to no user. A job ID alone never grants access; other callers' jobs look like
+    missing jobs.
     """
-    if user_id is not None:
+    if guest_session_id is not None:
+        owner = Job.guest_session_id == guest_session_id
+    elif user_id is not None:
         owner = Job.user_id == user_id
-    else:
+    elif session_id is not None:
         owner = (Job.session_id == session_id) & Job.user_id.is_(None)
+    else:
+        return None
     return db.scalar(select(Job).where(Job.id == job_id, owner))
 
 
@@ -90,6 +103,15 @@ def transition(
     return (result.rowcount or 0) == 1  # type: ignore[attr-defined]
 
 
+def complete_job(db: Session, job_id: uuid.UUID, **fields: Any) -> bool:
+    """processing -> completed (compare-and-set); a guest job's quota place becomes used in the
+    same transaction."""
+    if not transition(db, job_id, JobStatus.PROCESSING, JobStatus.COMPLETED, **fields):
+        return False
+    settle_jobs(db, [job_id])
+    return True
+
+
 def mark_failed(db: Session, job_id: uuid.UUID, code: str, message: str) -> bool:
     now = datetime.now(UTC)
     result = db.execute(
@@ -103,7 +125,11 @@ def mark_failed(db: Session, job_id: uuid.UUID, code: str, message: str) -> bool
             completed_at=now,
         )
     )
-    return (result.rowcount or 0) == 1  # type: ignore[attr-defined]
+    if (result.rowcount or 0) != 1:  # type: ignore[attr-defined]
+        return False
+    # A failed guest job gives its quota place back, in the same transaction.
+    settle_jobs(db, [job_id])
+    return True
 
 
 def fail_interrupted_jobs(db: Session, job_ids: Collection[uuid.UUID]) -> int:
@@ -153,7 +179,7 @@ def fail_stale_jobs(db: Session, stale_after_seconds: int) -> int:
 
 def _fail_active(db: Session, condition: Any) -> int:
     now = datetime.now(UTC)
-    result = db.execute(
+    failed = db.scalars(
         update(Job)
         .where(Job.status.in_(ACTIVE_STATUSES), condition)
         .values(
@@ -163,6 +189,10 @@ def _fail_active(db: Session, condition: Any) -> int:
             updated_at=now,
             completed_at=now,
         )
+        .returning(Job.id)
         .execution_options(synchronize_session=False)
-    )
-    return result.rowcount or 0  # type: ignore[attr-defined]
+    ).all()
+    # Interrupted guest jobs give their quota places back, in the same transaction. Only jobs
+    # failed here are touched, so places of jobs still running elsewhere are kept.
+    settle_jobs(db, failed)
+    return len(failed)

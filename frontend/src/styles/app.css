@@ -925,3 +925,22 @@ textarea[aria-invalid="true"] {
   min-height: 44px;
   cursor: pointer;
 }
+
+/* ---- Guest access ---- */
+
+/* "Try as guest" below the sign-in form, set apart from it. */
+.guest-entry {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.guest-banner {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.guest-banner p {
+  margin: 0;
+}
