@@ -24,6 +24,7 @@ from app.dependencies import (
 )
 from app.errors import ApiError
 from app.guest.access import GuestAccess
+from app.guest.imports import ImportQuotaStatus, import_quota_status
 from app.guest.service import (
     GuestSessionsExhausted,
     QuotaStatus,
@@ -77,13 +78,48 @@ class QuotaOut(BaseModel):
         )
 
 
+class ImportQuotaOut(BaseModel):
+    """YouTube caption imports: a quota of its own, apart from the jobs in `quota`."""
+
+    # Successful imports over the guest session's lifetime; imports still running hold a place.
+    session_limit: int
+    session_used: int
+    session_in_progress: int
+    session_remaining: int
+    # Successful imports of every guest session from the same client network in the sliding
+    # window (`quota.ip_window_seconds`); null when this request's network cannot be told.
+    ip_limit: int
+    ip_used: int | None
+    ip_in_progress: int | None
+    ip_remaining: int | None
+    ip_retry_after_seconds: int | None
+
+    @classmethod
+    def build(cls, status_: ImportQuotaStatus) -> "ImportQuotaOut":
+        return cls(
+            session_limit=status_.session_limit,
+            session_used=status_.session_used,
+            session_in_progress=status_.session_in_progress,
+            session_remaining=status_.session_remaining,
+            ip_limit=status_.ip_limit,
+            ip_used=status_.ip_used,
+            ip_in_progress=status_.ip_in_progress,
+            ip_remaining=status_.ip_remaining,
+            ip_retry_after_seconds=status_.ip_retry_after_seconds,
+        )
+
+
 class GuestSessionResponse(BaseModel):
     status: str = "guest"
     guest: GuestOut
-    # Required for POST /api/jobs and DELETE /api/guest/session; kept in memory by the UI.
+    # Required for POST /api/jobs, POST /api/transcripts/youtube and DELETE /api/guest/session;
+    # kept in memory by the UI.
     csrf_token: str
     expires_at: datetime
+    # Jobs (audio).
     quota: QuotaOut
+    # YouTube caption imports; null while the server has no import provider.
+    imports: ImportQuotaOut | None
 
 
 def guest_access(services: AppServices = Depends(get_services)) -> GuestAccess:
@@ -107,20 +143,30 @@ def network_unknown() -> ApiError:
 
 
 def _response(
-    db: Session, request: Request, principal: Principal, guest: GuestAccess
+    db: Session,
+    request: Request,
+    principal: Principal,
+    guest: GuestAccess,
+    services: AppServices,
 ) -> GuestSessionResponse:
     assert principal.guest_session_id is not None
+    ip_key = guest.network_key(request)
     status_ = quota_status(
-        db,
-        guest_session_id=principal.guest_session_id,
-        ip_key=guest.network_key(request),
-        policy=guest.policy,
+        db, guest_session_id=principal.guest_session_id, ip_key=ip_key, policy=guest.policy
     )
+    imports = None
+    if services.youtube_import is not None:
+        imports = ImportQuotaOut.build(
+            import_quota_status(
+                db, guest_session_id=principal.guest_session_id, ip_key=ip_key, policy=guest.policy
+            )
+        )
     return GuestSessionResponse(
         guest=GuestOut(id=principal.session_id),
         csrf_token=principal.csrf_token,
         expires_at=principal.expires_at,
         quota=QuotaOut.build(status_, guest),
+        imports=imports,
     )
 
 
@@ -133,7 +179,7 @@ def start_guest_session(
     services: AppServices = Depends(get_services),
 ) -> GuestSessionResponse:
     """Start a guest session, or return the browser's current one unchanged (never renewed, so
-    asking again never resets its quota). No Azure call, no job."""
+    asking again never resets its quotas). No Azure or Supadata call, no job, no import."""
     if account_principal(request, db, services) is not None:
         raise ApiError(
             status.HTTP_409_CONFLICT,
@@ -142,7 +188,7 @@ def start_guest_session(
         )
     current = guest_principal(request, db, services)
     if current is not None:
-        return _response(db, request, current, guest)
+        return _response(db, request, current, guest, services)
 
     ip_key = guest.network_key(request)
     if ip_key is None:
@@ -177,7 +223,7 @@ def start_guest_session(
         expires_at=issued.expires_at,
         guest=True,
     )
-    return _response(db, request, principal, guest)
+    return _response(db, request, principal, guest, services)
 
 
 @router.get("/session", response_model=GuestSessionResponse)
@@ -186,8 +232,9 @@ def get_guest_session(
     guest: GuestAccess = Depends(guest_access),
     principal: Principal = Depends(require_guest_session),
     db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
 ) -> GuestSessionResponse:
-    return _response(db, request, principal, guest)
+    return _response(db, request, principal, guest, services)
 
 
 @router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)

@@ -63,6 +63,8 @@ const guestBody = (overrides: Record<string, unknown> = {}, id = "g-1", csrf = "
   csrf_token: csrf,
   expires_at: "2030-01-01T00:00:00Z",
   quota: quota(overrides),
+  // The server sends null when it has no YouTube import (App.guestImport.test.tsx has imports).
+  imports: null,
 });
 const guestSession =
   (overrides: Record<string, unknown> = {}, status = 200, id = "g-1") =>
@@ -133,7 +135,7 @@ describe("Try as guest on the sign-in screen", () => {
 
     const banner = await screen.findByRole("region", { name: "Guest mode" });
     expect(within(banner).getByText(
-        /5 jobs left · up to 1,000 words and 10 minutes of audio per job/,
+        /5 audio jobs left · up to 1,000 words and 10 minutes of audio per job/,
       )).toBeTruthy();
     expect(screen.getByText("Guest")).toBeTruthy();
     expect(screen.queryByRole("radio", { name: "YouTube URL" })).toBeNull();
@@ -182,7 +184,7 @@ describe("a guest session on reload", () => {
       "GET /api/guest/session": [guestSession({ session_used: 2, session_remaining: 3 })],
     });
     const banner = await screen.findByRole("region", { name: "Guest mode" });
-    expect(within(banner).getByText(/3 jobs left/)).toBeTruthy();
+    expect(within(banner).getByText(/3 audio jobs left/)).toBeTruthy();
   });
 
   it("shows sign in when neither session exists", async () => {
@@ -220,7 +222,7 @@ describe("quota in the Studio", () => {
     await waitFor(() =>
       expect(fake.to("/api/guest/session").filter((r) => r.method === "GET")).toHaveLength(3),
     );
-    expect(screen.getByText(/5 jobs left/)).toBeTruthy();
+    expect(screen.getByText(/5 audio jobs left/)).toBeTruthy();
   });
 
   it("explains a network quota and offers signing in with an invitation", async () => {
@@ -250,7 +252,7 @@ describe("quota in the Studio", () => {
     const banner = screen.getByRole("region", { name: "Guest mode" });
     await within(banner).findByText(/everyone on the same network shares this limit/);
     expect(within(banner).getByText(/One frees up in about 120 minutes/)).toBeTruthy();
-    expect(within(banner).getByText(/0 jobs left/)).toBeTruthy();
+    expect(within(banner).getByText(/0 audio jobs left/)).toBeTruthy();
 
     const signIns = screen.getAllByRole("button", { name: "Sign in with an invitation" });
     expect(signIns).toHaveLength(2); // in the banner and next to the error
@@ -467,13 +469,13 @@ describe("late answers never act on a newer identity", () => {
     await waitFor(() => expect(fake.to("/api/guest/session")).toHaveLength(2));
     await user.click(button("Leave guest mode"));
     await user.click(await screen.findByRole("button", { name: "Try as guest" }));
-    await screen.findByText(/5 jobs left/);
+    await screen.findByText(/5 audio jobs left/);
 
     await refresh.release(
       json(200, guestBody({ session_used: 4, session_remaining: 1 }, "g-1", "guest-csrf")),
     );
-    expect(screen.getByText(/5 jobs left/)).toBeTruthy();
-    expect(screen.queryByText(/1 job left/)).toBeNull();
+    expect(screen.getByText(/5 audio jobs left/)).toBeTruthy();
+    expect(screen.queryByText(/1 audio job left/)).toBeNull();
   });
 
   it("a late 401 of a guest job submission does not sign out the account", async () => {

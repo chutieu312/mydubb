@@ -32,6 +32,8 @@ These specs run in the projects `auth-desktop` and `auth-mobile` (`E2E_COGNITO_B
 | `auth.recovery.spec.ts` | Forgot password says the same for known and unknown addresses; reset then sign in with the new password only; wrong code and rejected password; local code/confirmation checks; an unknown reset outcome (one request, server message, no retry, sign-in refused meanwhile) |
 | `auth.session.spec.ts` | Sign out and a fresh start; failed sign out (network, 503) and retry; session expiry with the draft coming back for the same user only; two accounts never see each other's jobs |
 | `auth.layout.spec.ts` | Every screen in Light and Dark at 320/390/412/1280 px: no overflow, nothing sticking out of its card, contrast, long emails and messages; keyboard order and focus; field errors announced. Screenshots go to `test-results/auth-shots/` |
+| `auth.guest.spec.ts` | "Try as guest" (guest access on, own client address per test): create, play and download; banner counts and reload; the sixth job refused; the network quota shared by sessions; audio and word limits; leaving guest mode then signing in; narrow screens |
+| `auth.guestImport.spec.ts` | Guest YouTube import (mock provider): import, edit, timed job, audio jobs and imports counted apart, reload imports nothing; the sixth import refused with the form kept and pasting still possible; no horizontal overflow at 320/390 px |
 
 A live Amazon Cognito run is **not** covered here.
 

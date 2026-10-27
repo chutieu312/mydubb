@@ -26,8 +26,9 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 
 - Guest (`GUEST_ACCESS_ENABLED=true`, Cognito mode only): an HttpOnly `mydubb_guest` cookie from
   `POST /api/guest/session` ([Guest access](#guest-access)). It is accepted **only** by the job
-  endpoints and `/api/guest/session`; every other endpoint treats a guest as not signed in. With
-  both an account and a guest cookie, the job endpoints use the account.
+  endpoints, `POST /api/transcripts/youtube` (with its own import quota) and `/api/guest/session`;
+  every other endpoint treats a guest as not signed in. With both an account and a guest cookie,
+  the job endpoints and the import use the account.
 
 **CSRF**: state-changing requests made with a session (`POST /api/jobs`,
 `POST /api/transcripts/youtube`, `DELETE /api/session`, `POST /api/auth/logout`,
@@ -46,7 +47,7 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds}`; see [Guest access](#guest-access)) |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds, imports_per_session, imports_per_ip}`; the import fields only matter when `youtube_import.enabled`; see [Guest access](#guest-access)) |
 
 ## Session (Private Beta access)
 
@@ -392,13 +393,21 @@ Guest session body (`POST` and `GET`):
     "ip_limit": 20, "ip_used": 3, "ip_in_progress": 1, "ip_remaining": 16,
     "ip_window_seconds": 86400, "ip_retry_after_seconds": null, "max_words": 1000,
     "max_output_seconds": 600
+  },
+  "imports": {
+    "session_limit": 5, "session_used": 2, "session_in_progress": 0, "session_remaining": 3,
+    "ip_limit": 20, "ip_used": 4, "ip_in_progress": 0, "ip_remaining": 16,
+    "ip_retry_after_seconds": null
   }
 }
 ```
 
-A job still processing holds a place (`*_in_progress`); a failed one gives it back. The network
-fields are `null` when this request's network cannot be told. Jobs left = the smaller of
-`session_remaining` and `ip_remaining`.
+`quota` counts audio jobs: a job still processing holds a place (`*_in_progress`); a failed one
+gives it back. `imports` counts YouTube caption imports, apart from jobs (same fields, same
+network window `quota.ip_window_seconds`): only successful imports count, one still running holds a
+place; `imports` is `null` while the server has no import provider (`YOUTUBE_IMPORT_PROVIDER=off`).
+The network fields are `null` when this request's network cannot be told. Jobs (or imports) left
+= the smaller of `session_remaining` and `ip_remaining`.
 
 ### `POST /api/guest/session`
 No session needed; the Origin rule applies. Never calls a provider and creates no job.
@@ -438,7 +447,28 @@ checks, in this order, before anything is written:
 A `202` reserves one place in both quotas: completed → used, failed (any reason, including
 `interrupted`) → given back.
 
-`POST /api/transcripts/youtube` with a guest session: `403 guest_not_allowed`.
+### YouTube import as a guest
+`POST /api/transcripts/youtube` (below) with the guest session + CSRF: the same request, answer,
+link checks, limits and errors as for an account, plus an import quota of its own
+(`GUEST_IMPORTS_PER_SESSION` successful imports per guest session, `GUEST_IMPORTS_PER_IP` per
+network in the `GUEST_IP_WINDOW_SECONDS` sliding window; defaults 5 and 20 per 24 hours), apart
+from the job quota: an import never uses up a job, nor a job an import. Checked in this order,
+before Supadata is called:
+
+| Status | Code | When |
+|---|---|---|
+| `503` | `guest_network_unknown` | As above; nothing written |
+| `503` | `youtube_import_busy` | As for everyone; nothing written |
+| `429` | `guest_import_session_quota_exhausted` | The guest session has used (or holds) all its imports. Extra: `limit` |
+| `429` | `guest_import_ip_quota_exhausted` | Guests on this network used (or hold) all imports of the window. `Retry-After` and `retry_after_seconds` when a used import will leave the window; extra `limit`, `window_seconds` |
+
+An accepted import holds one place in both import quotas while it runs. It counts as used once the
+captions were fetched, checked and written as the transcript, before the `200` is sent, also when
+the transcript is longer than a guest job allows (the `422` limits of `POST /api/jobs` still apply
+when generating; the import never shortens anything) and also when the browser has gone away
+meanwhile (a disconnect does not stop the import). Any import error gives the place back; that
+does not give back a Supadata credit the request may have cost. A success that could not be
+recorded is not delivered: `503 youtube_import_not_recorded` (nothing counted, nothing imported).
 
 ## YouTube caption import
 
@@ -450,7 +480,8 @@ whatever the form holds at that moment. Off unless `YOUTUBE_IMPORT_PROVIDER` is 
 `mock` outside production); `GET /api/meta` reports it as `youtube_import`.
 
 ### `POST /api/transcripts/youtube`
-Requires session + CSRF (and the Origin rule above), like `POST /api/jobs`. Body
+Requires session + CSRF (and the Origin rule above), like `POST /api/jobs`; an account, or a guest
+session with its own [import quota](#youtube-import-as-a-guest). Body
 `{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}`.
 
 Accepted links (`backend/app/youtube_import/youtube_url.py`): `https` only;
@@ -510,6 +541,7 @@ returned as `401`, so the UI does not take it for an ended session:
 | 503 | `youtube_import_rate_limited` + `Retry-After: 5` | Supadata 429 rate limit |
 | 503 | `youtube_import_busy` + `Retry-After: 10` | `YOUTUBE_IMPORT_MAX_CONCURRENT` imports already running (admission control, not a quota) |
 | 503 | `youtube_import_cancelled` | The server is shutting down |
+| 429 / 503 | `guest_import_*`, `guest_network_unknown`, `youtube_import_not_recorded` | Guests only: [YouTube import as a guest](#youtube-import-as-a-guest) |
 | 504 | `youtube_import_timeout` | A request not complete within `SUPADATA_TIMEOUT_SECONDS`, the import not complete within `SUPADATA_DEADLINE_SECONDS` (an asynchronous job still running, a stalled or slowly dripping answer, an answer that finished or was checked after the deadline), or no request slot free before the deadline |
 
 How the request is served:

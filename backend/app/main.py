@@ -174,6 +174,10 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             if services.youtube_import is not None:
                 # Imports waiting for the provider or a request slot stop instead of outliving us.
                 services.youtube_import.close()
+            if services.guest_imports is not None:
+                # Guest imports end (cancelled) and give their place back before the database
+                # goes away; whatever is left is released by the next instance's recovery.
+                await services.guest_imports.wait_idle(services.settings.job_shutdown_grace_seconds)
             await drain_running_jobs(services)
             if services.speech_limiter is not None:
                 # Jobs still waiting for a speech request slot stop instead of outliving us.

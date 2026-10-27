@@ -28,6 +28,7 @@ from app.config import (
 )
 from app.db import create_db_engine, create_session_factory
 from app.guest.access import GuestAccess
+from app.guest.imports import GuestImportRunner
 from app.jobs.executor import BoundedThreadJobExecutor, JobExecutor
 from app.jobs.pipeline import JobPipeline
 from app.speech.azure import AzureSpeechProvider
@@ -72,6 +73,8 @@ class AppServices:
     youtube_import: YouTubeImporter | None = None
     # "Try as guest" policy and IP-hash key; None while GUEST_ACCESS_ENABLED=false.
     guest: GuestAccess | None = None
+    # Guest YouTube imports this process is running (their heartbeats and settlement).
+    guest_imports: GuestImportRunner | None = None
 
 
 def build_translator(
@@ -278,4 +281,5 @@ def build_services(
         recovery_email_limiter=recovery_email_limiter,
         youtube_import=build_youtube_import(settings, youtube_import_transport),
         guest=GuestAccess.from_settings(settings),
+        guest_imports=GuestImportRunner(session_factory),
     )

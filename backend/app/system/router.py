@@ -38,6 +38,9 @@ def _guest_access(services: AppServices) -> dict:
         "max_words": policy.max_words,
         "max_output_seconds": policy.max_output_seconds,
         "session_ttl_seconds": policy.session_ttl_seconds,
+        # YouTube imports (offered to guests when `youtube_import.enabled`); not jobs.
+        "imports_per_session": policy.imports_per_session,
+        "imports_per_ip": policy.imports_per_ip,
     }
 
 

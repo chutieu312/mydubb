@@ -221,6 +221,10 @@ class Settings(BaseSettings):
     guest_max_words: int = Field(default=1000, ge=10, le=100_000)
     # Longest audio a guest job may produce: baseline / speed (the output length), in seconds.
     guest_max_output_seconds: int = Field(default=600, ge=10, le=3 * 3600)
+    # Successful YouTube caption imports allowed per guest session, and per client network in
+    # the same sliding window as jobs. A quota of its own: an import never uses up a job.
+    guest_imports_per_session: int = Field(default=5, ge=1, le=1000)
+    guest_imports_per_ip: int = Field(default=20, ge=1, le=10_000)
     # Guest sessions that may be started per client network and overall in a sliding window, so
     # starting sessions cannot grow the database without bound.
     guest_sessions_per_ip: int = Field(default=10, ge=1, le=10_000)

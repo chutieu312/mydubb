@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
-import { GUEST_QUOTA_CODES } from "../../api/guestApi";
+import { GUEST_QUOTA_CODES, guestImportsLeft, type GuestImportQuota } from "../../api/guestApi";
 import type { Job, VoiceOption, YouTubeImport } from "../../api/types";
-import { DEFAULT_SPEED } from "../../lib/speed";
+import { guestImportLimitText } from "../../lib/guestQuota";
+import { DEFAULT_SPEED, formatClock, previewOutputSeconds } from "../../lib/speed";
 import type { StudioDraft } from "../../lib/studioDraft";
 import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
 import { analyzeTranscriptTiming, type TranscriptTiming } from "../../lib/transcriptTiming";
@@ -12,7 +13,7 @@ import { FieldMessage } from "./FieldMessage";
 import { LengthSummary } from "./LengthSummary";
 import { SpeedField } from "./SpeedField";
 import { TimestampInput } from "./TimestampInput";
-import { TranscriptSource, type Source } from "./TranscriptSource";
+import { TranscriptSource, type GuestImportInfo, type Source } from "./TranscriptSource";
 import { TranscriptTimingPanel } from "./TranscriptTimingPanel";
 import { useYouTubeImport } from "./useYouTubeImport";
 import { VoiceField } from "./VoiceField";
@@ -21,6 +22,8 @@ const EDITED_DURING_IMPORT =
   "Import cancelled because you edited the form. Nothing was replaced.";
 const LINK_CHANGED_DURING_IMPORT =
   "Import cancelled because the link changed. Choose Import transcript to import it.";
+// The server finishes an import it started whatever the page does, and a success counts.
+const GUEST_CANCELLED_MAY_COUNT = " It may still count as one of your guest imports.";
 
 interface Props {
   voices: VoiceOption[];
@@ -43,6 +46,11 @@ export interface GuestLimits {
   // A quota answer (429) came back: the caller refreshes the remaining jobs.
   onQuotaExhausted: () => void;
   onSignIn: () => void;
+  // YouTube imports left (apart from jobs), and the network window they are counted in.
+  imports?: GuestImportQuota | null;
+  windowSeconds?: number;
+  // An import ended (or was cancelled here): the caller refreshes the remaining imports.
+  onImportFinished?: () => void;
 }
 
 type FieldErrors = Partial<Record<string, string>>;
@@ -92,7 +100,8 @@ export function DubbingForm({
   const [quotaRefused, setQuotaRefused] = useState(false);
   const [source, setSource] = useState<Source>("paste");
   const [youtubeUrl, setYoutubeUrl] = useState("");
-  const importer = useYouTubeImport(onSessionExpired);
+  const importer = useYouTubeImport(onSessionExpired, guest?.onImportFinished);
+  const cancelledSuffix = guest ? GUEST_CANCELLED_MAY_COUNT : "";
 
   useEffect(() => {
     onDraftChange?.({ transcript, firstStart, lastStart, voice, speed, ignoreTimestamps });
@@ -136,15 +145,15 @@ export function DubbingForm({
   // An import still running must not overwrite what the user is typing. Timing is always read
   // from what the box holds, so an edited import is timed by its edited captions.
   const editTranscript = (value: string) => {
-    importer.cancel(EDITED_DURING_IMPORT);
+    importer.cancel(EDITED_DURING_IMPORT + cancelledSuffix);
     changeTranscript(value);
   };
   const editFirstStart = (value: string) => {
-    importer.cancel(EDITED_DURING_IMPORT);
+    importer.cancel(EDITED_DURING_IMPORT + cancelledSuffix);
     setFirstStart(value);
   };
   const editLastStart = (value: string) => {
-    importer.cancel(EDITED_DURING_IMPORT);
+    importer.cancel(EDITED_DURING_IMPORT + cancelledSuffix);
     setLastStart(value);
   };
 
@@ -155,7 +164,7 @@ export function DubbingForm({
 
   const changeUrl = (value: string) => {
     setYoutubeUrl(value);
-    if (importer.importing) importer.cancel(LINK_CHANGED_DURING_IMPORT);
+    if (importer.importing) importer.cancel(LINK_CHANGED_DURING_IMPORT + cancelledSuffix);
     else if (importer.status.kind === "error") importer.reset();
   };
 
@@ -195,6 +204,31 @@ export function DubbingForm({
     importer.setStatus({ kind: "idle" });
     importer.start(youtubeUrl.trim(), applyImport);
   };
+
+  // Guest limits the form's current content goes over (a preview; the server decides). The
+  // imported transcript is never shortened and the times are never changed to fit.
+  const outputSeconds = preview === null ? null : previewOutputSeconds(preview, speed);
+  const overGuestLimits: string[] = [];
+  if (guest && wordCount > guest.maxWords) {
+    overGuestLimits.push(
+      `about ${wordCount.toLocaleString("en-US")} words (at most ${guest.maxWords.toLocaleString("en-US")})`,
+    );
+  }
+  if (guest && outputSeconds !== null && outputSeconds > guest.maxOutputSeconds) {
+    overGuestLimits.push(
+      `${formatClock(outputSeconds)} of audio (at most ${formatClock(guest.maxOutputSeconds)})`,
+    );
+  }
+  const guestImport: GuestImportInfo | undefined =
+    guest?.imports
+      ? {
+          left: guestImportsLeft(guest.imports),
+          limitText: guestImportLimitText(guest.imports, guest.windowSeconds ?? 0),
+          maxWords: guest.maxWords,
+          maxOutputSeconds: guest.maxOutputSeconds,
+          overLimits: overGuestLimits,
+        }
+      : undefined;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -254,6 +288,7 @@ export function DubbingForm({
               onImport={requestImport}
               onConfirm={confirmImport}
               onKeep={() => importer.setStatus({ kind: "idle" })}
+              guest={guestImport}
             />
           )}
         </div>

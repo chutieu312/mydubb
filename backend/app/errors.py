@@ -51,14 +51,6 @@ def not_authenticated() -> ApiError:
     )
 
 
-def guest_not_allowed() -> ApiError:
-    return ApiError(
-        status.HTTP_403_FORBIDDEN,
-        "guest_not_allowed",
-        "This feature needs an account. Sign in with your invitation to use it.",
-    )
-
-
 def _field_name(loc: tuple[Any, ...]) -> str:
     parts = [str(p) for p in loc if p not in ("body", "query", "path")]
     return ".".join(parts) or "request"

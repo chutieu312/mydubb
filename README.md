@@ -197,8 +197,9 @@ plan), `YOUTUBE_IMPORT_MAX_CONCURRENT`. Account, credits and the live smoke test
 "Try as guest" for people without an invitation: off by default (`GUEST_ACCESS_ENABLED=false`).
 It needs `AUTH_MODE=cognito` and `GUEST_IP_HASH_KEY` (its own 32-byte key), and in production
 `CLIENT_IP_HEADER`. Quotas (5 completed jobs per guest session, 20 per client network per 24 hours,
-1,000 words and 10 minutes of audio per job), cookie, IP handling, retention and the required
-spoofing check before enabling: [docs/GUEST_ACCESS.md](docs/GUEST_ACCESS.md).
+1,000 words and 10 minutes of audio per job; with the YouTube import on, also 5 successful imports
+per guest session and 20 per network, counted apart from jobs), cookie, IP handling, retention and
+the required spoofing check before enabling: [docs/GUEST_ACCESS.md](docs/GUEST_ACCESS.md).
 
 ### Timed transcripts
 

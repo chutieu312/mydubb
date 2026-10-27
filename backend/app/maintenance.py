@@ -7,6 +7,7 @@ import time
 from app.access.service import delete_stale_sessions
 from app.auth.service import delete_stale_auth_rows, resolve_stale_password_resets
 from app.db import session_scope
+from app.guest.imports import heartbeat_imports, release_stale_imports
 from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
@@ -25,22 +26,36 @@ def recover_after_restart(services: AppServices) -> None:
 
 
 def fail_stale(services: AppServices) -> None:
+    settings = services.settings
     with session_scope(services.session_factory) as db:
-        failed = fail_stale_jobs(db, services.settings.job_stale_after_seconds)
+        failed = fail_stale_jobs(db, settings.job_stale_after_seconds)
     if failed:
         logger.warning("Marked %d job(s) with a stale heartbeat as interrupted", failed)
+    # Guest imports whose instance is gone (or that outlived any import's deadline): their
+    # place is given back. The provider is never called again to recover a result.
+    with session_scope(services.session_factory) as db:
+        released = release_stale_imports(
+            db,
+            stale_after_seconds=settings.job_stale_after_seconds,
+            max_age_seconds=settings.supadata_deadline_seconds + settings.job_stale_after_seconds,
+        )
+    if released:
+        logger.warning("Released %d guest import(s) whose worker stopped", released)
 
 
 def heartbeat(services: AppServices) -> None:
-    """Refresh heartbeats of the jobs this process still has queued or running.
+    """Refresh heartbeats of the jobs this process still has queued or running, and of the
+    guest imports it is running.
 
     The in-memory snapshot can race with a worker finishing: a job that reaches a terminal
     state in between is filtered out by its status, and a job orphaned in between gets at
     most one extra heartbeat, delaying its interruption by one interval.
     """
     owned = services.pipeline.unfinished_job_ids()
+    imports = services.guest_imports.running_ids() if services.guest_imports else []
     with session_scope(services.session_factory) as db:
         heartbeat_jobs(db, services.instance_id, owned)
+        heartbeat_imports(db, services.instance_id, imports)
 
 
 async def job_liveness_loop(services: AppServices) -> None:

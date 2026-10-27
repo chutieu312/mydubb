@@ -84,7 +84,7 @@ def db_engine(engine: Engine) -> Engine:
         conn.execute(
             text(
                 "TRUNCATE jobs, access_sessions, glossary_candidates, users, user_sessions, "
-                "guest_sessions, guest_job_quota, "
+                "guest_sessions, guest_job_quota, guest_import_quota, "
                 "password_reset_attempts, "
                 "auth_challenges, password_reset_events"
             )
