@@ -546,8 +546,11 @@ def test_the_network_window_slides(make_guest_client, db_engine):
             ),
             {"id": first},
         )
-    assert guest_job(client, csrf).status_code == 202
-    assert quota(client)["session_used"] + quota(client)["session_in_progress"] == 3
+    third = guest_job(client, csrf)
+    assert third.status_code == 202
+    wait_for_terminal(client, third.json()["id"])
+    # One read after the job ended (two reads could straddle its completion).
+    assert quota(client)["session_used"] == 3
 
 
 def test_failed_jobs_give_their_place_back(make_guest_client, db_engine):
