@@ -18,9 +18,9 @@ video, and MyDubb:
 
 ## See it work
 
-Both demos ran on [mydubb.com](https://mydubb.com) in guest mode, with the voice and speed shown
-under each one. Waiting time is shortened in the GIFs. Each audio link opens the full, unedited MP3
-that MyDubb generated in that demo.
+Edited walkthroughs using real production results; waiting time shortened. Both demos ran on
+[mydubb.com](https://mydubb.com) in guest mode, with the voice and speed shown under each one. Each
+audio link opens the full, unedited MP3 that MyDubb generated in that demo.
 
 ### Demo 1: paste a transcript
 
