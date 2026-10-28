@@ -28,7 +28,7 @@ that MyDubb generated in that demo.
 
 Voice: Andrew Multilingual · Speed: 1x
 
-[🔊 Listen to the generated audio](docs/assets/demo/demo-paste.mp3?raw=true)
+[🔊 Listen to the generated audio](https://cdn.jsdelivr.net/gh/chutieu312/mydubb@main/docs/assets/demo/demo-paste.mp3)
 
 ### Demo 2: import a YouTube video's English captions
 
@@ -36,7 +36,7 @@ Voice: Andrew Multilingual · Speed: 1x
 
 Voice: Andrew Multilingual · Speed: 1x
 
-[🔊 Listen to the generated audio](docs/assets/demo/demo-youtube.mp3?raw=true)
+[🔊 Listen to the generated audio](https://cdn.jsdelivr.net/gh/chutieu312/mydubb@main/docs/assets/demo/demo-youtube.mp3)
 
 Both transcripts have timestamps, so MyDubb used its timed mode: it places the speech near the
 caption times. That timing is an estimate, not exact sentence-by-sentence synchronization, and
