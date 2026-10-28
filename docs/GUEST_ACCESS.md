@@ -119,7 +119,11 @@ no one out. The UI never imports by itself (mount, restore or a count refresh se
 running import blocks a second click.
 
 **Recovery.** While an import runs, the instance's liveness loop refreshes its heartbeat (every
-`JOB_HEARTBEAT_INTERVAL_SECONDS`, the same loop as jobs). Startup recovery and the liveness loop
+`JOB_HEARTBEAT_INTERVAL_SECONDS`, the same loop as jobs). The import heartbeat is an import
+database step like the others (bounded, counted, on the runner's daemon threads), started in the
+background so it never holds up the loop: at most one at a time (a tick skips it while the previous
+one still runs) and none once shutdown has begun. A heartbeat stuck past every timeout therefore
+makes shutdown not quiescent (the import engine is left to the process exit) without delaying it. Startup recovery and the liveness loop
 release a reserved import whose heartbeat is older than `JOB_STALE_AFTER_SECONDS` (its instance
 stopped or crashed), or that has been reserved longer than any import can run
 (`SUPADATA_DEADLINE_SECONDS + JOB_STALE_AFTER_SECONDS`): a reservation is never held forever, and

@@ -44,8 +44,7 @@ def fail_stale(services: AppServices) -> None:
 
 
 def heartbeat(services: AppServices) -> None:
-    """Refresh heartbeats of the jobs this process still has queued or running, and of the
-    guest imports it is running.
+    """Refresh heartbeats of the jobs this process still has queued or running.
 
     The in-memory snapshot can race with a worker finishing: a job that reaches a terminal
     state in between is filtered out by its status, and a job orphaned in between gets at
@@ -54,17 +53,19 @@ def heartbeat(services: AppServices) -> None:
     owned = services.pipeline.unfinished_job_ids()
     with session_scope(services.session_factory) as db:
         heartbeat_jobs(db, services.instance_id, owned)
-    if services.guest_imports is not None:
-        # On the import runner's bounded engine, like every import step.
-        services.guest_imports.heartbeat(services.instance_id)
 
 
 async def job_liveness_loop(services: AppServices) -> None:
-    """Keep this instance's jobs alive and fail jobs whose instance disappeared."""
+    """Keep this instance's jobs (and guest imports) alive and fail jobs whose instance
+    disappeared."""
     interval = services.settings.job_heartbeat_interval_seconds
     while True:
         await asyncio.sleep(interval)
         try:
+            if services.guest_imports is not None:
+                # In the background on the import runner's own daemon threads, like every import
+                # step: never the default executor, never waited for here, never two at once.
+                services.guest_imports.schedule_heartbeat(services.instance_id)
             await asyncio.to_thread(heartbeat, services)
             await asyncio.to_thread(fail_stale, services)
         except Exception:

@@ -396,6 +396,8 @@ class GuestImportRunner:
         self._db_calls = 0
         # Set by `stop` (application shutdown): no import may start database work any more.
         self._stopping = False
+        # The import heartbeat in flight, if any: never two at once.
+        self._heartbeat: asyncio.Future | None = None
 
     @property
     def stop_bound_seconds(self) -> float:
@@ -434,17 +436,27 @@ class GuestImportRunner:
             task.add_done_callback(lambda _: on_done())
         return await asyncio.shield(task)
 
-    def heartbeat(self, runner_id: str) -> int:
-        """Liveness loop (in a thread): refresh the heartbeat of the imports running here."""
+    def schedule_heartbeat(self, runner_id: str) -> bool:
+        """Liveness loop (on the event loop): refresh the heartbeat of the imports running here,
+        in the background, like every import step (daemon thread, counted, bounded). It never
+        blocks the loop; at most one runs at a time (a slow one is not stacked up: the next tick
+        skips it), and none starts once `stop` has begun. Returns whether one was started."""
+        if self._stopping or (self._heartbeat is not None and not self._heartbeat.done()):
+            return False
         ids = self.running_ids()
         if not ids:
-            return 0
+            return False
+        self._heartbeat = asyncio.ensure_future(self._beat(runner_id, ids))
+        return True
+
+    async def _beat(self, runner_id: str, ids: list[uuid.UUID]) -> None:
         try:
-            return self._counted(
-                self._transaction, lambda db: heartbeat_imports(db, runner_id, ids)
-            )
+            await self._db(lambda db: heartbeat_imports(db, runner_id, ids))
         except ImportsStopped:
-            return 0
+            pass
+        except Exception:
+            # Missed beats only bring recovery closer; the next tick tries again.
+            logger.warning("Guest import heartbeat failed")
 
     def _finished(self, task: asyncio.Task) -> None:
         self._tasks.discard(task)
@@ -476,6 +488,9 @@ class GuestImportRunner:
         tasks = [task for task in self._tasks if not task.done()]
         for task in tasks:
             task.cancel()
+        if self._heartbeat is not None and not self._heartbeat.done():
+            # Its statement, if running, stays counted below; only its awaiter goes.
+            self._heartbeat.cancel()
         bound = self.stop_bound_seconds
         phase_end = time.monotonic() + bound
         if tasks:

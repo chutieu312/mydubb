@@ -211,7 +211,9 @@ of an old and a new instance during a zero-downtime deploy is supported:
   Free plan).
 - After a hard crash, the crashed process's jobs are failed by the next live instance within
   roughly `JOB_STALE_AFTER_SECONDS + JOB_HEARTBEAT_INTERVAL_SECONDS`.
-- Guest YouTube imports use the same loop: the process heartbeats the imports it is running, and
+- Guest YouTube imports use the same loop: the process heartbeats the imports it is running (in
+  the background on the import runner's own bounded daemon threads, one at a time, never after
+  shutdown began; the job heartbeat stays on the loop's thread as before), and
   recovery gives back the place of an import whose heartbeat is stale or that outlived
   `SUPADATA_DEADLINE_SECONDS + JOB_STALE_AFTER_SECONDS`; an import is never retried.
 - Job status lives in PostgreSQL, so clients polling through the new instance see progress of

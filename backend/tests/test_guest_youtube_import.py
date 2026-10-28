@@ -26,7 +26,7 @@ from app.guest.imports import (
     ImportsStopped,
 )
 from app.main import create_app
-from app.maintenance import fail_stale, heartbeat, run_cleanup
+from app.maintenance import fail_stale, run_cleanup
 from app.services import build_services
 from app.youtube_import.base import ImportFailure
 from tests.conftest import wait_for_terminal
@@ -629,17 +629,24 @@ def test_startup_recovery_releases_imports_of_a_crashed_instance(
 
 
 def test_the_liveness_loop_keeps_running_imports_alive(guest_import_client, db_engine):
+    """Through the real liveness loop (1 s ticks): the running import's heartbeat is refreshed,
+    so recovery leaves it alone."""
     blocking, entered, release = blocking_provider()
-    client, _ = guest_import_client(blocking)
+    client, _ = guest_import_client(blocking, job_heartbeat_interval_seconds=1)
     services = client.app.state.services  # type: ignore[attr-defined]
     csrf = start_guest(client)["csrf_token"]
     with import_in_flight(client, csrf, release) as result:
         assert entered.wait(10)
+        (row,) = import_rows(db_engine)
         with db_engine.begin() as conn:
             conn.execute(
-                text("UPDATE guest_import_quota SET heartbeat_at = now() - interval '10 minutes'")
+                text("UPDATE guest_import_quota SET heartbeat_at = now() - interval '60 seconds'")
             )
-        heartbeat(services)  # this instance still runs it: refreshed
+        aged = _heartbeat(db_engine, row.id)
+        deadline = time.monotonic() + 10
+        while _heartbeat(db_engine, row.id) == aged and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert _heartbeat(db_engine, row.id) > aged  # refreshed by the loop
         fail_stale(services)
         assert states(db_engine) == ["reserved"]
     assert result["r"].status_code == 200
@@ -1273,3 +1280,122 @@ def test_a_step_the_database_cannot_end_leaves_the_import_engine_open(
 
 def factory_for(db_engine) -> sessionmaker:
     return sessionmaker(bind=db_engine, expire_on_commit=False)
+
+
+def test_a_stuck_import_heartbeat_from_the_liveness_loop_never_holds_up_shutdown(
+    make_settings, fake_cognito, db_engine, factory, monkeypatch
+):
+    """Through the real liveness loop: an import heartbeat stuck outside the database (past every
+    timeout) runs on a daemon thread of the runner, is never stacked up by later ticks, keeps
+    shutdown finite (the loop's default executor is not held), and makes stop not quiescent, so
+    the import engine is not disposed. Recovery then releases the import once."""
+    grace = 0.5
+    hang = 12.0  # outlasts the ticks below plus the whole shutdown
+    real_heartbeat = guest_imports.heartbeat_imports
+    calls: list[bool] = []  # one entry per heartbeat started: is its thread a daemon?
+    stuck = threading.Event()
+    finished = threading.Event()
+
+    def stuck_heartbeat(db, runner_id, operation_ids):
+        calls.append(threading.current_thread().daemon)
+        if len(calls) == 1:
+            stuck.set()
+            time.sleep(hang)
+            finished.set()
+        return real_heartbeat(db, runner_id, operation_ids)
+
+    monkeypatch.setattr(guest_imports, "heartbeat_imports", stuck_heartbeat)
+    entered = threading.Event()
+
+    async def stalled(request: httpx.Request) -> httpx.Response:
+        entered.set()
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    services = build_services(
+        make_settings(
+            **{**GUEST_SETTINGS, **SUPADATA},
+            job_shutdown_grace_seconds=grace,
+            job_heartbeat_interval_seconds=1,
+        ),
+        youtube_import_transport=httpx.MockTransport(stalled),
+        cognito_client=fake_cognito,
+    )
+    database = DatabaseActivity(services)
+    runner = services.guest_imports
+    assert runner is not None
+    client = TestClient(create_app(services=services))
+    client.__enter__()
+    result: dict = {}
+    try:
+        csrf = start_guest(client)["csrf_token"]
+        worker = threading.Thread(target=lambda: result.update(r=guest_import(client, csrf)))
+        worker.start()
+        assert entered.wait(10)
+        assert stuck.wait(10)  # the loop's first import heartbeat is stuck
+        time.sleep(2.5)  # more ticks pass meanwhile
+        assert len(calls) == 1  # not stacked up behind the stuck one
+        assert calls == [True]  # on a daemon thread, not the default executor
+    finally:
+        started = time.monotonic()
+        stopping = threading.Thread(target=client.__exit__, args=(None, None, None), daemon=True)
+        stopping.start()
+        stopping.join(grace + 2 * runner.stop_bound_seconds + 10)
+        elapsed = time.monotonic() - started
+    assert not stopping.is_alive(), "shutdown did not finish"
+    worker.join(10)
+
+    # Finite: the grace plus the first stop phase, not the stuck heartbeat's remaining time.
+    assert elapsed < grace + runner.stop_bound_seconds + 1.0, elapsed
+    assert not finished.is_set()
+    assert result["r"].json()["error"]["code"] == "youtube_import_cancelled"
+    assert database.shared_disposed.is_set()
+    assert not database.import_disposed.is_set()  # not quiescent: the import engine stays
+    assert states(db_engine) == ["reserved"]  # no release was attempted
+    # Nothing new after stop: no further heartbeat started, even once the stuck one ended.
+    assert finished.wait(hang + 5)
+    time.sleep(1.5)
+    assert len(calls) == 1
+    # Recovery of the next instance releases it (its heartbeat goes stale), exactly once.
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE guest_import_quota SET heartbeat_at = now() - interval '10 minutes'")
+        )
+    with factory.begin() as db:
+        assert (
+            guest_imports.release_stale_imports(db, stale_after_seconds=90, max_age_seconds=180)
+            == 1
+        )
+        assert (
+            guest_imports.release_stale_imports(db, stale_after_seconds=90, max_age_seconds=180)
+            == 0
+        )
+    assert states(db_engine) == ["released"]
+    services.guest_import_engine.dispose()  # type: ignore[union-attr]
+
+
+def test_the_import_heartbeat_is_never_started_twice_or_after_stop(factory, db_engine):
+    session = new_session(factory)
+    runner = GuestImportRunner(factory)
+
+    async def scenario():
+        started = asyncio.Event()
+
+        async def stalled():
+            started.set()
+            await asyncio.sleep(3600)
+
+        caller = asyncio.create_task(runner.run(reserving(session), stalled))
+        await started.wait()
+        assert runner.schedule_heartbeat("runner-1") is True
+        assert runner.schedule_heartbeat("runner-1") is False  # one already in flight
+        await asyncio.sleep(0.5)
+        assert runner.schedule_heartbeat("runner-1") is True  # the first one ended
+        outcome = await runner.stop()
+        assert outcome.quiescent and runner.db_calls() == 0
+        assert runner.schedule_heartbeat("runner-1") is False  # after stop: nothing new
+        with pytest.raises(ImportsStopped):
+            await caller
+
+    asyncio.run(scenario())
+    assert states(db_engine) == ["released"]
