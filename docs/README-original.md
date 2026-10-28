@@ -1,0 +1,279 @@
+# MyDubb
+
+Private-beta web app that turns a user-provided English transcript into Vietnamese speech
+for learning technical content.
+
+Repository: https://github.com/chutieu312/mydubb (private).
+
+**Status: Milestone 3C, audio speed and English detection done** (audio speed: 0.5x-2x, the file lasts baseline / speed; PR #18. English the translation kept is read in English and collected as glossary candidates; PR #20): the online Private Beta runs at https://mydubb.com with real
+English-to-Vietnamese translation by Azure Translator and a glossary that keeps technical
+terms in English (`TRANSLATION_PROVIDER=azure`), and real speech by Azure Speech
+(`SPEECH_PROVIDER=azure`; voices Andrew Multilingual, the default, and Emma Multilingual). Both
+are off by default, so local and CI runs stay all-mock (on top of Milestones 1, 2A and 2B:
+application foundation, mock end-to-end workflow, GitHub repository, CI, Render/Neon). Audio
+processing is FFmpeg duration fitting (`AUDIO_PROCESSOR=ffmpeg`, Milestone 3C), enabled on
+production: the audio lasts exactly the target (for gapless-aware players, see the MP3 limit in
+the architecture document). See
+[docs/ARCHITECTURE.md](ARCHITECTURE.md) for design and the roadmap,
+[docs/API.md](API.md) for API contracts, [docs/WORKFLOW.md](WORKFLOW.md) for the
+branch/CI workflow and [docs/DEPLOYMENT.md](DEPLOYMENT.md) for Render/Neon/domain setup and
+operations. Sign-in uses the Private Beta Access Code by default; invited email/password accounts
+with Amazon Cognito (`AUTH_MODE=cognito`, not enabled in production yet) are described in
+[docs/AUTHENTICATION.md](AUTHENTICATION.md) and [docs/AUTH_API.md](AUTH_API.md).
+
+## Quick start (end to end, Docker)
+
+```bash
+./run-app.sh     # builds and starts PostgreSQL + the app, waits until ready
+                 # open http://127.0.0.1:8000
+./stop-app.sh    # stops everything; database data is kept
+./stop-app.sh --purge   # also deletes the local database volume
+```
+
+`run-app.sh` uses `ACCESS_CODE` from your shell or the root `.env` file. If neither is set, it
+generates a random code and saves it to `.env` (git-ignored); read it there to log in. On
+Windows, run the scripts from Git Bash with Docker Desktop started.
+
+## Using the app
+
+Paste the English transcript, give the **First Sentence Start Time** and the **Last Sentence Start
+Time** (`HH:MM:SS`), pick a voice and an **audio speed**, then **Generate Dubbing**.
+
+- Type the start times as digits only: the colons appear by themselves (`000130` becomes
+  `00:01:30`) and nothing is completed for you, so `0000` stays `00:00` until you finish it. Pasting
+  `000130` or `00:01:30` both work. Hours with more than two digits (`100:05:30`) can be pasted or
+  edited, and are kept exactly as written. Details: [docs/API.md](API.md#timestamp-fields-in-the-ui).
+- The two timestamps give the *baseline*: `last - first`. At **1x** (the default) the audio lasts
+  exactly that long.
+- The other speeds (0.5x, 0.75x, 1.25x, 1.5x, 1.75x, 2x) change the audio file itself:
+  `length = baseline / speed`. For a baseline of 20 s, 2x gives 10 s and 0.5x gives 40 s. The audio
+  is then shorter or longer than the video's time span between the two timestamps; the form
+  previews the expected length and says so.
+- The speed is not a player setting: the downloaded MP3 has that length, the player plays it at
+  normal speed, and the result lists the baseline, the speed, the target and the length measured on
+  the finished file. See [docs/API.md](API.md#audio-speed) and
+  [docs/ARCHITECTURE.md](ARCHITECTURE.md).
+
+When the server has the YouTube caption import on, the transcript can also come from a video:
+choose **YouTube URL**, paste the link and choose **Import transcript**. The video's existing English
+captions fill the transcript (one start time line `M:SS.mmm`, then the caption's text) and the two
+start times (first and last caption, whole seconds). Nothing is generated until you review, edit
+and choose **Generate audio**. MyDubb does not transcribe audio: a video without English captions
+cannot be imported. The link is sent to Supadata. See
+[docs/API.md](API.md#youtube-caption-import).
+
+To listen to a speed series from a local lossless WAV without calling Azure:
+`cd backend && uv run python -m scripts.duration_smoke --wav speech.wav --baseline-seconds 20 --speeds`
+(needs FFmpeg; files go to `duration-samples/`).
+
+## Repository layout
+
+```
+backend/            FastAPI app (Python 3.12, uv), Alembic migrations, tests
+frontend/           React + TypeScript (Vite), Vitest tests
+e2e/                Playwright browser tests + isolated Compose stack
+docker/             Container entrypoint, smoke test, local Postgres init script
+Dockerfile          Production-style image: FastAPI serves API + React build (same origin)
+render.yaml         Render Blueprint for the online mock beta (see docs/DEPLOYMENT.md)
+docker-compose.yml  Local PostgreSQL (+ optional app container)
+.github/workflows/  CI
+```
+
+## Prerequisites
+
+- Docker (for PostgreSQL and image builds)
+- Python tooling: [uv](https://docs.astral.sh/uv/) 0.11+ (installs Python 3.12 if needed)
+- Node.js 22+
+- FFmpeg with `ffprobe`, including the `atempo` filter and the `libmp3lame` encoder (only for the
+  audio tests, `SPEECH_PROVIDER=azure` and `AUDIO_PROCESSOR=ffmpeg` outside Docker; the Docker
+  image includes it). Audio tests are skipped locally when it is missing and fail in CI.
+
+## Local development
+
+```bash
+# 1. PostgreSQL (creates databases `mydubb` and `mydubb_test`)
+docker compose up -d db
+
+# 2. Backend
+cp .env.example backend/.env        # then set ACCESS_CODE to your own value
+cd backend
+uv sync
+uv run alembic upgrade head
+uv run uvicorn app.main:create_app --factory --reload --port 8000
+
+# 3. Frontend (another terminal) — proxies /api to 127.0.0.1:8000
+cd frontend
+npm ci
+npm run dev                          # open http://localhost:5173
+```
+
+On Windows, use `127.0.0.1` rather than `localhost` in `DATABASE_URL` (avoids slow IPv6
+resolution). The `docker-compose` volume `pgdata` persists data; the init script that creates
+`mydubb_test` runs only when the volume is first created.
+
+### Trying failure scenarios
+
+Set `MOCK_FAIL_STAGE` in `backend/.env` to `translation`, `speech`, `audio` or `unexpected`
+and restart the backend. This control is rejected when `APP_ENV=production`.
+
+## Environment variables
+
+All configuration comes from environment variables; [.env.example](../.env.example) lists every
+variable with placeholders and comments. Required: `APP_ENV`, `DATABASE_URL` (PostgreSQL only),
+`ACCESS_CODE`, `PROVIDER_MODE`. Invalid or unsafe combinations stop the app at startup, e.g.
+a non-PostgreSQL URL, `PROVIDER_MODE=azure` while any component is a mock (it needs
+`TRANSLATION_PROVIDER=azure`, `SPEECH_PROVIDER=azure` and `AUDIO_PROCESSOR=ffmpeg`), or mock
+providers / `COOKIE_SECURE=false` with `APP_ENV=production`.
+
+### Azure translation + mock audio
+
+Set `PROVIDER_MODE=mock` (speech and audio stay mock), `TRANSLATION_PROVIDER=azure` and
+`AZURE_TRANSLATOR_KEY` (plus `AZURE_TRANSLATOR_REGION` for a regional resource) in
+`backend/.env`, which is git-ignored. Startup fails if the key is missing; there is never a
+silent fallback to the mock translator. The UI then labels translation as real and
+speech/audio as mock, and tells users that their transcript text is sent to Azure. Resource
+setup, the live smoke test (`uv run python -m scripts.azure_translator_smoke`) and enabling it on
+Render are in [docs/DEPLOYMENT.md](DEPLOYMENT.md#azure-translator-milestone-3a).
+Technical terms listed in
+[backend/app/translation/data/glossary.txt](../backend/app/translation/data/glossary.txt) stay in
+English; add a term by adding a line to that file in a pull request.
+
+### Azure speech (Milestone 3B)
+
+`SPEECH_PROVIDER=azure` makes the speech stage generate real speech from the translated text
+with Azure Speech (REST API), using one multilingual voice per audio (`AndrewMultilingual`,
+the default, or `EmmaMultilingual`) with the Vietnamese text and the glossary's English terms
+marked by language. English that a real translation kept outside the glossary (words that cannot be
+Vietnamese and were copied from the transcript, and code such as `/proc`) is marked English too;
+short English words that could be Vietnamese syllables (`run`, `Go`) are not, and may be
+mispronounced. Those terms are also collected as glossary candidates for a batch review
+([docs/DEPLOYMENT.md](DEPLOYMENT.md#glossary-candidates-english-detection); samples to
+listen to: `uv run python -m scripts.pronunciation_smoke --speak`). It works with either translation provider
+(`mock | azure`); without `AUDIO_PROCESSOR=ffmpeg` (below) audio processing is a pass-through and
+the audio length is **not** adjusted to the target. Required: `AZURE_SPEECH_KEY` and
+`AZURE_SPEECH_REGION` (the Speech resource's own key; the Translator key is never reused), plus
+`ffmpeg`/`ffprobe` on `PATH`. Startup fails if any is missing; there is no fallback to the mock.
+Optional: `AZURE_SPEECH_TIMEOUT_SECONDS`, `AZURE_SPEECH_MAX_CHUNK_CHARS` (default 2000),
+`AZURE_SPEECH_MAX_REQUESTS_PER_WINDOW` / `AZURE_SPEECH_RATE_WINDOW_SECONDS` (default 20 per 60 s,
+the Free F0 limit shared by all jobs). Resource setup and the live smoke test that creates MP3
+samples to listen to (`uv run python -m scripts.azure_speech_smoke`) are in
+[docs/DEPLOYMENT.md](DEPLOYMENT.md#azure-speech-milestone-3b).
+
+### Duration fitting (Milestone 3C)
+
+`AUDIO_PROCESSOR=ffmpeg` (needs `SPEECH_PROVIDER=azure` and `ffmpeg`/`ffprobe` with `atempo` and
+`libmp3lame`; startup fails otherwise) speeds up or slows down the **whole** speech audio, pitch
+preserved, so it lasts exactly the target (`last_sentence_start - first_sentence_start`): the PCM
+has exactly the target number of samples and the MP3 decodes to the same number (one sample of
+rounding at most). Nothing is cut or repeated; a result that cannot be brought to the target is a
+job error, not a pass-through. `PROVIDER_MODE=azure` means every component is real
+(`TRANSLATION_PROVIDER=azure`, `SPEECH_PROVIDER=azure`, `AUDIO_PROCESSOR=ffmpeg`). Details,
+measurements and limits: [docs/ARCHITECTURE.md](ARCHITECTURE.md#duration-fitting-milestone-3c).
+
+Check the durations without credentials (synthetic speech, real FFmpeg) and listen to the
+before/after files in `backend/duration-samples/` (git-ignored):
+
+```bash
+cd backend
+uv run python -m scripts.duration_smoke                    # table of target / source / PCM / MP3
+uv run python -m scripts.duration_smoke --wav speech.wav --target-seconds 360   # a local WAV
+uv run python -m scripts.duration_smoke --azure            # LIVE: 2 Azure Speech requests
+```
+
+### YouTube caption import
+
+Off by default (`YOUTUBE_IMPORT_PROVIDER=off`; pasting works the same either way).
+`YOUTUBE_IMPORT_PROVIDER=supadata` needs `SUPADATA_API_KEY` (startup fails without it; no other
+provider is used as a fallback). `YOUTUBE_IMPORT_PROVIDER=mock` returns fixed captions with no
+network call, for local development and the E2E stack (refused in production). Optional limits:
+`SUPADATA_TIMEOUT_SECONDS`, `SUPADATA_DEADLINE_SECONDS`, `SUPADATA_POLL_INTERVAL_SECONDS`,
+`SUPADATA_MAX_REQUESTS_PER_WINDOW` / `SUPADATA_RATE_WINDOW_SECONDS` (default 1 per second, the Free
+plan), `YOUTUBE_IMPORT_MAX_CONCURRENT`. Account, credits and the live smoke test
+(`uv run python -m scripts.supadata_smoke --confirm-credits N <links>`, one credit per link) are in
+[docs/DEPLOYMENT.md](DEPLOYMENT.md#youtube-caption-import-supadata).
+
+### Guest access
+
+"Try as guest" for people without an invitation: off by default (`GUEST_ACCESS_ENABLED=false`).
+It needs `AUTH_MODE=cognito` and `GUEST_IP_HASH_KEY` (its own 32-byte key), and in production
+`CLIENT_IP_HEADER`. Quotas (5 completed jobs per guest session, 20 per client network per 24 hours,
+1,000 words and 10 minutes of audio per job; with the YouTube import on, also 5 successful imports
+per guest session and 20 per network, counted apart from jobs), cookie, IP handling, retention and
+the required spoofing check before enabling: [docs/GUEST_ACCESS.md](GUEST_ACCESS.md).
+
+### Timed transcripts
+
+A transcript in the YouTube transcript-panel format (a timestamp alone on a line above each
+caption, whole seconds or `.mmm` milliseconds as written by the YouTube caption import below) can
+be dubbed in timed mode: the UI recognizes it, pasted or imported, fills the two start times from
+the first and last caption (truncated to whole seconds) and sends `timing_mode: "timed"`; the
+speech is then placed near the caption times (estimated, group-level timing, not exact per
+sentence). Plain mode is unchanged and remains the default. Rules, checks and limits: [docs/ARCHITECTURE.md](ARCHITECTURE.md#timed-dubbing).
+Measurement tools (Azure is called only by the smoke script, with a request and character budget):
+
+```bash
+cd backend
+uv run python -m scripts.timed_benchmark --words 1000 [--audio]   # parse cost, request model, FFmpeg
+uv run python -m scripts.timed_speech_smoke --output-dir DIR       # LIVE: 4 Azure Speech requests
+uv run python -m scripts.timed_speech_smoke --output-dir DIR --replay DIR/responses   # no network
+uv run python -m scripts.timed_grouping_samples --clips main=DIR --output-dir OUT    # no network
+```
+
+## Tests and checks
+
+```bash
+# Backend (needs PostgreSQL; the suite DROPS and recreates the schema of this database)
+cd backend
+export TEST_DATABASE_URL=postgresql://mydubb:mydubb_local@127.0.0.1:5432/mydubb_test
+uv run ruff check . && uv run ruff format --check .
+uv run pytest
+
+# Frontend (unit/regression tests run in jsdom with mocked fetch)
+cd frontend
+npm run lint && npm run typecheck && npm test && npm run build
+
+# Browser E2E (isolated throwaway Docker stack, mock providers) - see e2e/README.md
+cd e2e
+npm ci && npx playwright install chromium
+bash run-e2e.sh
+```
+
+Audio tests use the real `ffmpeg`/`ffprobe`; on a machine without them (e.g. plain Windows) run
+the suite in a Linux container with FFmpeg, as CI does.
+
+Database tests fail (they are not skipped) when `TEST_DATABASE_URL` is missing. Point it only
+at a disposable database such as `mydubb_test`, never at one holding data you need.
+The E2E suite uses its own PostgreSQL on tmpfs and never touches the development database.
+
+## Docker
+
+```bash
+docker build -t mydubb:local .
+
+# Run with the compose PostgreSQL:
+export ACCESS_CODE=your-own-local-code
+docker compose up --build            # http://127.0.0.1:8000
+
+# Smoke test a running container (health, readiness, SPA, one mock job):
+BASE_URL=http://127.0.0.1:8000 ACCESS_CODE=$ACCESS_CODE sh docker/smoke-test.sh
+```
+
+The container runs `alembic upgrade head` on start (`RUN_MIGRATIONS_ON_START=true`), then a
+single uvicorn worker. Behind a reverse proxy set `FORWARDED_ALLOW_IPS` so client IPs (used by
+Access Code brute-force protection) are correct.
+
+## CI
+
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`:
+
+| Job | What it checks |
+|---|---|
+| `frontend` | ESLint, TypeScript, Vitest regression tests, production build |
+| `backend` | Ruff lint/format, Alembic upgrade/downgrade/upgrade on empty PostgreSQL, pytest with PostgreSQL |
+| `docker` | Image build, container start, smoke test, and a second container with the production (online mock beta) configuration checked by `docker/production-config-check.sh` |
+| `e2e` | Playwright (Chromium desktop + phone viewport) against an isolated container stack with mock providers |
+| `ci-success` | Always runs; passes only if all four jobs **succeeded** (skipped/cancelled = failure). Use this as the required status check. |
+
+Permissions are `contents: read`; no secrets, cloud resources or deployments are used.
+CI runs on GitHub for every pull request and every push to `main`. Branch workflow, how to
+read CI logs, actual protections and billing limits: [docs/WORKFLOW.md](WORKFLOW.md).
