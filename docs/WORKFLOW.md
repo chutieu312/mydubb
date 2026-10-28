@@ -2,7 +2,10 @@
 
 ## Repository
 
-- URL: https://github.com/chutieu312/mydubb (**private**, owner: personal account `chutieu312`)
+- URL: https://github.com/chutieu312/mydubb (**public**, owner: personal account `chutieu312`).
+  Visibility seen as `public` on 2026-10-27 (`gh repo view`); the repository was private earlier
+  and the documentation below that was written then is marked as such. Changing the visibility is
+  a Product Owner decision; documentation work never does it.
 - Default branch: `main`
 
 ## Branch workflow
@@ -25,8 +28,8 @@
    branch off `main`. Commits pushed to an already merged branch belong to no pull request,
    get no CI run and never reach `main` (squash merging gives `main` a new commit SHA).
 
-Steps 3–5 are a team rule, **not enforced by GitHub** on the current plan (see
-[Protections](#protections)).
+Steps 3–5 are a team rule, **not enforced by GitHub**: no branch protection or ruleset is
+configured on `main` (see [Protections](#protections)).
 
 ## CI (`.github/workflows/ci.yml`)
 
@@ -162,9 +165,10 @@ concurrency group, so they cannot displace a pending deployment. CI itself is no
 
 ### Secrets and variables (repository level; no real values in the repository)
 
-GitHub Free cannot protect an Environment of a private repository, so repository-level secrets and
-variables are used and nothing depends on Environments or protection rules. Create them under
-Settings -> Secrets and variables -> Actions, or with `gh`.
+When these were chosen the repository was private, and GitHub Free cannot protect an Environment
+of a private repository, so repository-level secrets and variables are used and nothing depends on
+Environments or protection rules. They stay repository-level now that the repository is public.
+Create them under Settings -> Secrets and variables -> Actions, or with `gh`.
 
 | Name | Kind | Value | Notes |
 |---|---|---|---|
@@ -245,24 +249,33 @@ minutes of waiting and a 35 minute job timeout. With CD off the job takes a few 
 
 ## Protections
 
-The account is on **GitHub Free**. For private repositories, GitHub Free does not offer branch
-protection rules or rulesets (the API returns "Upgrade to GitHub Pro or make this repository
-public"). Therefore, today:
+The account is on **GitHub Free** and the repository is **public** (seen 2026-10-27). While the
+repository was private, GitHub Free offered no branch protection rules or rulesets (the API
+returned "Upgrade to GitHub Pro or make this repository public").
+
+Read-only API calls on 2026-10-27: `GET /repos/chutieu312/mydubb/branches/main/protection` returned
+404 "Branch not protected" and `GET /repos/chutieu312/mydubb/rulesets` returned `[]`. Therefore,
+today:
 
 - Pull requests, the required **CI success** check, and the ban on force-pushing or deleting
   `main` are **not enforced** by GitHub; they are manual rules (see Branch workflow).
-- The plan was not upgraded and the repository stays private.
-- If the account moves to GitHub Pro (or the repository to an organization plan that supports
-  it), configure for `main`: require a pull request (0 required approvals for a one-person
-  team), require status check `CI success`, block force pushes and deletion.
+- GitHub's documentation lists branch protection as available for public repositories on GitHub
+  Free, so it can now be configured. It has not been: enabling it is a Product Owner decision and
+  no GitHub setting was changed while writing this.
+- The plan was not upgraded.
+- If protection is enabled (or the repository becomes private again on a plan that supports it),
+  configure for `main`: require a pull request (0 required approvals for a one-person team),
+  require status check `CI success`, block force pushes and deletion.
 
 ## Billing and cost control
 
 - Workflows use only standard GitHub-hosted Linux runners (no larger or paid runners).
-- Private repositories consume the account's included GitHub Actions minutes; one full CI run
-  takes about 4 minutes of runner time, billed as about 6 minutes because each job is rounded
-  up to a whole minute. Continuous deployment adds the minutes spent waiting for Render (see
-  "Cost of the wait").
+- While the repository was private, its runs consumed the account's included GitHub Actions
+  minutes; one full CI run took about 4 minutes of runner time, billed as about 6 minutes because
+  each job is rounded up to a whole minute. Continuous deployment adds the minutes spent waiting
+  for Render (see "Cost of the wait"). The repository is now public; GitHub's documentation says
+  standard GitHub-hosted runners are free for public repositories, which was not confirmed in the
+  billing settings (see the next item), so do not rely on these figures as the current cost.
 - Billing settings could not be read with the current CLI token (needs the `user` scope). The
   Product Owner should check **Settings → Billing and licensing** on github.com: included
   minutes and usage, whether a payment method is on file, and that Actions budgets stop usage
