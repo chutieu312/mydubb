@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.service import database_now
 from app.config import Settings
-from app.guest.models import GuestJobQuota, GuestSession, QuotaState
+from app.guest.models import GuestImportQuota, GuestJobQuota, GuestSession, QuotaState
 from app.jobs.models import Job, JobStatus
 
 # Namespace of this module's advisory locks (two-key form), apart from the auth locks.
@@ -52,6 +52,9 @@ class GuestPolicy:
     sessions_per_ip: int
     sessions_global: int
     session_rate_window_seconds: int
+    # YouTube caption imports (guest/imports.py); the network window is `ip_window_seconds`.
+    imports_per_session: int
+    imports_per_ip: int
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "GuestPolicy":
@@ -65,6 +68,8 @@ class GuestPolicy:
             sessions_per_ip=settings.guest_sessions_per_ip,
             sessions_global=settings.guest_sessions_global,
             session_rate_window_seconds=settings.guest_session_rate_window_seconds,
+            imports_per_session=settings.guest_imports_per_session,
+            imports_per_ip=settings.guest_imports_per_ip,
         )
 
 
@@ -344,9 +349,9 @@ def settle_jobs(db: Session, job_ids: Collection[uuid.UUID] | None = None) -> in
 
 
 def delete_stale_rows(db: Session, policy: GuestPolicy) -> int:
-    """Retention: settled quota rows once they left the network window; guest sessions once they
-    are expired or ended and no longer count towards the session-start limit. A reserved place
-    is never deleted (its job settles it)."""
+    """Retention: settled job and import quota rows once they left the network window; guest
+    sessions once they are expired or ended and no longer count towards the session-start limit.
+    A reserved place is never deleted (its job, or its import or recovery, settles it)."""
     now = func.now()
     window = timedelta(seconds=policy.ip_window_seconds)
     start_window = timedelta(seconds=policy.session_rate_window_seconds)
@@ -356,6 +361,11 @@ def delete_stale_rows(db: Session, policy: GuestPolicy) -> int:
             GuestJobQuota.state != QuotaState.RESERVED.value,
             GuestJobQuota.charged_at < now - window,
             GuestJobQuota.settled_at < now - window,
+        ),
+        delete(GuestImportQuota).where(
+            GuestImportQuota.state != QuotaState.RESERVED.value,
+            GuestImportQuota.charged_at < now - window,
+            GuestImportQuota.settled_at < now - window,
         ),
         delete(GuestSession).where(
             or_(GuestSession.expires_at <= now, GuestSession.revoked_at.is_not(None)),

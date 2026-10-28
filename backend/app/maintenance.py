@@ -7,6 +7,7 @@ import time
 from app.access.service import delete_stale_sessions
 from app.auth.service import delete_stale_auth_rows, resolve_stale_password_resets
 from app.db import session_scope
+from app.guest.imports import release_stale_imports
 from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
@@ -25,10 +26,21 @@ def recover_after_restart(services: AppServices) -> None:
 
 
 def fail_stale(services: AppServices) -> None:
+    settings = services.settings
     with session_scope(services.session_factory) as db:
-        failed = fail_stale_jobs(db, services.settings.job_stale_after_seconds)
+        failed = fail_stale_jobs(db, settings.job_stale_after_seconds)
     if failed:
         logger.warning("Marked %d job(s) with a stale heartbeat as interrupted", failed)
+    # Guest imports whose instance is gone (or that outlived any import's deadline): their
+    # place is given back. The provider is never called again to recover a result.
+    with session_scope(services.session_factory) as db:
+        released = release_stale_imports(
+            db,
+            stale_after_seconds=settings.job_stale_after_seconds,
+            max_age_seconds=settings.supadata_deadline_seconds + settings.job_stale_after_seconds,
+        )
+    if released:
+        logger.warning("Released %d guest import(s) whose worker stopped", released)
 
 
 def heartbeat(services: AppServices) -> None:
@@ -44,20 +56,25 @@ def heartbeat(services: AppServices) -> None:
 
 
 async def job_liveness_loop(services: AppServices) -> None:
-    """Keep this instance's jobs alive and fail jobs whose instance disappeared."""
+    """Keep this instance's jobs (and guest imports) alive and fail jobs whose instance
+    disappeared."""
     interval = services.settings.job_heartbeat_interval_seconds
     while True:
         await asyncio.sleep(interval)
         try:
+            if services.guest_imports is not None:
+                # In the background on the import runner's own daemon threads, like every import
+                # step: never the default executor, never waited for here, never two at once.
+                services.guest_imports.schedule_heartbeat(services.instance_id)
             await asyncio.to_thread(heartbeat, services)
             await asyncio.to_thread(fail_stale, services)
         except Exception:
             logger.exception("Job liveness check failed")
 
 
-async def drain_running_jobs(services: AppServices) -> None:
-    """Wait up to the configured grace period for running jobs to finish."""
-    deadline = time.monotonic() + services.settings.job_shutdown_grace_seconds
+async def drain_running_jobs(services: AppServices, deadline: float) -> None:
+    """Wait until `deadline` (time.monotonic) for running jobs to finish. The deadline is the
+    one shutdown budget shared with guest imports (main.py), never a grace period of its own."""
     running = services.pipeline.running_job_ids()
     if running:
         logger.info("Waiting for %d running job(s) to finish before shutdown", len(running))

@@ -66,3 +66,38 @@ class GuestJobQuota(Base):
     reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     charged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GuestImportQuota(Base):
+    """One guest YouTube caption import (an "operation") and its place in the guest import quotas
+    (per session and per client network), apart from the job quotas.
+
+    Written (`reserved`) in its own short transaction before the caption provider is called, and
+    settled once, only from `reserved`: `used` when the captions were fetched, checked and
+    written as a transcript (before the answer is sent), `released` when the import failed.
+    `runner_id` and `heartbeat_at` tell whether the instance running it is still alive, so
+    recovery releases only operations whose worker is gone. No link, video, caption or transcript
+    is stored: the row only counts.
+    """
+
+    __tablename__ = "guest_import_quota"
+    __table_args__ = (
+        CheckConstraint("state IN ('reserved','used','released')", name="state_valid"),
+        Index("ix_guest_import_quota_ip_key_charged_at", "ip_key", "charged_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # NULL once the (expired) guest session row is cleaned up; the network count remains.
+    guest_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("guest_sessions.id", ondelete="SET NULL"), index=True
+    )
+    ip_key: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(10), index=True)
+    # The instance (AppServices.instance_id) running the import, and its last sign of life.
+    runner_id: Mapped[str] = mapped_column(String(64))
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # When it started counting in the network's sliding window: acceptance while reserved, the
+    # successful end once used.
+    charged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

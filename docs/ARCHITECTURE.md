@@ -84,10 +84,13 @@ and are never assigned to a user). Design, AWS setup and limits: [AUTHENTICATION
 
 **Guest access** (`GUEST_ACCESS_ENABLED=true`, Cognito mode only, off by default): "Try as guest"
 gives a separate principal with its own HttpOnly `mydubb_guest` cookie and `guest_sessions` table,
-accepted only by the job endpoints and `/api/guest/session`. Guest jobs carry
+accepted only by the job endpoints, the YouTube import and `/api/guest/session`. Guest jobs carry
 `jobs.guest_session_id` and go through the same pipeline; quotas per guest session and per client
 network are reserved with the job and settled with its terminal state in the same transactions.
-Design and limits: [GUEST_ACCESS.md](GUEST_ACCESS.md).
+Guest YouTube imports have a quota of their own (`guest_import_quota`, `guest/imports.py`): one row
+per import operation, reserved in a short transaction before Supadata is called, settled once
+(used before the answer is sent, released on failure), kept alive by the job liveness loop and
+released by recovery when its instance is gone. Design and limits: [GUEST_ACCESS.md](GUEST_ACCESS.md).
 
 ## Job lifecycle
 
@@ -132,9 +135,12 @@ through a non-blocking semaphore (`503 youtube_import_busy` when full, never a q
 Supadata request of the process, status polls of an asynchronous provider job included, goes
 through one `RequestRateLimiter` (the same class as Azure Speech, here with a deadline so a wait
 never outlasts the import). Polling stays inside that request, bounded by
-`SUPADATA_DEADLINE_SECONDS`; the provider's job ID never leaves the server, so there is no import
-state in memory or the database to own, expire or clean up. No queue (Kafka, SQS, Redis, a
-database table) is involved; this fits the single-instance design.
+`SUPADATA_DEADLINE_SECONDS`; the provider's job ID never leaves the server and there is no polling
+endpoint of MyDubb. For an account there is no import state to own, expire or clean up. A guest
+import is also one request, but it holds a quota row (no link, video or captions) and runs in a
+task the request cannot cancel, so a browser that goes away neither stops it nor gets its place
+back ([GUEST_ACCESS.md](GUEST_ACCESS.md#youtube-import-quota)). No queue (Kafka, SQS, Redis) or
+background worker is involved; this fits the single-instance design.
 
 ### Data retention
 
@@ -152,13 +158,15 @@ database table) is involved; this fits the single-instance design.
 | Password-reset attempts (hashed email, state, times) | PostgreSQL `password_reset_attempts` | Recorded before each Cognito reset request; a `pending` one is never deleted (it is enforced and resolved as `unknown` once settled); resolved ones are deleted by cleanup after one day |
 | Guest sessions (token hash, CSRF token, keyed hash of the client network, times) | PostgreSQL `guest_sessions` | Absolute 24 h lifetime; deleted by cleanup once expired or ended and older than the session-start window (1 h); their jobs keep metadata with `guest_session_id = NULL` |
 | Guest quota places (job, guest session, keyed network hash, state, times) | PostgreSQL `guest_job_quota` | `reserved` rows are never deleted (their job settles them); `used`/`released` rows are deleted by cleanup once they left the network window (24 h). See [GUEST_ACCESS.md](GUEST_ACCESS.md) |
+| Guest import operations (guest session, keyed network hash, state, instance id, heartbeat, times; no link or captions) | PostgreSQL `guest_import_quota` | `reserved` rows are never deleted by cleanup (the import or recovery settles them); `used`/`released` rows are deleted by cleanup once they left the network window (24 h) |
 | Glossary candidates (term, key, kind, job count, first/last seen, review status) | PostgreSQL `glossary_candidates` | No automatic deletion and no retention of its own; independent of results, jobs and sessions (no foreign key). No transcript, translation, excerpt, job or session is stored with a term |
 
 Cleanup runs at startup and every `CLEANUP_INTERVAL_SECONDS` (in a thread): removes expired
 or unreadable result directories, abandoned `.staging-*` directories, stale sessions (both kinds),
 finished sign-in steps and old password-reset events; it also records password resets whose
 outcome was never written (database error, crash) as `unknown` and revokes for them (fail closed),
-settles guest quota places of jobs that already ended, and removes old guest rows.
+settles guest quota places of jobs that already ended, and removes old guest rows (guest
+imports included).
 Reads also check expiry, so an expired result is never served even between cleanup runs.
 
 Result publication and cleanup are race-safe within the single process:
@@ -192,13 +200,22 @@ of an old and a new instance during a zero-downtime deploy is supported:
   `interrupted`. Jobs still running on another live instance are left alone. Rows written
   before heartbeats existed fall back to `updated_at`. Jobs are **never re-run
   automatically** because provider call outcomes are unknown; the user resubmits.
-- **Graceful shutdown** (SIGTERM): queued work is cancelled, running jobs get up to
-  `JOB_SHUTDOWN_GRACE_SECONDS` to finish (heartbeats continue meanwhile), and whatever this
-  process accepted but did not finish is marked `interrupted`. Keep the grace period below
+- **Graceful shutdown** (SIGTERM): queued work is cancelled, running jobs and running guest
+  YouTube imports share one budget of `JOB_SHUTDOWN_GRACE_SECONDS` and are waited for together
+  (heartbeats continue meanwhile); then whatever this process accepted but did not finish is
+  marked `interrupted`, and the imports still running are cancelled, kept away from the database
+  and given back in at most 2 × 3 s more; every import database step is bounded by PostgreSQL
+  timeouts on a small engine of its own, which is disposed only once no import step runs
+  ([GUEST_ACCESS.md](GUEST_ACCESS.md#youtube-import-quota)). Keep the grace period below
   the host's kill delay (Render: `maxShutdownDelaySeconds`, fixed at the default 30 s on the
   Free plan).
 - After a hard crash, the crashed process's jobs are failed by the next live instance within
   roughly `JOB_STALE_AFTER_SECONDS + JOB_HEARTBEAT_INTERVAL_SECONDS`.
+- Guest YouTube imports use the same loop: the process heartbeats the imports it is running (in
+  the background on the import runner's own bounded daemon threads, one at a time, never after
+  shutdown began; the job heartbeat stays on the loop's thread as before), and
+  recovery gives back the place of an import whose heartbeat is stale or that outlived
+  `SUPADATA_DEADLINE_SECONDS + JOB_STALE_AFTER_SECONDS`; an import is never retried.
 - Job status lives in PostgreSQL, so clients polling through the new instance see progress of
   jobs still running on the old one.
 - **Results are per instance**: they are stored on the local (ephemeral) disk of the instance

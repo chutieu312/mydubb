@@ -26,6 +26,12 @@ _FAILURES = {
     "youtube_import_cancelled": _Failure(
         503, "The import was stopped because the server is restarting. Please try again."
     ),
+    # A guest import that succeeded but could not be counted is not delivered (never charged).
+    "youtube_import_not_recorded": _Failure(
+        503,
+        "The import could not be completed, so it was not counted and nothing was imported. "
+        "Please try again.",
+    ),
     "youtube_import_no_english_captions": _Failure(
         422,
         "This video has no English captions to import. MyDubb only imports captions the video "

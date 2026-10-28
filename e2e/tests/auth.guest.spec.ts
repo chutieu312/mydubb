@@ -40,22 +40,24 @@ test("a guest creates, plays and downloads audio, and sees the jobs left", async
   expect((await started).status()).toBe(201);
 
   await expect(banner(page)).toContainText(
-    "5 jobs left · up to 1,000 words and 10 minutes of audio per job",
+    "5 audio jobs left · up to 1,000 words and 10 minutes of audio per job",
   );
   await expect(page.getByText("Guest", { exact: true })).toBeVisible();
-  // YouTube import is enabled on this stack, but never offered to a guest.
-  await expect(page.getByRole("radio", { name: "YouTube URL" })).toHaveCount(0);
+  // YouTube import is enabled on this stack: a guest has it too, with its own count
+  // (guestImport.spec.ts).
+  await expect(page.getByRole("radio", { name: "YouTube URL" })).toBeVisible();
+  await expect(banner(page)).toContainText("5 YouTube imports left");
 
   await runJob(page);
   await expect(page.locator("audio")).toBeVisible();
   const download = page.waitForEvent("download");
   await page.getByRole("link", { name: /Download MP3/ }).click();
   expect((await download).suggestedFilename()).toMatch(/^mydubb-.*\.mp3$/);
-  await expect(banner(page)).toContainText("4 jobs left");
+  await expect(banner(page)).toContainText("4 audio jobs left");
 
   // A reload keeps the guest session (an HttpOnly cookie) and its count.
   await page.reload();
-  await expect(banner(page)).toContainText("4 jobs left");
+  await expect(banner(page)).toContainText("4 audio jobs left");
   const stored = await page.evaluate(() => [
     ...Object.keys(window.sessionStorage),
     ...Object.keys(window.localStorage).filter((key) => key !== "mydubb-theme"),
@@ -69,7 +71,7 @@ test("the sixth job of a guest session is refused with a way to sign in", async 
   await asClient(page);
   await startGuest(page);
   for (let index = 0; index < 5; index += 1) await runJob(page, `Guest job number ${index + 1}.`);
-  await expect(banner(page)).toContainText("0 jobs left");
+  await expect(banner(page)).toContainText("0 audio jobs left");
   await expect(banner(page)).toContainText("This guest session has used all 5 of its jobs");
 
   await page.getByRole("button", { name: "Generate audio" }).click();
@@ -95,7 +97,8 @@ test("guests on one network share its quota; another network is separate", async
       const start = await others.request.post("/api/guest/session");
       expect(start.status()).toBe(201);
       const csrf = (await start.json()).csrf_token as string;
-      const ids: string[] = [];
+      // One job at a time: the quota is what is tested, not the small stack's job capacity
+      // (other tests run jobs on the same instance meanwhile).
       for (let job = 0; job < 5; job += 1) {
         const created = await others.request.post("/api/jobs", {
           headers: { "X-CSRF-Token": csrf },
@@ -107,9 +110,7 @@ test("guests on one network share its quota; another network is separate", async
           },
         });
         expect(created.status()).toBe(202);
-        ids.push((await created.json()).id as string);
-      }
-      for (const id of ids) {
+        const id = (await created.json()).id as string;
         await expect
           .poll(async () => (await (await others.request.get(`/api/jobs/${id}`)).json()).status, {
             timeout: 60_000,
@@ -122,7 +123,7 @@ test("guests on one network share its quota; another network is separate", async
   }
 
   await startGuest(page);
-  await expect(banner(page)).toContainText("0 jobs left");
+  await expect(banner(page)).toContainText("0 audio jobs left");
   await expect(banner(page)).toContainText("everyone on the same network shares this limit");
   await startJob(page);
   await page.getByRole("button", { name: "Generate audio" }).click();
@@ -131,7 +132,7 @@ test("guests on one network share its quota; another network is separate", async
   // The same guest session from another network can still create jobs.
   await asClient(page, randomAddress());
   await page.reload();
-  await expect(banner(page)).toContainText("5 jobs left");
+  await expect(banner(page)).toContainText("5 audio jobs left");
 });
 
 test("audio longer than 10 minutes is refused before anything runs", async ({ page }) => {
@@ -150,13 +151,13 @@ test("audio longer than 10 minutes is refused before anything runs", async ({ pa
   expect((await refused).status()).toBe(422);
   await expect(page.getByText(/Guest audio can be at most 10:00 long/).first()).toBeVisible();
   await expect(last).toHaveValue("00:05:01"); // never adjusted
-  await expect(banner(page)).toContainText("5 jobs left");
+  await expect(banner(page)).toContainText("5 audio jobs left");
 
   // Exactly 10 minutes (5 minutes at 0.5x) is accepted.
   await last.fill("00:05:00");
   await page.getByRole("button", { name: "Generate audio" }).click();
   await expect(page.getByRole("heading", { name: "Your audio" })).toBeVisible({ timeout: 30_000 });
-  await expect(banner(page)).toContainText("4 jobs left");
+  await expect(banner(page)).toContainText("4 audio jobs left");
 });
 
 test("a word count over the limit is refused by the server", async ({ page }) => {
@@ -167,7 +168,7 @@ test("a word count over the limit is refused by the server", async ({ page }) =>
   await expect(page.getByText(/About 1,001 of 1,000 words/)).toBeVisible();
   await page.getByRole("button", { name: "Generate audio" }).click();
   await expect(page.getByText(/Guest jobs can have at most 1,000 words/).first()).toBeVisible();
-  await expect(banner(page)).toContainText("5 jobs left");
+  await expect(banner(page)).toContainText("5 audio jobs left");
 });
 
 test("leaving guest mode, then signing in, starts from an empty form", async ({ page }) => {

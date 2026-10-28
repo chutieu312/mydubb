@@ -39,6 +39,9 @@ export interface AppMeta {
     max_words?: number;
     max_output_seconds?: number;
     session_ttl_seconds?: number;
+    // YouTube imports, counted apart from jobs (offered when `youtube_import.enabled`).
+    imports_per_session?: number;
+    imports_per_ip?: number;
   };
 }
 

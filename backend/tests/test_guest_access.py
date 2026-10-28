@@ -124,6 +124,8 @@ def test_meta_reports_the_limits(guest_client):
         "max_words": 1000,
         "max_output_seconds": 600,
         "session_ttl_seconds": 86400,
+        "imports_per_session": 5,
+        "imports_per_ip": 20,
     }
 
 
@@ -278,15 +280,11 @@ def test_guests_and_users_never_see_each_others_jobs(make_guest_client, fake_cog
     assert guest_a.get(f"/api/jobs/{job_a}/result").status_code == 200
 
 
-def test_guest_cannot_use_youtube_import_or_account_endpoints(make_guest_client):
+def test_guest_cannot_use_account_endpoints(make_guest_client):
+    # The YouTube import is open to guests with its own quota (test_guest_youtube_import.py).
     client = make_guest_client(youtube_import_provider="mock")
     session = start_guest(client)
     csrf = {"X-CSRF-Token": session["csrf_token"]}
-    imported = client.post(
-        "/api/transcripts/youtube", json={"url": "https://youtu.be/dQw4w9WgXcQ"}, headers=csrf
-    )
-    assert imported.status_code == 403
-    assert imported.json()["error"]["code"] == "guest_not_allowed"
     # Account endpoints: a guest is not signed in.
     assert client.get("/api/auth/me").status_code == 401
     assert client.post("/api/auth/logout", headers=csrf).status_code == 401
@@ -576,6 +574,8 @@ POLICY = GuestPolicy(
     sessions_per_ip=1000,
     sessions_global=1000,
     session_rate_window_seconds=3600,
+    imports_per_session=5,
+    imports_per_ip=20,
 )
 
 

@@ -11,7 +11,7 @@ from app.access.service import find_active_session
 from app.auth.principal import Principal, UserProfile
 from app.auth.service import find_active_user_session
 from app.config import AuthMode
-from app.errors import ApiError, guest_not_allowed, not_authenticated
+from app.errors import ApiError, not_authenticated
 from app.guest.service import find_active_session as find_active_guest_session
 from app.services import AppServices
 
@@ -108,28 +108,13 @@ def require_csrf(request: Request, principal: Principal = Depends(require_sessio
     return _check_csrf(request, principal)
 
 
-def require_account_csrf(
-    request: Request,
-    db: Session = Depends(get_db),
-    services: AppServices = Depends(get_services),
-) -> Principal:
-    """Like `require_csrf`, for features guests may not use: a guest gets a clear 403
-    (`guest_not_allowed`) instead of the 401 that would read as an expired session."""
-    principal = account_principal(request, db, services)
-    if principal is None:
-        if guest_principal(request, db, services) is not None:
-            raise guest_not_allowed()
-        raise not_authenticated()
-    return _check_csrf(request, principal)
-
-
 def require_job_session(
     request: Request,
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> Principal:
-    """Job endpoints: an account (or Access Code) session first, else a guest session. With
-    both cookies the account wins (a sign-in also ends the guest session)."""
+    """Job endpoints and the YouTube import: an account (or Access Code) session first, else a
+    guest session. With both cookies the account wins (a sign-in also ends the guest session)."""
     principal = account_principal(request, db, services) or guest_principal(request, db, services)
     if principal is None:
         raise not_authenticated()

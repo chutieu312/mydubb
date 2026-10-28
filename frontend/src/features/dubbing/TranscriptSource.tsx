@@ -1,8 +1,21 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
+import { formatClock } from "../../lib/speed";
 import type { ImportStatus } from "./useYouTubeImport";
 
 export type Source = "paste" | "youtube";
+
+/** Guest mode: the import quota and the job limits an imported transcript may go over. */
+export interface GuestImportInfo {
+  // Imports left (the server's numbers), counted apart from audio jobs.
+  left: number;
+  // Why no import is left, or null.
+  limitText: string | null;
+  maxWords: number;
+  maxOutputSeconds: number;
+  // What the form's current content is over ("about 1,200 words (at most 1,000)"); empty if none.
+  overLimits: string[];
+}
 
 interface Props {
   source: Source;
@@ -13,6 +26,7 @@ interface Props {
   onImport: () => void;
   onConfirm: () => void;
   onKeep: () => void;
+  guest?: GuestImportInfo;
 }
 
 const SOURCES: { value: Source; label: string }[] = [
@@ -34,6 +48,7 @@ export function TranscriptSource({
   onImport,
   onConfirm,
   onKeep,
+  guest,
 }: Props) {
   const importing = status.kind === "loading";
   const urlError = status.kind === "error" && status.urlError;
@@ -110,6 +125,20 @@ export function TranscriptSource({
             The link is sent to Supadata to fetch the English captions the video already has. The
             audio is not transcribed.
           </p>
+          {guest && (
+            <p className="small muted" id="youtube-guest-limits">
+              {guest.left} guest {guest.left === 1 ? "import" : "imports"} left, counted apart from
+              your audio jobs; a successful import counts even if you do not generate audio. A long
+              video can go over the guest limits of {guest.maxWords.toLocaleString("en-US")} words
+              and {formatClock(guest.maxOutputSeconds)} of audio per job: the whole transcript is
+              still imported, and you shorten it before generating.
+            </p>
+          )}
+          {guest?.limitText && (
+            <p className="callout warning small" role="status">
+              {guest.limitText}
+            </p>
+          )}
           {status.kind === "confirm" && <ReplaceConfirm onConfirm={confirm} onKeep={keep} />}
           {status.kind === "error" && (
             <p className="error" id="import-error" role="alert">
@@ -119,7 +148,9 @@ export function TranscriptSource({
           <div aria-live="polite" className="small">
             {importing && <p className="muted">Importing captions… This can take up to a minute.</p>}
             {status.kind === "cancelled" && <p className="muted">{status.message}</p>}
-            {status.kind === "done" && <ImportSummary status={status} />}
+            {status.kind === "done" && (
+              <ImportSummary status={status} overLimits={guest?.overLimits ?? []} />
+            )}
           </div>
         </div>
       )}
@@ -154,7 +185,13 @@ function ReplaceConfirm({ onConfirm, onKeep }: { onConfirm: () => void; onKeep: 
   );
 }
 
-function ImportSummary({ status }: { status: Extract<ImportStatus, { kind: "done" }> }) {
+function ImportSummary({
+  status,
+  overLimits,
+}: {
+  status: Extract<ImportStatus, { kind: "done" }>;
+  overLimits: string[];
+}) {
   const { result } = status;
   const captions = result.caption_count === 1 ? "caption" : "captions";
   const skipped = result.skipped_empty_captions;
@@ -178,6 +215,13 @@ function ImportSummary({ status }: { status: Extract<ImportStatus, { kind: "done
         <p>
           <strong>Set both start times before generating:</strong> the captions do not start at
           two different seconds, so they cannot be filled in.
+        </p>
+      )}
+      {overLimits.length > 0 && (
+        <p className="error">
+          <strong>Over the guest limits:</strong> {overLimits.join(" and ")}. Nothing was cut and
+          no time was changed: shorten the transcript, choose a shorter stretch between the start
+          times or a faster speed before generating, or sign in with your invitation.
         </p>
       )}
     </div>

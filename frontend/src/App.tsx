@@ -209,8 +209,9 @@ export function App() {
     }
   }, [drafts, isCurrent, nextIdentity]);
 
-  // Remaining guest jobs come from the server only; refreshed after each submission and job end,
-  // and applied only within the generation (and to the guest session) that asked.
+  // Remaining guest jobs and imports come from the server only; refreshed after each submission,
+  // job end and import, and applied only within the generation (and to the guest session) that
+  // asked.
   const refreshGuest = useCallback(
     (gen: number) => {
       guestApi
@@ -309,6 +310,8 @@ export function App() {
 
   const inStudio = auth === "authenticated" || auth === "guest";
   const guestLimits = meta?.guest_access;
+  // A guest's YouTube imports (null: the server offers none to this guest).
+  const guestImports = auth === "guest" && guest ? guest.imports : null;
 
   return (
     <div className="app">
@@ -374,15 +377,23 @@ export function App() {
                 </p>
               </section>
               {auth === "guest" && guest && (
-                <GuestBanner quota={guest.quota} onSignIn={logout} leaving={loggingOut} />
+                <GuestBanner
+                  quota={guest.quota}
+                  imports={guestImports}
+                  onSignIn={logout}
+                  leaving={loggingOut}
+                />
               )}
               <DubbingForm
                 // A new identity starts from its own draft.
                 key={draftOwner ?? "session"}
                 voices={meta.voices}
                 disclosure={azureDisclosureShort(meta.providers)}
-                // YouTube import needs an account; the server refuses guests as well.
-                youtubeImport={auth === "authenticated" && meta.youtube_import?.enabled === true}
+                // Guests import with their own quota, offered only when the server reports it.
+                youtubeImport={
+                  meta.youtube_import?.enabled === true &&
+                  (auth === "authenticated" || guestImports !== null)
+                }
                 onJobCreated={bound.jobCreated}
                 onSessionExpired={bound.sessionExpired}
                 initialDraft={draftOwner ? drafts.draftFor(draftOwner) : undefined}
@@ -394,6 +405,9 @@ export function App() {
                         maxOutputSeconds: guest.quota.max_output_seconds,
                         onQuotaExhausted: bound.guestChanged,
                         onSignIn: logout,
+                        imports: guestImports,
+                        windowSeconds: guest.quota.ip_window_seconds,
+                        onImportFinished: bound.guestChanged,
                       }
                     : undefined
                 }

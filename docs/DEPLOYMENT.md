@@ -591,8 +591,9 @@ older code ignores it.
 - Which of the two is active is visible in the Render service: **Settings -> Build & Deploy ->
   Auto-Deploy** is *After CI Checks Pass* before the cutover and *Off* after it.
 - Zero-downtime deploy: the new instance starts and receives traffic once `/api/health`
-  responds; the old instance gets SIGTERM about a minute later, finishes running jobs for up to
-  `JOB_SHUTDOWN_GRACE_SECONDS` (20 s), then exits within Render's default 30 s shutdown delay
+  responds; the old instance gets SIGTERM about a minute later, finishes running jobs and guest
+  YouTube imports for up to `JOB_SHUTDOWN_GRACE_SECONDS` (20 s, one budget for both), stops the
+  imports still running in at most 2 × 3 s more, then exits within Render's default 30 s shutdown delay
   (`maxShutdownDelaySeconds` is not available on the Free plan).
   Jobs it could not finish are marked "interrupted" and must be resubmitted. Results produced
   by the old instance become "result expired".
@@ -655,6 +656,10 @@ The guest access pull request adds migration `0007` (tables `guest_sessions` and
 supported Render rollback target; check with `docker/rollback-target-check.sh <commit> 0007`.
 Turning guest access off is a configuration change (`GUEST_ACCESS_ENABLED=false`), not a code
 rollback ([GUEST_ACCESS.md](GUEST_ACCESS.md#enabling-a-product-owner-decision-not-done)).
+The guest YouTube import pull request adds migration `0008` (table `guest_import_quota`,
+expand-only; it runs whatever `GUEST_ACCESS_ENABLED` and `YOUTUBE_IMPORT_PROVIDER` are). Once it is
+deployed, every deploy built before it is no longer a supported Render rollback target; check with
+`docker/rollback-target-check.sh <commit> 0008`.
 
 **Before rolling back** (read-only checks):
 
@@ -789,6 +794,24 @@ mode, one mock job) each time:
 | 7 | `959bad6` | `RUN_MIGRATIONS_ON_START=false`, guest rows in the database | Starts; smoke test passes |
 | 8 | new | guest access on without `GUEST_IP_HASH_KEY` | Refuses to start; the error names the variable only |
 | 9 | new | `APP_ENV=production`, guest access on without `CLIENT_IP_HEADER` | Refuses to start; the key value does not appear in the log |
+
+Production was not touched.
+
+Rehearsal for migration `0008` (guest YouTube import quota), local throwaway PostgreSQL 17 on
+tmpfs (its own Docker network), commit `8a9e127` (`origin/main` when the story started, knows
+`0001`-`0007`) against the image of the guest import branch (knows `0008`), `docker/smoke-test.sh`
+(Access Code mode, one mock job; run from a small Linux container on the same network) each time:
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `8a9e127` | default, empty database | Migrates to `0007`; smoke test passes |
+| 2 | new | default | `0007` -> `0008`; smoke test passes; `guest_import_quota` exists; both jobs completed |
+| 3 | `8a9e127` | default, database at `0008` | Exits 1: `Can't locate revision identified by '0008'`; database unchanged (`0008`) |
+| 4 | `8a9e127` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (it never reads the new table) |
+| 5 | new | default, after step 4 | Starts; smoke test passes; four jobs completed |
+| 6 | new | `AUTH_MODE=cognito` (dummy pool), `GUEST_ACCESS_ENABLED=true`, `CLIENT_IP_HEADER=cf-connecting-ip`, `YOUTUBE_IMPORT_PROVIDER=mock` | `/api/meta` reports the import limits (5, 20); `POST /api/guest/session` without the header `503`; with it a guest session whose `imports` shows 5 left; one guest import `200` and its row `used`; no raw address in the table; neither the address nor the video ID in the container log |
+| 7 | `8a9e127` | `RUN_MIGRATIONS_ON_START=false`, guest import rows in the database | Starts; smoke test passes |
+| 8 | new | default, database already at `0008` | Starts; smoke test passes; the import row is kept |
 
 Production was not touched.
 

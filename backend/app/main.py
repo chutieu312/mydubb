@@ -6,6 +6,7 @@ In production one process serves both the API (/api/*) and the React build (same
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -168,18 +169,30 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             cleanup_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await cleanup_task
-            # Stop accepting queued work, let running jobs finish within the grace period
-            # (heartbeats continue meanwhile), then interrupt whatever is left.
+            # One shutdown budget (JOB_SHUTDOWN_GRACE_SECONDS) for running jobs and guest imports,
+            # waited for together (heartbeats continue meanwhile); then whatever is left is
+            # stopped: jobs interrupted, guest imports cancelled and given back.
+            deadline = time.monotonic() + services.settings.job_shutdown_grace_seconds
             services.executor.shutdown()
             if services.youtube_import is not None:
                 # Imports waiting for the provider or a request slot stop instead of outliving us.
                 services.youtube_import.close()
-            await drain_running_jobs(services)
+            draining = [drain_running_jobs(services, deadline)]
+            if services.guest_imports is not None:
+                draining.append(services.guest_imports.wait_until(deadline))
+            await asyncio.gather(*draining)
             if services.speech_limiter is not None:
                 # Jobs still waiting for a speech request slot stop instead of outliving us.
                 services.speech_limiter.close()
             # Running FFmpeg processes are killed instead of outliving the server.
             services.audio.close()
+            imports_quiescent = True
+            if services.guest_imports is not None:
+                # Imports still running (e.g. a stalled provider read) are cancelled, start no
+                # database work any more and are given back in one bounded statement (or by the
+                # next instance's recovery); at most twice the runner's stop bound.
+                outcome = await services.guest_imports.stop()
+                imports_quiescent = outcome.quiescent
             liveness_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await liveness_task
@@ -191,6 +204,13 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             if close is not None:
                 close()
             services.engine.dispose()
+            if services.guest_import_engine is not None:
+                if imports_quiescent:
+                    services.guest_import_engine.dispose()
+                else:
+                    # Never claim the database is free while an import step may still run; the
+                    # process exit closes those connections.
+                    logger.warning("Guest import database engine left open at shutdown")
 
     app = FastAPI(
         title="MyDubb API",
