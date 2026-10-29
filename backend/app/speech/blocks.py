@@ -20,7 +20,8 @@ limits below): timed mode gives an estimated, group-level synchronization, not a
    the response sample for sample, and every dropped sample is at most `SILENCE_PEAK` (checked),
    so no audible sample is removed or repeated.
 4. **Each clip has speech, at a consistent rate.** Every clip must contain sound, and a clip of
-   at least `MIN_SYLLABLES_FOR_RATE` estimated syllables (`spoken_length.py`) must be spoken at
+   at least `MIN_SYLLABLES_FOR_RATE` estimated syllables (`spoken_length.py` for Vietnamese,
+   `mandarin.mandarin_syllables` for Mandarin; the limits are the same) must be spoken at
    0.5-2x the syllables per second of the whole request: a cut in the wrong pause would move
    speech into the neighbouring clip and break this for both, when the moved part is large enough.
 5. **Cuts where the speech predicts them.** Walking through the clips, the time actually spoken so
@@ -55,9 +56,11 @@ from itertools import pairwise
 from pathlib import Path
 
 from app.audio.wav import WavInfo, read_wav_info
-from app.speech.chunker import speech_text, split_for_speech
-from app.speech.spoken_length import spoken_syllables
-from app.speech.ssml import ROOT_LANGUAGE, chunk_language_spans, escape_text
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
+from app.speech.chunker import speech_text
+from app.speech.mandarin import MANDARIN_MAX_CHUNK_CHARS
+from app.speech.plan import chunk_spans, syllable_estimate
+from app.speech.ssml import ROOT_LANGUAGE, escape_text
 from app.speech.voices import Voice
 from app.translation.glossary import TermMatcher
 
@@ -103,6 +106,9 @@ class BlockPiece:
 @dataclass
 class BlockRequest:
     pieces: list[BlockPiece] = field(default_factory=list)
+    # Decides the syllable estimate of checks 4 and 5 (Vietnamese or Mandarin); the checks and
+    # their limits are the same for both.
+    language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
 
     @property
     def chars(self) -> int:
@@ -135,22 +141,27 @@ class SplitReport:
 
 
 def plan_block_requests(
-    texts: Sequence[str], terms: TermMatcher, max_chars: int
+    texts: Sequence[str],
+    terms: TermMatcher,
+    max_chars: int,
+    language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
 ) -> list[BlockRequest]:
     """Requests in order; blocks without anything to say (no letter or digit) are left out.
 
-    A block longer than `max_chars` is split like any speech text and continues in the next
-    request; its clip is then joined from both. Pieces in one request always belong to different
-    blocks, so every break separates two blocks.
+    A block longer than the chunk limit is split like any speech text of its language and
+    continues in the next request; its clip is then joined from both. Pieces in one request always
+    belong to different blocks, so every break separates two blocks. Mandarin pieces are smaller
+    (`mandarin.MANDARIN_MAX_CHUNK_CHARS`), and so are Mandarin requests.
     """
+    if language is TargetLanguage.MANDARIN:
+        max_chars = min(max_chars, MANDARIN_MAX_CHUNK_CHARS)
     requests: list[BlockRequest] = []
-    current = BlockRequest()
+    current = BlockRequest(language=language)
     for index, raw in enumerate(texts):
         text = speech_text(raw).replace("\n", " ")
         if not any(char.isalnum() for char in text):
             continue
-        pieces = split_for_speech(text, terms, max_chars)
-        for spans in chunk_language_spans(text, pieces, terms):
+        for spans in chunk_spans(text, terms, max_chars, language):
             piece = BlockPiece(index, spans)
             if current.pieces and (
                 current.chars + len(piece.text) > max_chars
@@ -158,7 +169,7 @@ def plan_block_requests(
                 or current.pieces[-1].block == index
             ):
                 requests.append(current)
-                current = BlockRequest()
+                current = BlockRequest(language=language)
             current.pieces.append(piece)
     if current.pieces:
         requests.append(current)
@@ -247,7 +258,8 @@ def speech_seconds(path: Path) -> float:
 
 def _check_rates(request: BlockRequest, clips: list[Path], rate: int, window: int) -> None:
     durations = [speech_seconds(clip) for clip in clips]
-    syllables = [spoken_syllables(piece.text) for piece in request.pieces]
+    estimate = syllable_estimate(request.language)
+    syllables = [estimate(piece.text) for piece in request.pieces]
     overall = sum(syllables) / sum(durations)
     for count, seconds in zip(syllables, durations, strict=True):
         if count < MIN_SYLLABLES_FOR_RATE:

@@ -6,6 +6,7 @@ from pydantic import BaseModel, PrivateAttr, ValidationInfo, field_validator, mo
 
 from app.audio.speed import DEFAULT_SPEED, AudioSpeed, DurationTarget, speed_from_api
 from app.jobs.models import Job
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.speech.voices import DEFAULT_VOICE, Voice
 from app.transcript.cleaning import clean_transcript
 from app.transcript.timed import TimedTranscript, parse_timed_transcript
@@ -33,6 +34,9 @@ class CreateJobRequest(BaseModel):
     first_sentence_start: str
     last_sentence_start: str
     voice: Voice = DEFAULT_VOICE
+    # One of the API values of `app/languages.py`; omitted means Vietnamese (the behaviour before
+    # the option existed). Never a provider locale: the service codes are fixed on the server.
+    target_language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
     # Strict: only 0.5, 0.75, 1, 1.25, 1.5, 1.75 or 2. Omitted means 1x (the behaviour before
     # the option existed). The output length is always computed by the server, never sent.
     speed: AudioSpeed = DEFAULT_SPEED
@@ -95,6 +99,9 @@ class JobResponse(BaseModel):
     id: uuid.UUID
     status: str
     voice: str
+    # Output language stored with the job (jobs from before the option existed: Vietnamese).
+    target_language: str
+    target_language_label: str
     first_sentence_start: str
     last_sentence_start: str
     # Baseline: last - first sentence start. Unchanged meaning; independent of the speed.
@@ -119,10 +126,13 @@ class JobResponse(BaseModel):
             error = JobError(code=job.error_code, message=job.error_message or "")
         speed = AudioSpeed(job.audio_speed_percent)
         target = DurationTarget(job.target_duration_seconds, speed)
+        language = TargetLanguage(job.target_language)
         return cls(
             id=job.id,
             status=job.status,
             voice=job.voice,
+            target_language=language.value,
+            target_language_label=language.label,
             first_sentence_start=format_seconds(job.first_sentence_start_seconds),
             last_sentence_start=format_seconds(job.last_sentence_start_seconds),
             target_duration_seconds=job.target_duration_seconds,
@@ -279,6 +289,10 @@ class TimingOut(BaseModel):
 
 class JobResultResponse(BaseModel):
     job_id: uuid.UUID
+    # Language of `translation.text` and of the speech, from the job record (never from the form
+    # or the server's configuration; results stored before the option existed are Vietnamese).
+    target_language: str
+    target_language_label: str
     # What was submitted, from the job record (also when the audio was not adjusted, e.g. with
     # the mock audio processor, where `audio.duration` is null).
     baseline_duration_seconds: int

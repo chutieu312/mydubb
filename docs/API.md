@@ -47,7 +47,7 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds, imports_per_session, imports_per_ip}`; the import fields only matter when `youtube_import.enabled`; see [Guest access](#guest-access)) |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `target_languages[] {id, label, noun, translator_language, speech_locale}` (the output languages a job can choose, in the order to offer them; `id` is the only value a request sends, the codes are informative) and `default_target_language` (`vietnamese`; see [Target language](#target-language)), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds, imports_per_session, imports_per_ip}`; the import fields only matter when `youtube_import.enabled`; see [Guest access](#guest-access)) |
 
 ## Session (Private Beta access)
 
@@ -86,9 +86,15 @@ Requires session + CSRF.
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
   "voice": "AndrewMultilingual",
+  "target_language": "vietnamese",
   "speed": 1.25
 }
 ```
+
+`target_language` is optional: the language the English transcript is translated into and read
+in. `"vietnamese"` (the default, the behaviour before the option existed) or
+`"mandarin_simplified"` (Chinese, Mandarin, Simplified script). See
+[Target language](#target-language).
 
 `speed` is optional and is the **audio speed**: the generated and downloaded file lasts
 `baseline / speed`, where the baseline is `last_sentence_start - first_sentence_start`. See
@@ -121,6 +127,37 @@ Validation (backend is authoritative):
   existed. `null`, booleans, strings (`"1.5"`), lists, other numbers (`1.1`, `1.2500001`, `0`,
   `3`) and non-finite values are rejected with `422 validation_error` (field `speed`). The output
   length is never taken from the client; a field such as `output_duration_seconds` is ignored.
+- `target_language`: exactly `"vietnamese"` or `"mandarin_simplified"`. Omitted means
+  `"vietnamese"`. Anything else (`null`, `"zh-Hans"`, `"zh-CN"`, `"vi"`, `"Vietnamese"`,
+  `"cantonese"`, numbers, lists) is rejected with `422 validation_error` (field `target_language`)
+  before any job, quota place or provider call. Provider codes, locales, endpoints or provider voice
+  names are never taken from the client; fields such as `translator_language` or `speech_locale`
+  are ignored.
+
+### Target language
+
+The input is always English; each job has exactly one output language, chosen at submission and
+stored with the job (`jobs.target_language`, migration `0009`).
+
+| API value | Label (`/api/meta`) | Azure Translator `to` | Azure Speech `<lang xml:lang>` |
+|---|---|---|---|
+| `vietnamese` (default) | Vietnamese | `vi` | `vi-VN` |
+| `mandarin_simplified` | Chinese — Mandarin (Simplified) | `zh-Hans` | `zh-CN` |
+
+- The mapping is fixed on the server (`backend/app/languages.py`, checked against Microsoft Learn on
+  2026-10-29). A Translator answer in another language than the one asked for is rejected
+  (`translation_invalid_response`).
+- Both languages use the same two voices (Andrew and Emma Multilingual), one voice per speech
+  request; glossary terms and English kept by the translation are read with `en-US`, the rest with
+  the language's locale. Mandarin has its own chunking (Chinese has no spaces) and its own
+  syllable estimate for the timed-mode checks; Vietnamese is unchanged.
+- The language is the job's own: `GET /api/jobs/{id}` and its result always report the stored
+  value. Jobs created before the option existed read as `vietnamese`. A failure in Mandarin fails
+  the job; nothing is retried or falls back to Vietnamese or to the mock.
+- Mock mode: the mock translation names the language it stands in for ("NOT a real Mandarin
+  Chinese (Simplified) translation"); the mock audio is a chime in every language.
+- Guests and invitation accounts have the same choice; a guest job counts once whatever its
+  language, and the guest word limit counts the English text.
 
 ### Timestamp fields in the UI
 
@@ -238,6 +275,8 @@ The same rule applies to the result and audio endpoints below.
   "id": "uuid",
   "status": "queued | translating | synthesizing | processing | completed | failed",
   "voice": "AndrewMultilingual",
+  "target_language": "mandarin_simplified",
+  "target_language_label": "Chinese — Mandarin (Simplified)",
   "first_sentence_start": "00:00:10",
   "last_sentence_start": "00:06:10",
   "target_duration_seconds": 360,
@@ -257,7 +296,8 @@ The same rule applies to the result and audio endpoints below.
 same number under a clearer name. `speed` is the value submitted (`1` for jobs created before the
 option existed). `output_duration_seconds` is the planned length, `baseline / speed`, unrounded
 (a float, e.g. `26.666666666666668` for baseline 20 and speed 0.75); the sample-exact target and the
-verified length are in the result.
+verified length are in the result. `target_language` is the stored output language
+(`vietnamese` for jobs created before the option existed) and `target_language_label` its label.
 
 `error` is `{"code","message"}` when failed. Codes: `translation_failed` (mock),
 `speech_failed`, `audio_processing_failed`, `internal_error`, `interrupted`, and for Azure
@@ -283,6 +323,8 @@ Requires session and ownership.
   ```json
   {
     "job_id": "uuid",
+    "target_language": "vietnamese",
+    "target_language_label": "Vietnamese",
     "baseline_duration_seconds": 360,
     "speed": 1.25,
     "output_duration_seconds": 288.0,

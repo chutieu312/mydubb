@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { JobResult } from "../../api/types";
+import { VIETNAMESE, type JobLanguage } from "../../lib/languages";
 import { formatClock, speedLabel } from "../../lib/speed";
 import { AudioDetails } from "./AudioDetails";
 
@@ -15,10 +16,23 @@ interface Props {
   jobId: string;
   // The voice of this job, as the server stored it (not the voice picked on the form now).
   voiceLabel: string;
+  // The language of this job, as the server stored it (Vietnamese for jobs without one).
+  language?: JobLanguage;
   onSessionExpired: () => void;
 }
 
-export function ResultView({ jobId, voiceLabel, onSessionExpired }: Props) {
+const OLD_JOB_LANGUAGE: JobLanguage = {
+  label: VIETNAMESE.label,
+  noun: VIETNAMESE.noun,
+  tag: VIETNAMESE.translator_language,
+};
+
+export function ResultView({
+  jobId,
+  voiceLabel,
+  language = OLD_JOB_LANGUAGE,
+  onSessionExpired,
+}: Props) {
   const [state, setState] = useState<ResultState>({ kind: "loading" });
   const onExpiredRef = useRef(onSessionExpired);
 
@@ -92,6 +106,10 @@ export function ResultView({ jobId, voiceLabel, onSessionExpired }: Props) {
       <div className="result-actions">
         <dl className="facts">
           <div>
+            <dt>Language</dt>
+            <dd>{language.label}</dd>
+          </div>
+          <div>
             <dt>Voice</dt>
             <dd>{voiceLabel}</dd>
           </div>
@@ -151,15 +169,18 @@ export function ResultView({ jobId, voiceLabel, onSessionExpired }: Props) {
 
       <details className="disclosure" open>
         <summary>
-          Vietnamese translation
+          {language.noun} translation
           {translation.is_illustrative && <span className="chip">Illustrative mock</span>}
         </summary>
         <div className="disclosure-body">
           {translation.is_illustrative && (
             <p className="small muted">This is placeholder text, not a real translation.</p>
           )}
-          {/* Rendered as text: React escapes it, never interpreted as HTML. */}
-          <div className="translation">{translation.text}</div>
+          {/* Rendered as text: React escapes it, never interpreted as HTML. The language tag lets
+              the browser choose suitable fonts and screen readers the right voice. */}
+          <div className="translation" lang={translation.is_illustrative ? undefined : language.tag}>
+            {translation.text}
+          </div>
         </div>
       </details>
 

@@ -10,11 +10,16 @@ Runs in a worker thread (see executor.py), never on the event loop. Each status 
 a short committed transaction so pollers see progress. The transcript is held in memory
 only for the duration of the run.
 
-After a real translation, the English it kept is detected (`pronunciation/detector.py`) so
-speech reads it with `en-US`, and once the job is completed its glossary candidates are
-counted in their own transaction (`glossary_candidates/store.py`). That bookkeeping is
-auxiliary: if it fails, the completed job and its result are kept and only a log line (no
-term, text or database message) says so.
+Every stage receives the job's target language (`app/languages.py`, stored with the job): the
+translation into it, the detection rules, the speech chunking and spans. Nothing switches
+language or provider when a stage fails.
+
+After a real translation, the English it kept is detected (`pronunciation/detector.py` for
+Vietnamese, `pronunciation/mandarin.py` for Mandarin) so speech reads it with `en-US`, and once
+the job is completed its glossary candidates are counted in their own transaction
+(`glossary_candidates/store.py`; Vietnamese jobs only, a Mandarin detection has none). That
+bookkeeping is auxiliary: if it fails, the completed job and its result are kept and only a log
+line (no term, text or database message) says so.
 """
 
 import logging
@@ -35,8 +40,10 @@ from app.glossary_candidates.store import record_job_candidates
 from app.jobs import service
 from app.jobs.executor import JobSlot
 from app.jobs.models import JobStatus
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
 from app.pronunciation.detector import Detection, detect_english
+from app.pronunciation.mandarin import detect_english_mandarin
 from app.speech.base import SpeechProvider
 from app.speech.voices import Voice
 from app.storage.result_store import ResultContent, ResultStore
@@ -56,6 +63,9 @@ class JobInput:
     speed: AudioSpeed
     # Timed mode: captions and blocks, in memory only; None in plain mode.
     timed: TimedTranscript | None = None
+    # Output language stored with the job. Every stage uses this one value: a failure is a failed
+    # job, never a retry or fallback in another language.
+    target_language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
 
 
 def timing_summary(
@@ -176,17 +186,21 @@ class JobPipeline:
     def _run_stages(self, job: JobInput, work_dir: Path) -> None:
         now = datetime.now(UTC)
         self._advance(job.job_id, JobStatus.QUEUED, JobStatus.TRANSLATING, started_at=now)
+        language = job.target_language
         if job.timed is None:
-            translation = self._translator.translate(job.transcript)
+            translation = self._translator.translate(job.transcript, language)
         else:
-            translation = self._translator.translate_lines([b.text for b in job.timed.blocks])
+            blocks_text = [b.text for b in job.timed.blocks]
+            translation = self._translator.translate_lines(blocks_text, language)
 
         detection = self._detect(job, translation)
         terms = detection.speech_terms if detection is not None else None
 
         self._advance(job.job_id, JobStatus.TRANSLATING, JobStatus.SYNTHESIZING)
         if job.timed is None:
-            speech = self._speech.synthesize(translation.text, job.voice, work_dir, terms=terms)
+            speech = self._speech.synthesize(
+                translation.text, job.voice, work_dir, terms=terms, language=language
+            )
             self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
             target = DurationTarget(job.baseline_seconds, job.speed)
             processed = self._audio.fit_to_duration(speech, target, work_dir)
@@ -194,7 +208,9 @@ class JobPipeline:
         else:
             # Timed mode: one clip per block, each placed in its frame of the timeline. Any
             # failure fails the job; there is no fallback to the plain flow.
-            blocks = self._speech.synthesize_blocks(translation.lines, job.voice, work_dir, terms)
+            blocks = self._speech.synthesize_blocks(
+                translation.lines, job.voice, work_dir, terms, language=language
+            )
             self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
             plan = job.timed.plan(job.baseline_seconds, job.speed)
             processed = self._audio.fit_timeline(blocks, plan, work_dir)
@@ -233,8 +249,13 @@ class JobPipeline:
         """English kept by a real translation; None for mock text (it is the source itself)."""
         if translation.is_illustrative:
             return None
+        detect = (
+            detect_english_mandarin
+            if job.target_language is TargetLanguage.MANDARIN
+            else detect_english
+        )
         try:
-            detection = detect_english(job.transcript, translation.text, self._glossary)
+            detection = detect(job.transcript, translation.text, self._glossary)
         except Exception as exc:
             # Pronunciation hints are an improvement, not a requirement: speech then uses
             # the glossary alone, as before. The log names the error type only.

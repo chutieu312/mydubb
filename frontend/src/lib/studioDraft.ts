@@ -9,6 +9,9 @@ export interface StudioDraft {
   speed: number;
   // The user chose to process a timestamped transcript as plain text.
   ignoreTimestamps?: boolean;
+  // "Translate to"; a draft without it (or with a language no longer offered) starts from the
+  // server's default, Vietnamese.
+  targetLanguage?: string;
 }
 
 export interface DraftKeeper {

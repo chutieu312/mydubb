@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.speech.voices import Voice
 from app.translation.glossary import TermMatcher
 
@@ -29,7 +30,8 @@ class TimedSpeechAudio:
 
 
 class SpeechProvider(Protocol):
-    """Synthesizes Vietnamese text into an audio file inside `work_dir`.
+    """Synthesizes the translated text (in `language`, Vietnamese unless stated otherwise) into
+    an audio file inside `work_dir`.
 
     `terms` are the spans read in English (the glossary plus English detected for this job,
     see `pronunciation/`); None means the shared glossary only. They never change the text.
@@ -43,7 +45,12 @@ class SpeechProvider(Protocol):
     produces_fixture: bool
 
     def synthesize(
-        self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
+        self,
+        text: str,
+        voice: Voice,
+        work_dir: Path,
+        terms: TermMatcher | None = None,
+        language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> SpeechAudio: ...
 
     def synthesize_blocks(
@@ -52,6 +59,7 @@ class SpeechProvider(Protocol):
         voice: Voice,
         work_dir: Path,
         terms: TermMatcher | None = None,
+        language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> TimedSpeechAudio:
         """One clip per text, in order (timed mode). Every block must succeed: a failure fails
         the whole call and no clip is returned."""

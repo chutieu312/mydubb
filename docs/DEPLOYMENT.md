@@ -659,7 +659,11 @@ rollback ([GUEST_ACCESS.md](GUEST_ACCESS.md#enabling-a-product-owner-decision-no
 The guest YouTube import pull request adds migration `0008` (table `guest_import_quota`,
 expand-only; it runs whatever `GUEST_ACCESS_ENABLED` and `YOUTUBE_IMPORT_PROVIDER` are). Once it is
 deployed, every deploy built before it is no longer a supported Render rollback target; check with
-`docker/rollback-target-check.sh <commit> 0008`.
+`docker/rollback-target-check.sh <commit> 0008`. The Mandarin Chinese pull request adds migration
+`0009` (column `jobs.target_language varchar(32) NOT NULL DEFAULT 'vietnamese'` with a CHECK on the
+two supported values, expand-only: older code never writes it and its rows read as Vietnamese). Once
+it is deployed, every deploy built before it is no longer a supported Render rollback target; check
+with `docker/rollback-target-check.sh <commit> 0009`.
 
 **Before rolling back** (read-only checks):
 
@@ -812,6 +816,22 @@ tmpfs (its own Docker network), commit `8a9e127` (`origin/main` when the story s
 | 6 | new | `AUTH_MODE=cognito` (dummy pool), `GUEST_ACCESS_ENABLED=true`, `CLIENT_IP_HEADER=cf-connecting-ip`, `YOUTUBE_IMPORT_PROVIDER=mock` | `/api/meta` reports the import limits (5, 20); `POST /api/guest/session` without the header `503`; with it a guest session whose `imports` shows 5 left; one guest import `200` and its row `used`; no raw address in the table; neither the address nor the video ID in the container log |
 | 7 | `8a9e127` | `RUN_MIGRATIONS_ON_START=false`, guest import rows in the database | Starts; smoke test passes |
 | 8 | new | default, database already at `0008` | Starts; smoke test passes; the import row is kept |
+
+Production was not touched.
+
+Rehearsal for migration `0009` (job target language), local throwaway PostgreSQL 17 on tmpfs (its
+own Docker network), commit `3d2daae` (`origin/main` when the story started, knows `0001`-`0008`)
+against the image of the Mandarin branch at `b11ed76` (knows `0009`), `docker/smoke-test.sh`
+(Access Code mode, one mock job; run from a small Linux container on the same network) each time:
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `3d2daae` | default, empty database | Migrates to `0008`; smoke test passes |
+| 2 | new | default | `0008` -> `0009`; smoke test passes; both jobs (one written by `3d2daae`) read `vietnamese`; a `mandarin_simplified` mock job completes and job and result report it |
+| 3 | `3d2daae` | default, database at `0009` | Exits 1: `Can't locate revision identified by '0009'`; database unchanged (`0009`) |
+| 4 | `3d2daae` | `RUN_MIGRATIONS_ON_START=false` | Starts with the Mandarin row in the database; smoke test passes (its insert omits the column and gets `vietnamese`) |
+| 5 | new | default, after step 4 | Starts; smoke test passes; five jobs completed, four `vietnamese`, one `mandarin_simplified` |
+| 6 | new | database at `0009` | `UPDATE jobs SET target_language = 'french'` is refused by `ck_jobs_target_language_valid` |
 
 Production was not touched.
 

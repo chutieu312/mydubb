@@ -29,7 +29,7 @@ export function AuthCard({ title, intro, notice, focusTitle = false, children }:
         <p className="eyebrow">Less reading. More understanding.</p>
         <h1 id="gate-title">A new language. The same ideas.</h1>
         <p className="muted">
-          Natural Vietnamese voices. Clear English terms. Audio that fits your pace.
+          Natural multilingual voices. Clear English terms. Audio that fits your pace.
         </p>
       </div>
       <div className="gate-form">

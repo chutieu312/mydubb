@@ -1,4 +1,8 @@
-"""Azure Speech text to speech over the REST API: Vietnamese text -> one MP3.
+"""Azure Speech text to speech over the REST API: translated text -> one MP3.
+
+The text is Vietnamese or Mandarin (the job's target language, `app/languages.py`); the same two
+voices read both, and only the chunking and the language of the non-English spans differ
+(`speech/plan.py`). Everything below applies to both languages.
 
 REST rather than the Speech SDK, checked against Microsoft Learn on 2026-10-22:
 
@@ -16,7 +20,8 @@ REST rather than the Speech SDK, checked against Microsoft Learn on 2026-10-22:
   below that, and a result near 10 minutes is rejected instead of being accepted as complete.
   The 64 KB SSML limit in the same table is for WebSocket and is not applied here.
 * Voices are `en-US-AndrewMultilingualNeural` / `en-US-EmmaMultilingualNeural`. One `<voice>`
-  per request holds `<lang xml:lang="vi-VN">` spans for Vietnamese and `<lang xml:lang="en-US">`
+  per request holds `<lang xml:lang="vi-VN">` spans for Vietnamese (`zh-CN` for Mandarin, a
+  speaking language of both voices, checked 2026-10-29) and `<lang xml:lang="en-US">`
   spans for glossary terms and for English detected in the job's translation (see `ssml.py`
   and `pronunciation/`); the same speaker reads both.
 * `riff-24khz-16bit-mono-pcm` is requested so chunks can be joined as samples and encoded once
@@ -41,12 +46,14 @@ from pydantic import SecretStr
 
 from app.audio.ffmpeg import AudioToolError, AudioTools, encode_mp3, probe_mp3
 from app.audio.wav import InvalidAudioError, PcmFormat, concat_wavs, read_wav_info, write_silence
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio, TimedSpeechAudio
 from app.speech.blocks import BlockRequest, BlockSplitError, plan_block_requests, split_response
-from app.speech.chunker import SpeechTextTooLongError, speech_text, split_for_speech
+from app.speech.chunker import SpeechTextTooLongError
+from app.speech.plan import chunk_spans
 from app.speech.rate_limit import RateLimiterClosed, RequestRateLimiter
-from app.speech.ssml import build_ssml_from_spans, chunk_language_spans
+from app.speech.ssml import build_ssml_from_spans
 from app.speech.voices import Voice
 from app.translation.glossary import Glossary, TermMatcher
 
@@ -146,19 +153,25 @@ class AzureSpeechProvider:
         self._transport = transport
 
     def synthesize(
-        self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
+        self,
+        text: str,
+        voice: Voice,
+        work_dir: Path,
+        terms: TermMatcher | None = None,
+        language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> SpeechAudio:
         terms = self._glossary if terms is None else terms
         try:
-            chunks = split_for_speech(text, terms, self._max_chunk_chars)
+            # Languages are decided on the whole text, so a span cut by a chunk keeps its
+            # language. Each chunk's spans joined are the chunk.
+            spans = chunk_spans(text, terms, self._max_chunk_chars, language)
         except SpeechTextTooLongError:
             raise _failure("speech_input_unsupported") from None
-        # Languages are decided on the whole text, so a span cut by a chunk keeps its language.
-        spans = chunk_language_spans(speech_text(text), chunks, terms)
+        chunks = ["".join(piece for _, piece in pieces) for pieces in spans]
         # Text with no letter or digit (e.g. only punctuation) has nothing to read aloud.
         speakable = [
-            (chunk, chunk_spans)
-            for chunk, chunk_spans in zip(chunks, spans, strict=True)
+            (chunk, pieces)
+            for chunk, pieces in zip(chunks, spans, strict=True)
             if any(char.isalnum() for char in chunk)
         ]
         if not speakable:
@@ -193,6 +206,7 @@ class AzureSpeechProvider:
         voice: Voice,
         work_dir: Path,
         terms: TermMatcher | None = None,
+        language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> TimedSpeechAudio:
         """One lossless clip per block: several blocks per request, cut at inserted breaks.
 
@@ -202,7 +216,7 @@ class AzureSpeechProvider:
         """
         terms = self._glossary if terms is None else terms
         try:
-            requests = plan_block_requests(texts, terms, self._max_chunk_chars)
+            requests = plan_block_requests(texts, terms, self._max_chunk_chars, language)
         except SpeechTextTooLongError:
             raise _failure("speech_input_unsupported") from None
         if not requests:

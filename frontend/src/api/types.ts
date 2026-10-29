@@ -16,6 +16,19 @@ export interface VoiceOption {
   description: string;
 }
 
+/** An output language the transcript can be translated into (the input is always English). */
+export interface TargetLanguageOption {
+  // Sent as `target_language`; never a provider code.
+  id: string;
+  // Shown in "Translate to", e.g. "Chinese — Mandarin (Simplified)".
+  label: string;
+  // Used inside sentences, e.g. "Mandarin Chinese".
+  noun: string;
+  // Informative: the Translator code, which is also the language tag of the translated text.
+  translator_language?: string;
+  speech_locale?: string;
+}
+
 export interface AppMeta {
   provider_mode: string;
   // True while any pipeline component is still a mock.
@@ -24,6 +37,10 @@ export interface AppMeta {
   // "mock" | "ffmpeg".
   providers: { translation: string; speech: string; audio: string };
   voices: VoiceOption[];
+  // Output languages, in the order to offer them, and the default. Read them with
+  // languageChoiceOf(); missing means the server offers no choice (it translates into Vietnamese).
+  target_languages?: TargetLanguageOption[];
+  default_target_language?: string;
   timestamp_format: string;
   result_ttl_seconds: number;
   // How users sign in. Read it with authModeOf(): a missing or unknown value must not be guessed.
@@ -78,12 +95,17 @@ export interface CreateJobInput {
   speed: number;
   // "timed" uses the caption times of a timestamped transcript; omitted means plain.
   timing_mode?: "timed";
+  // An `id` from GET /api/meta `target_languages`; omitted means the server's default (Vietnamese).
+  target_language?: string;
 }
 
 export interface Job {
   id: string;
   status: JobStatus;
   voice: string;
+  // The output language stored with the job (absent from older servers: Vietnamese).
+  target_language?: string;
+  target_language_label?: string;
   first_sentence_start: string;
   last_sentence_start: string;
   // Baseline: last - first sentence start (the duration at 1x). Independent of the speed.
@@ -165,6 +187,9 @@ export interface Timing {
 
 export interface JobResult {
   job_id: string;
+  // Language of `translation.text` and of the audio, from the job record.
+  target_language?: string;
+  target_language_label?: string;
   // What the job was submitted with, also when the audio was not adjusted (mock audio).
   baseline_duration_seconds: number;
   speed: number;

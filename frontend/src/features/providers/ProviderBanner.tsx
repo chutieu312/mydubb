@@ -2,10 +2,12 @@ import type { AppMeta } from "../../api/types";
 
 interface Props {
   providers: AppMeta["providers"];
+  // The output languages offered, as said in a sentence ("Vietnamese or Mandarin Chinese").
+  languages?: string;
 }
 
 /** Says, per pipeline component, what is real and what is still a mock. */
-export function ProviderBanner({ providers }: Props) {
+export function ProviderBanner({ providers, languages = "Vietnamese" }: Props) {
   const everythingMock = Object.values(providers).every((p) => p === "mock");
   const nothingMock = Object.values(providers).every((p) => p !== "mock");
   if (nothingMock) return null;
@@ -22,7 +24,7 @@ export function ProviderBanner({ providers }: Props) {
 
   return (
     <div className="mock-banner" role="status">
-      {summary(providers)}
+      {summary(providers, languages)}
       <ul className="provider-list">
         <li>Translation: {describe(providers.translation, "Azure Translator (real)")}</li>
         <li>Speech: {describe(providers.speech, "Azure Speech (real)")}</li>
@@ -37,7 +39,7 @@ export function ProviderBanner({ providers }: Props) {
   );
 }
 
-function summary(providers: Props["providers"]) {
+function summary(providers: Props["providers"], languages: string) {
   const realTranslation = providers.translation !== "mock";
   const realSpeech = providers.speech !== "mock";
   const adjusted = providers.audio !== "mock";
@@ -45,8 +47,8 @@ function summary(providers: Props["providers"]) {
     // Audio processing needs real speech, so a mock component here can only be translation.
     return (
       <>
-        <strong>Beta: mock translation, real speech, duration adjusted.</strong> The Vietnamese text
-        is an illustrative placeholder, read aloud by Azure Speech and adjusted to the target
+        <strong>Beta: mock translation, real speech, duration adjusted.</strong> The {languages}{" "}
+        text is an illustrative placeholder, read aloud by Azure Speech and adjusted to the target
         duration by FFmpeg.
       </>
     );
@@ -54,7 +56,7 @@ function summary(providers: Props["providers"]) {
   if (realTranslation && realSpeech) {
     return (
       <>
-        <strong>Beta: real translation and speech, duration not adjusted.</strong> The Vietnamese
+        <strong>Beta: real translation and speech, duration not adjusted.</strong> The {languages}{" "}
         text is translated by Azure Translator and read aloud by Azure Speech. The audio length is
         not adjusted to the target duration yet, so it can be longer or shorter than the target.
       </>
@@ -63,7 +65,7 @@ function summary(providers: Props["providers"]) {
   if (realSpeech) {
     return (
       <>
-        <strong>Beta: mock translation, real speech.</strong> The Vietnamese text is an
+        <strong>Beta: mock translation, real speech.</strong> The {languages} text is an
         illustrative placeholder, read aloud by Azure Speech. The audio length is not adjusted to
         the target duration yet.
       </>
@@ -71,7 +73,7 @@ function summary(providers: Props["providers"]) {
   }
   return (
     <>
-      <strong>Beta: real translation, mock audio.</strong> The Vietnamese text is translated by
+      <strong>Beta: real translation, mock audio.</strong> The {languages} text is translated by
       Azure Translator. Speech and audio processing are still mock: the audio is a fixed sample,
       not generated from your transcript, and does not match the target duration.
     </>

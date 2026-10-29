@@ -14,6 +14,7 @@ import { GuestBanner } from "./features/guest/GuestBanner";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
 import { authModeOf, guestAccessOf, passwordResetOf } from "./lib/authMode";
+import { languageChoiceOf, languageNouns } from "./lib/languages";
 import { azureDisclosure, azureDisclosureShort } from "./lib/providers";
 import { createDraftKeeper, type StudioDraft } from "./lib/studioDraft";
 import { useTheme } from "./lib/useTheme";
@@ -310,6 +311,12 @@ export function App() {
 
   const inStudio = auth === "authenticated" || auth === "guest";
   const guestLimits = meta?.guest_access;
+  // "Translate to": the output languages the server offers (none listed: Vietnamese only).
+  const languages = useMemo(
+    () => (meta ? languageChoiceOf(meta) : { options: [], defaultId: "" }),
+    [meta],
+  );
+  const languageList = languageNouns(languages.options);
   // A guest's YouTube imports (null: the server offers none to this guest).
   const guestImports = auth === "guest" && guest ? guest.imports : null;
 
@@ -332,7 +339,7 @@ export function App() {
           </p>
         )}
 
-        {meta && <ProviderBanner providers={meta.providers} />}
+        {meta && <ProviderBanner providers={meta.providers} languages={languageList} />}
 
         <main className="main">
           {blockingError && (
@@ -371,7 +378,7 @@ export function App() {
             <>
               <section className="hero">
                 <p className="eyebrow">Your dubbing studio</p>
-                <h1>Turn English into Vietnamese audio</h1>
+                <h1>Turn English into {languageList} audio</h1>
                 <p className="muted">
                   Paste a transcript, choose a voice and speed, then listen and download the MP3.
                 </p>
@@ -388,6 +395,8 @@ export function App() {
                 // A new identity starts from its own draft.
                 key={draftOwner ?? "session"}
                 voices={meta.voices}
+                languages={languages.options}
+                defaultLanguage={languages.defaultId}
                 disclosure={azureDisclosureShort(meta.providers)}
                 // Guests import with their own quota, offered only when the server reports it.
                 youtubeImport={
@@ -417,6 +426,7 @@ export function App() {
                   key={jobId}
                   jobId={jobId}
                   voices={meta.voices}
+                  languages={languages.options}
                   onSessionExpired={bound.sessionExpired}
                   onFinished={auth === "guest" ? bound.guestChanged : undefined}
                 />
@@ -427,7 +437,7 @@ export function App() {
 
         {meta && (
           <AppFooter
-            disclosure={azureDisclosure(meta.providers)}
+            disclosure={azureDisclosure(meta.providers, languageList)}
             resultTtlSeconds={meta.result_ttl_seconds}
           />
         )}

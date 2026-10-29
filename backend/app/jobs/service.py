@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.audio.speed import DEFAULT_SPEED, AudioSpeed
 from app.guest.service import settle_jobs
 from app.jobs.models import ACTIVE_STATUSES, Job, JobStatus
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.transcript.timestamps import target_duration_seconds
 
 INTERRUPTED_CODE = "interrupted"
@@ -35,6 +36,7 @@ def create_job(
     audio_speed: AudioSpeed = DEFAULT_SPEED,
     user_id: uuid.UUID | None = None,
     guest_session_id: uuid.UUID | None = None,
+    target_language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
 ) -> Job:
     now = datetime.now(UTC)
     job = Job(
@@ -51,6 +53,7 @@ def create_job(
             first_sentence_start_seconds, last_sentence_start_seconds
         ),
         audio_speed_percent=audio_speed.value,
+        target_language=target_language.value,
         transcript_char_count=transcript_char_count,
         translation_provider=translation_provider,
         speech_provider=speech_provider,

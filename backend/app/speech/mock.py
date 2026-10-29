@@ -3,6 +3,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio, TimedSpeechAudio
 from app.speech.voices import Voice
@@ -12,10 +13,11 @@ FIXTURE_MP3 = Path(__file__).resolve().parent.parent / "audio" / "fixtures" / "m
 
 
 class MockSpeechProvider:
-    """Returns a bundled MP3 fixture regardless of the input text or voice.
+    """Returns a bundled MP3 fixture regardless of the input text, voice or language.
 
-    The fixture is NOT generated from the submitted transcript and does not reflect the
-    target duration. It only exercises playback and download.
+    The fixture (a synthetic chime, no speech in any language) is NOT generated from the
+    submitted transcript and does not reflect the target duration. It only exercises playback
+    and download.
     """
 
     name = "mock-speech"
@@ -26,7 +28,12 @@ class MockSpeechProvider:
         self._delay = delay
 
     def synthesize(
-        self, text: str, voice: Voice, work_dir: Path, terms: TermMatcher | None = None
+        self,
+        text: str,
+        voice: Voice,
+        work_dir: Path,
+        terms: TermMatcher | None = None,
+        language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> SpeechAudio:
         return SpeechAudio(path=self._fixture(work_dir), is_fixture=True)
 
@@ -36,6 +43,7 @@ class MockSpeechProvider:
         voice: Voice,
         work_dir: Path,
         terms: TermMatcher | None = None,
+        language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> TimedSpeechAudio:
         """The same fixture: no clip per block, so nothing is placed on a timeline."""
         return TimedSpeechAudio(

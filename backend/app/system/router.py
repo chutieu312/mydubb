@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from app.config import AuthMode
 from app.db import check_database
 from app.dependencies import get_services
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.services import AppServices
 from app.speech.voices import Voice
 
@@ -62,6 +63,19 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
             }
             for v in Voice
         ],
+        # Output languages a job can choose (`target_language`), the first being the default. The
+        # service codes are informative only: requests send the `id`, never a locale.
+        "target_languages": [
+            {
+                "id": language.value,
+                "label": language.label,
+                "noun": language.noun,
+                "translator_language": language.translator_code,
+                "speech_locale": language.speech_locale,
+            }
+            for language in TargetLanguage
+        ],
+        "default_target_language": DEFAULT_TARGET_LANGUAGE.value,
         "timestamp_format": "HH:MM:SS",
         # Whether the form offers "YouTube URL" next to pasting, and which provider serves it.
         "youtube_import": {
