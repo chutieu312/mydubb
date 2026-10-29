@@ -10,7 +10,20 @@ import { fillJobForm, signIn } from "./helpers";
 
 const ARABIC =
   "يستخدم Spring Boot صيغة JSON عبر /api/v1 لإرجاع 1,024 سجلا بنسبة 50%.\n" +
-  "ثم ننشر الخدمة على Kubernetes باستخدام REST API، وهذا كل شيء.";
+  "ثم ننشر الخدمة على Kubernetes باستخدام REST API، وهذا كل شيء.\n" +
+  "افتح /2026/api ثم https://example.com/search?q=API&lang=en، واحفظ في " +
+  String.raw`C:\Users\demo\file.txt.`;
+// Whole tokens, each one left-to-right isolate, in text order.
+const ISOLATES = [
+  "Spring Boot",
+  "JSON",
+  "/api/v1",
+  "Kubernetes",
+  "REST API",
+  "/2026/api",
+  "https://example.com/search?q=API&lang=en",
+  String.raw`C:\Users\demo\file.txt`,
+];
 
 const select = (page: Page) => page.getByLabel("Translate to");
 const translationSummary = (page: Page, language: string) =>
@@ -93,13 +106,59 @@ for (const width of [320, 390, 1280]) {
     await expect(box).toHaveText(ARABIC);
     expect(await box.evaluate((e) => getComputedStyle(e).direction)).toBe("rtl");
     // English terms and code are left-to-right isolates ("/api/v1" keeps its leading slash).
-    await expect(box.locator('span[dir="ltr"]')).toHaveText([
-      "Spring Boot",
-      "JSON",
-      "/api/v1",
-      "Kubernetes",
-      "REST API",
-    ]);
+    await expect(box.locator('span[dir="ltr"]')).toHaveText(ISOLATES);
+    // What the browser draws, not only the text, measured on the whole text whatever the markup:
+    // the characters of every expected token go left to right in text order on each line, the
+    // punctuation right after a token on the same line is drawn on its left (the Arabic side),
+    // and the paragraph starts at the right edge.
+    const layout = await box.evaluate((element, tokens) => {
+      const nodes: { node: Text; start: number }[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let length = 0;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        nodes.push({ node: node as Text, start: length });
+        length += node.textContent!.length;
+      }
+      const rectAt = (offset: number) => {
+        const { node, start } = nodes.filter((n) => n.start <= offset).at(-1)!;
+        const range = document.createRange();
+        range.setStart(node, offset - start);
+        range.setEnd(node, offset - start + 1);
+        return range.getBoundingClientRect();
+      };
+      const text = element.textContent!;
+      const misordered: string[] = [];
+      const punctuation: string[] = [];
+      for (const token of tokens) {
+        const at = text.indexOf(token);
+        if (at < 0) {
+          misordered.push(`${token} not found`);
+          continue;
+        }
+        const rects = Array.from(token, (_, i) => rectAt(at + i));
+        for (let i = 1; i < rects.length; i++) {
+          const sameLine = Math.abs(rects[i].top - rects[i - 1].top) < 2;
+          if (token[i] !== " " && token[i - 1] !== " " && sameLine && rects[i].left < rects[i - 1].left - 0.5) {
+            misordered.push(`${token} at ${i}`);
+          }
+        }
+        const after = at + token.length;
+        if (/[.،؟,]/.test(text[after] ?? "")) {
+          const mark = rectAt(after);
+          const last = rects[rects.length - 1];
+          if (Math.abs(mark.top - last.top) < 2 && mark.left > last.left) {
+            punctuation.push(`${text[after]} after ${token}`);
+          }
+        }
+      }
+      const first = rectAt(0);
+      const content = element.getBoundingClientRect();
+      const padding = parseFloat(getComputedStyle(element).paddingRight);
+      return { misordered, punctuation, startGap: content.right - padding - first.right };
+    }, ISOLATES);
+    expect(layout.misordered).toEqual([]);
+    expect(layout.punctuation).toEqual([]);
+    expect(layout.startGap).toBeLessThan(4); // the Arabic text starts on the right
     // The page itself stays left to right; nothing overflows sideways.
     expect(await page.evaluate(() => getComputedStyle(document.body).direction)).toBe("ltr");
     const summary = translationSummary(page, "Arabic");

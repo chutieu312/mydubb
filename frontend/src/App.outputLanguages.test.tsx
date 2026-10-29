@@ -400,6 +400,16 @@ describe("Left-to-right runs in a right-to-left translation", () => {
     ["عبر /api/v1 و ~/.bashrc و ./run.sh.", ["/api/v1", "~/.bashrc", "./run.sh"]],
     ["لغة C++ و C# و Node.js و user@example.com", ["C++", "C#", "Node.js", "user@example.com"]],
     ["بنسبة 50% في 2026.", []],
+    // A whole token stays in one isolate: digits, query punctuation and backslashes included.
+    ["افتح /2026/api الآن.", ["/2026/api"]],
+    [
+      "ابحث في https://example.com/search?q=API&lang=en، ثم تابع.",
+      ["https://example.com/search?q=API&lang=en"],
+    ],
+    [String.raw`احفظ الملف في C:\Users\demo\file.txt.`, [String.raw`C:\Users\demo\file.txt`]],
+    // Punctuation and Arabic letters touching a token stay on the Arabic side.
+    ["المسار (/api/v1)، وDocker؟", ["/api/v1", "Docker"]],
+    ["يستخدم Spring Boot و gradient descent.", ["Spring Boot", "gradient descent"]],
   ])("isolates %s", (text, runs) => {
     const pieces = ltrRuns(text);
     expect(pieces.map((p) => p.text).join("")).toBe(text);

@@ -965,8 +965,9 @@ Azure's (live: "image" as a picture in every language).
 **UI.** "Translate to" lists `GET /api/meta` `target_languages` (Vietnamese selected); the job panel
 and the result name the job's stored language, not the form's; the translated text carries its
 language tag (`lang="zh-Hans"`, `lang="ar"`, ...) and, for Arabic, `dir="rtl"` on its box only
-(the page stays left to right); inside it each Latin run (English terms, code, paths) is a
-left-to-right isolate (`lib/bidi.ts`), so `/api/v1` keeps its slash in front. With more than two
+(the page stays left to right); inside it each whole Latin token (English terms, code, paths,
+URLs with their query, Windows paths) is a left-to-right isolate, with edge punctuation and Arabic
+letters left outside (`lib/bidi.ts`), so `/api/v1` or `/2026/api` keep their order. With more than two
 languages the hero and the disclosures say "your chosen language" / "the translated text"
 instead of listing them; a draft keeps its language (an older draft, or one
 with a language no longer offered, starts in Vietnamese). With no list from the server nothing is
