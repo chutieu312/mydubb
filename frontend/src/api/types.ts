@@ -27,6 +27,8 @@ export interface TargetLanguageOption {
   // Informative: the Translator code, which is also the language tag of the translated text.
   translator_language?: string;
   speech_locale?: string;
+  // "rtl" for a language written right to left (Arabic); missing means left to right.
+  text_direction?: "ltr" | "rtl";
 }
 
 export interface AppMeta {

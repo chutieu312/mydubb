@@ -53,7 +53,8 @@ class Job(Base):
             name="audio_speed_valid",
         ),
         CheckConstraint(
-            "target_language IN ('vietnamese', 'mandarin_simplified')",
+            "target_language IN ('vietnamese', 'mandarin_simplified', 'hindi', 'spanish', "
+            "'arabic', 'french', 'russian', 'japanese')",
             name="target_language_valid",
         ),
     )

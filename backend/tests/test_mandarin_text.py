@@ -46,7 +46,11 @@ def chunk_texts(text: str, max_chars: int = 2000, terms=GLOSSARY) -> list[str]:
 
 def test_each_product_language_maps_to_fixed_translator_and_speech_codes() -> None:
     assert DEFAULT_TARGET_LANGUAGE is TargetLanguage.VIETNAMESE
-    assert [language.value for language in TargetLanguage] == ["vietnamese", "mandarin_simplified"]
+    # The first two, in this order; the full list of eight is pinned in test_output_languages.py.
+    assert [language.value for language in TargetLanguage][:2] == [
+        "vietnamese",
+        "mandarin_simplified",
+    ]
     assert TargetLanguage.VIETNAMESE.translator_code == "vi"
     assert TargetLanguage.VIETNAMESE.speech_locale == "vi-VN"
     assert TargetLanguage.MANDARIN.translator_code == "zh-Hans"

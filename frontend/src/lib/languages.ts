@@ -24,6 +24,8 @@ export interface JobLanguage {
   noun: string;
   // Language tag of the translated text (`lang` attribute), when known.
   tag?: string;
+  // Direction of the translated text (`dir` attribute): "rtl" for Arabic.
+  dir?: "ltr" | "rtl";
 }
 
 function isOption(value: unknown): value is TargetLanguageOption {
@@ -60,12 +62,21 @@ export function jobLanguage(
     label: job.target_language_label ?? known?.label ?? id,
     noun: known?.noun ?? job.target_language_label ?? id,
     tag: known?.translator_language,
+    dir: known?.text_direction === "rtl" ? "rtl" : known ? "ltr" : undefined,
   };
 }
 
-/** "Vietnamese", "Vietnamese or Mandarin Chinese": the languages a text may be translated into. */
-export function languageNouns(options: TargetLanguageOption[]): string {
+// More languages than this are not listed in a sentence: the wording says "your chosen language".
+const MAX_NAMED_LANGUAGES = 2;
+
+/**
+ * "Vietnamese", "Vietnamese or Mandarin Chinese": the languages a text may be translated into, as
+ * said in a sentence. Null when the server offers more than two (the sentence then speaks of "your
+ * chosen language" or "the translated text" instead of listing them all).
+ */
+export function languageNouns(options: TargetLanguageOption[]): string | null {
   const nouns = options.length > 0 ? options.map((o) => o.noun) : [VIETNAMESE.noun];
+  if (nouns.length > MAX_NAMED_LANGUAGES) return null;
   const last = nouns.at(-1) ?? VIETNAMESE.noun;
   return nouns.length === 1 ? last : `${nouns.slice(0, -1).join(", ")} or ${last}`;
 }

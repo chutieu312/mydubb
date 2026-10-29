@@ -4,9 +4,10 @@ Structure (the one auditioned and accepted by the Product Owner): a single `<voi
 the whole request, so one speaker reads everything, containing consecutive
 `<lang xml:lang="vi-VN">` spans for the Vietnamese text and `<lang xml:lang="en-US">` spans
 for English. Both approved voices are multilingual voices, the case Microsoft documents for
-`<lang>`. Speaking rate and everything else keep their defaults. A Mandarin job uses the same
-structure with `<lang xml:lang="zh-CN">` instead of `vi-VN` (`speech/mandarin.py` decides the
-chunks and spans; the skeleton here is shared).
+`<lang>`. Speaking rate and everything else keep their defaults. A job in another target language
+uses the same structure with that language's locale instead of `vi-VN` (`zh-CN`, `hi-IN`,
+`es-ES`, `ar-SA`, `fr-FR`, `ru-RU`, `ja-JP`; `app/languages.py`). `speech/plan.py` decides the
+chunks and spans of each language; the skeleton here is shared.
 
 The English spans come from a `TermMatcher`: the shared glossary (known terms, always first)
 and, for a job, the English its translation kept (`pronunciation/detector.py`: words that
@@ -59,7 +60,7 @@ def language_spans(text: str, terms: TermMatcher, base: str = VIETNAMESE) -> lis
 
 
 def chunk_language_spans(
-    full_text: str, chunks: list[str], terms: TermMatcher
+    full_text: str, chunks: list[str], terms: TermMatcher, base: str = VIETNAMESE
 ) -> list[list[tuple[str, str]]]:
     """The language spans of each chunk, decided on the whole text.
 
@@ -70,7 +71,7 @@ def chunk_language_spans(
     """
     boundaries: list[tuple[int, int, str]] = []
     position = 0
-    for language, piece in language_spans(full_text, terms):
+    for language, piece in language_spans(full_text, terms, base=base):
         boundaries.append((position, position + len(piece), language))
         position += len(piece)
     result: list[list[tuple[str, str]]] = []
@@ -97,8 +98,8 @@ def build_ssml(text: str, voice: Voice, terms: TermMatcher) -> str:
 
 def build_ssml_from_spans(spans: list[tuple[str, str]], voice: Voice) -> str:
     """SSML for (language, text) spans: ENGLISH and the translation's language (VIETNAMESE, or
-    zh-CN for Mandarin; see `app/languages.py`). Languages come from the application, never
-    from user text."""
+    the locale of another target language; see `app/languages.py`). Languages come from the
+    application, never from user text."""
     body = "".join(
         f'<lang xml:lang="{language}">{escape_text(piece)}</lang>' for language, piece in spans
     )

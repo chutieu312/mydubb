@@ -2,7 +2,7 @@
 
 The glossary is the list of English technical terms that MyDubb keeps in English in the
 Vietnamese translation and reads with an English voice span. The same list is used, unchanged, for
-Mandarin Chinese jobs (see the end of "How translation and speech use it"). This page explains how
+jobs in the other seven output languages (see the end of "How translation and speech use it"). This page explains how
 it is used, how to write entries, which terms belong in it and how to change it.
 
 ## Purpose and location
@@ -36,6 +36,13 @@ it is used, how to write entries, which terms belong in it and how to change it.
    inside `zh-CN` text. The Vietnamese-syllable rule does not apply: a word copied from the source
    (`run`, `Go`) is read `en-US`. The selection rules below were written for Vietnamese and are not
    changed for Mandarin.
+5. **Hindi, Spanish, Arabic, French, Russian, Japanese jobs.** Translation protects the same terms.
+   Hindi, Arabic, Russian and Japanese match them with the letters of their script as word
+   boundaries and, like Mandarin, read a Latin word copied from the source `en-US`. Spanish and
+   French are written in Latin letters, so on their translation a glossary term is read `en-US` only
+   when the English source contains it: some terms are also words of these languages (`=Vue` and
+   `=Tableau` are French words) and would otherwise be read in English by mistake. Nothing else
+   changes for these languages; the selection rules below were not reviewed for them.
 
 The glossary therefore has two effects at once: it **stops translation** of a term and it makes
 speech **read it in English**. An entry that is too broad damages ordinary sentences in both

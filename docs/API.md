@@ -47,7 +47,7 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 |---|---|---|
 | `GET /api/health` | none | `200 {"status":"ok"}` — process liveness, no dependency checks |
 | `GET /api/ready` | none | `200 {"status":"ready","checks":{"database":"ok"}}` or `503 {"status":"not_ready","checks":{"database":"unavailable"}}` |
-| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `target_languages[] {id, label, noun, translator_language, speech_locale}` (the output languages a job can choose, in the order to offer them; `id` is the only value a request sends, the codes are informative) and `default_target_language` (`vietnamese`; see [Target language](#target-language)), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds, imports_per_session, imports_per_ip}`; the import fields only matter when `youtube_import.enabled`; see [Guest access](#guest-access)) |
+| `GET /api/meta` | none | Non-sensitive UI config: `provider_mode`, `mock_mode` (true while any component is mock), `providers` (`{translation, speech, audio}`; `translation` and `speech` are `mock` or `azure`, `audio` is `mock` or `ffmpeg`; `provider_mode` is `azure` only when every component is real, otherwise `mock`, and `mock_mode` is its inverse), `voices[] {id, label, provider_voice, description}` (the first one is the default), `target_languages[] {id, label, noun, translator_language, speech_locale, text_direction}` (`text_direction` is `rtl` for Arabic, else `ltr`; the output languages a job can choose, in the order to offer them; `id` is the only value a request sends, the codes are informative) and `default_target_language` (`vietnamese`; see [Target language](#target-language)), `timestamp_format`, `result_ttl_seconds`, `auth {mode, self_registration, password_reset}` (`mode` is `access_code` or `cognito` and selects the login UI; `self_registration` is always `false`; see [AUTH_API.md](AUTH_API.md)), `youtube_import {enabled, provider}` (`enabled` is `false` and `provider` `null` with `YOUTUBE_IMPORT_PROVIDER=off`; otherwise `provider` is `supadata` or `mock`; see [YouTube caption import](#youtube-caption-import)), `guest_access` (`{"enabled": false}`, or with guest access on `{enabled: true, jobs_per_session, jobs_per_ip, ip_window_seconds, max_words, max_output_seconds, session_ttl_seconds, imports_per_session, imports_per_ip}`; the import fields only matter when `youtube_import.enabled`; see [Guest access](#guest-access)) |
 
 ## Session (Private Beta access)
 
@@ -92,9 +92,9 @@ Requires session + CSRF.
 ```
 
 `target_language` is optional: the language the English transcript is translated into and read
-in. `"vietnamese"` (the default, the behaviour before the option existed) or
-`"mandarin_simplified"` (Chinese, Mandarin, Simplified script). See
-[Target language](#target-language).
+in. `"vietnamese"` (the default, the behaviour before the option existed),
+`"mandarin_simplified"` (Chinese, Mandarin, Simplified script), `"hindi"`, `"spanish"`,
+`"arabic"`, `"french"`, `"russian"` or `"japanese"`. See [Target language](#target-language).
 
 `speed` is optional and is the **audio speed**: the generated and downloaded file lasts
 `baseline / speed`, where the baseline is `last_sentence_start - first_sentence_start`. See
@@ -127,9 +127,9 @@ Validation (backend is authoritative):
   existed. `null`, booleans, strings (`"1.5"`), lists, other numbers (`1.1`, `1.2500001`, `0`,
   `3`) and non-finite values are rejected with `422 validation_error` (field `speed`). The output
   length is never taken from the client; a field such as `output_duration_seconds` is ignored.
-- `target_language`: exactly `"vietnamese"` or `"mandarin_simplified"`. Omitted means
-  `"vietnamese"`. Anything else (`null`, `"zh-Hans"`, `"zh-CN"`, `"vi"`, `"Vietnamese"`,
-  `"cantonese"`, numbers, lists) is rejected with `422 validation_error` (field `target_language`)
+- `target_language`: exactly one of the eight API values below. Omitted means
+  `"vietnamese"`. Anything else (`null`, `"zh-Hans"`, `"zh-CN"`, `"vi"`, `"es-ES"`, `"ar-SA"`,
+  `"Vietnamese"`, `"FRENCH"`, `"cantonese"`, `"german"`, numbers, lists) is rejected with `422 validation_error` (field `target_language`)
   before any job, quota place or provider call. Provider codes, locales, endpoints or provider voice
   names are never taken from the client; fields such as `translator_language` or `speech_locale`
   are ignored.
@@ -137,25 +137,41 @@ Validation (backend is authoritative):
 ### Target language
 
 The input is always English; each job has exactly one output language, chosen at submission and
-stored with the job (`jobs.target_language`, migration `0009`).
+stored with the job (`jobs.target_language`, migration `0009`; the eight values from migration
+`0010`). `/api/meta` lists them in this order, Vietnamese first and the default.
 
 | API value | Label (`/api/meta`) | Azure Translator `to` | Azure Speech `<lang xml:lang>` |
 |---|---|---|---|
 | `vietnamese` (default) | Vietnamese | `vi` | `vi-VN` |
 | `mandarin_simplified` | Chinese — Mandarin (Simplified) | `zh-Hans` | `zh-CN` |
+| `hindi` | Hindi | `hi` | `hi-IN` |
+| `spanish` | Spanish (Spain) | `es` | `es-ES` |
+| `arabic` | Arabic (Modern Standard) | `ar` | `ar-SA` |
+| `french` | French (France) | `fr` | `fr-FR` |
+| `russian` | Russian | `ru` | `ru-RU` |
+| `japanese` | Japanese | `ja` | `ja-JP` |
 
 - The mapping is fixed on the server (`backend/app/languages.py`, checked against Microsoft Learn on
   2026-10-29). A Translator answer in another language than the one asked for is rejected
   (`translation_invalid_response`).
-- Both languages use the same two voices (Andrew and Emma Multilingual), one voice per speech
+- **Arabic** is Translator's written Modern Standard Arabic (`ar`), read with the Saudi `ar-SA`
+  accent (the voices also offer `ar-EG`; the Egyptian reading is further from Modern Standard
+  Arabic). It does not represent spoken Arabic varieties. The UI shows an Arabic translation
+  right to left, in its own box only.
+- Every language uses the same two voices (Andrew and Emma Multilingual), one voice per speech
   request; glossary terms and English kept by the translation are read with `en-US`, the rest with
-  the language's locale. Mandarin has its own chunking (Chinese has no spaces) and its own
-  syllable estimate for the timed-mode checks; Vietnamese is unchanged.
+  the language's locale. Which English is read `en-US` depends on the script: Spanish and
+  French only glossary terms that the source contains, code and acronyms (a Latin word there may
+  be Spanish or French); the others any Latin word copied from the source. Mandarin and Japanese
+  are chunked without spaces, the others at spaces; each language has its own spoken-length
+  estimate for the timed-mode checks, whose limits are the same. Vietnamese and Mandarin are
+  unchanged. Details: [ARCHITECTURE.md](ARCHITECTURE.md#output-language).
 - The language is the job's own: `GET /api/jobs/{id}` and its result always report the stored
-  value. Jobs created before the option existed read as `vietnamese`. A failure in Mandarin fails
-  the job; nothing is retried or falls back to Vietnamese or to the mock.
+  value. Jobs created before the option existed read as `vietnamese`. A failure in any language
+  fails the job; nothing is retried or falls back to another language or to the mock.
 - Mock mode: the mock translation names the language it stands in for ("NOT a real Mandarin
-  Chinese (Simplified) translation"); the mock audio is a chime in every language.
+  Chinese (Simplified) translation", "NOT a real Arabic translation") and prefixes each line with
+  a few words of that language; the mock audio is a chime in every language.
 - Guests and invitation accounts have the same choice; a guest job counts once whatever its
   language, and the guest word limit counts the English text.
 

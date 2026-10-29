@@ -29,6 +29,12 @@ limit, if lower): at an assumed slow 2 characters per second that is 300 s, and 
 a timed request may hold (about 140 s) still far from the 10 minutes after which Azure truncates a
 response (`azure.py`). Measured on live responses: see docs/context.md.
 
+**Japanese** is written without spaces too and uses the same chunker (`chunk_unspaced` with
+`speech/japanese.py`'s script): its characters are Han characters and kana instead of Han alone,
+the punctuation above covers 。、！？「」, and in addition a cut is never made before a combining
+mark, a small kana (ゃ, ッ, ...) or the prolonged sound mark ー, which belong to the character
+before them. Mandarin passes no such characters, so its chunks are unchanged.
+
 **Length** (`mandarin_syllables`). Used, like the Vietnamese estimate, only to compare the speaking
 rate of clips cut from one timed-mode response (`blocks.py`); never instead of measured audio:
 
@@ -44,6 +50,8 @@ rate of clips cut from one timed-mode response (`blocks.py`); never instead of m
 
 import re
 import unicodedata
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from app.pronunciation.han import HAN, HanBoundaryTerms
 from app.speech.chunker import SpeechTextTooLongError, speech_text
@@ -51,6 +59,9 @@ from app.speech.ssml import language_spans
 from app.translation.glossary import TermMatcher
 
 MANDARIN_MAX_CHUNK_CHARS = 600
+# Japanese uses the same limit: a kana is read faster than a Han character (one mora), so the
+# same number of characters is read at most as long.
+UNSPACED_MAX_CHUNK_CHARS = MANDARIN_MAX_CHUNK_CHARS
 
 _SENTENCE_END = frozenset("。！？!?…")
 _CLAUSE_END = frozenset("，、；：,;:")
@@ -58,11 +69,24 @@ _CLOSERS = frozenset("\"'”’)]}»」』）】》〉")
 _LEVELS = 3  # sentence, clause, any character
 
 
-def _glued(char: str) -> bool:
+@dataclass(frozen=True)
+class UnspacedScript:
+    """What the chunker needs to know of a language written without spaces."""
+
+    characters: re.Pattern[str]  # the script's own characters (never part of a Latin token)
+    boundary_terms: Callable[[TermMatcher], TermMatcher]  # its characters as word boundaries
+    no_cut_before: frozenset[str] = frozenset()  # characters that belong to the one before
+    keep_marks: bool = False  # never cut before a combining mark
+
+
+MANDARIN_SCRIPT = UnspacedScript(HAN, HanBoundaryTerms)
+
+
+def _glued(char: str, script: UnspacedScript) -> bool:
     """Part of a Latin or number token (which a cut never splits)."""
     if char.isspace():
         return False
-    return char.isascii() or (char.isalnum() and not HAN.match(char))
+    return char.isascii() or (char.isalnum() and not script.characters.match(char))
 
 
 def chunk_spans(
@@ -73,8 +97,15 @@ def chunk_spans(
     `terms` are matched with Han characters as word boundaries. Raises SpeechTextTooLongError
     when a token or protected term is longer than the limit.
     """
-    terms = HanBoundaryTerms(terms)
-    limit = min(max_chars, MANDARIN_MAX_CHUNK_CHARS)
+    return chunk_unspaced(text, terms, max_chars, locale, MANDARIN_SCRIPT)
+
+
+def chunk_unspaced(
+    text: str, terms: TermMatcher, max_chars: int, locale: str, script: UnspacedScript
+) -> list[list[tuple[str, str]]]:
+    """`chunk_spans` for any language written without spaces (`script`)."""
+    terms = script.boundary_terms(terms)
+    limit = min(max_chars, UNSPACED_MAX_CHUNK_CHARS)
     full = speech_text(text)
     ranges: list[tuple[int, int]] = []
     position = 0
@@ -82,7 +113,7 @@ def chunk_spans(
         start, end = position, position + len(line)
         position = end + 1
         if line:
-            ranges += _Line(full, start, end, terms, limit).fit()
+            ranges += _Line(full, start, end, terms, limit, script).fit()
     chunks = _pack(ranges, limit)
     _check_complete(full, chunks)
     boundaries = []
@@ -97,11 +128,20 @@ def chunk_spans(
 
 
 class _Line:
-    def __init__(self, full: str, start: int, end: int, terms: TermMatcher, limit: int) -> None:
+    def __init__(
+        self,
+        full: str,
+        start: int,
+        end: int,
+        terms: TermMatcher,
+        limit: int,
+        script: UnspacedScript,
+    ) -> None:
         self._full = full
         self._start = start
         self._end = end
         self._limit = limit
+        self._script = script
         self._blocked = set()  # positions inside a protected term
         for match in terms.protected_matches(full[start:end]):
             self._blocked.update(range(start + match.start + 1, start + match.end))
@@ -144,7 +184,14 @@ class _Line:
     def _allowed(self, cut: int, level: int) -> bool:
         full = self._full
         before, after = full[cut - 1], full[cut]
-        if cut in self._blocked or before == " " or (_glued(before) and _glued(after)):
+        script = self._script
+        if cut in self._blocked or before == " ":
+            return False
+        if _glued(before, script) and _glued(after, script):
+            return False
+        if after in script.no_cut_before or (
+            script.keep_marks and unicodedata.category(after).startswith("M")
+        ):
             return False
         if level == 2:
             return True

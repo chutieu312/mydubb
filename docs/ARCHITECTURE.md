@@ -25,14 +25,14 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | Module | Responsibility | Depends on |
 |---|---|---|
 | `config.py` | Environment-based `Settings`; refuses unsafe combinations at startup | — |
-| `languages.py` | Output languages (`TargetLanguage`: `vietnamese`, `mandarin_simplified`), their labels and the fixed Translator/Speech codes (see [Output language](#output-language-vietnamese-and-mandarin)) | — |
+| `languages.py` | Output languages (`TargetLanguage`: `vietnamese` (default), `mandarin_simplified`, `hindi`, `spanish`, `arabic`, `french`, `russian`, `japanese`), their labels and the fixed Translator/Speech codes (see [Output language](#output-language)) | — |
 | `db.py` | Engine (with connect timeout), session factory, declarative base | — |
 | `access/` | Access Code check, server-side sessions, brute-force limiter, session router | db |
 | `auth/` | Amazon Cognito mode (`AUTH_MODE=cognito`): user pool HTTP client, users keyed by issuer + `sub`, user sessions, encrypted pending sign-in steps, password-reset revocation, `/api/auth` router, the `Principal` both modes resolve to (see [AUTHENTICATION.md](AUTHENTICATION.md)) | db, `access.rate_limit` |
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning, timed transcripts (captions, sentence units, estimated block starts: `timed.py`) (pure functions) | `audio.speed` |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
-| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter, timed-mode block requests and their split checks (`blocks.py`), spoken-syllable estimate (`spoken_length.py`); Mandarin chunking and syllable estimate (`mandarin.py`) and the per-language choice of these rules (`plan.py`) | `processing_errors`, `audio`, `translation.glossary`, `pronunciation.han` |
-| `pronunciation/` | English left in a translation (pure functions): Vietnamese-syllable check, detection of English words/phrases/code against the source, the per-job `SpeechTerms` matcher, candidate keys; Mandarin detection (`mandarin.py`) and Han characters as word boundaries (`han.py`) | `translation.glossary` |
+| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter, timed-mode block requests and their split checks (`blocks.py`), spoken-syllable estimate (`spoken_length.py`); Mandarin chunking and syllable estimate (`mandarin.py`, also the unspaced chunker Japanese uses with `japanese.py`), the chunking of the other spaced languages (`spaced.py`), spoken-length estimates of the six added languages (`spoken_units.py`) and the per-language choice of these rules (`plan.py`) | `processing_errors`, `audio`, `translation.glossary`, `pronunciation.han` |
+| `pronunciation/` | English left in a translation (pure functions): Vietnamese-syllable check, detection of English words/phrases/code against the source, the per-job `SpeechTerms` matcher, candidate keys; Mandarin detection (`mandarin.py`) and Han characters as word boundaries (`han.py`); other scripts as word boundaries (`scripts.py`), Spanish/French detection (`latin.py`) and the per-language detector (`policy.py`) | `translation.glossary` |
 | `glossary_candidates/` | Candidate table, counting per job, review/export/promote operations (used by `scripts/glossary_candidates.py`) | db, `jobs.models`, `pronunciation` |
 | `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture; timed mode: frame grouping (`grouping.py`) and placement of block clips on the timeline (`timeline.py`) | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
@@ -239,7 +239,7 @@ storage; that is intentionally out of scope.
 
 | Component | Mock behavior |
 |---|---|
-| Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice; for a Mandarin job `(ZH mock 中文示例)` under "NOT a real Mandarin Chinese (Simplified) translation", so a mock never shows Vietnamese labelled as Mandarin. `is_illustrative=true`. |
+| Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice; for a Mandarin job `(ZH mock 中文示例)` under "NOT a real Mandarin Chinese (Simplified) translation" (the other languages likewise, e.g. `(AR mock مثال عربي)` under "NOT a real Arabic translation"), so a mock never shows Vietnamese labelled as Mandarin. `is_illustrative=true`. |
 | Speech (default; `SPEECH_PROVIDER=mock`) | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime, no speech in any language) regardless of text/voice/language. `is_fixture=true`. |
 | Audio processing (default; `AUDIO_PROCESSOR=mock`) | Pass-through. `duration_adjusted=false`. **No tempo change, no duration guarantee.** |
 
@@ -461,7 +461,7 @@ Errors: 401/403 -> `speech_auth_failed`, 429 -> `speech_quota_exceeded`, 408/504
 `speech_cancelled`. Logs contain status codes, request IDs, counts and audio seconds only: never
 the key, headers, SSML, text or response content.
 
-**Privacy**: with Azure speech the translated Vietnamese or Mandarin text (with mock translation, the mock
+**Privacy**: with Azure speech the translated text (in the job's language) (with mock translation, the mock
 text that still contains the transcript) is sent to Microsoft Azure Speech; the form says so
 before submit.
 
@@ -882,16 +882,18 @@ changes nothing) and `promote --ref origin/main` (approved -> promoted only for 
 the glossary file of a commit merged into `origin/main`). Frequency only orders the review. See
 DEPLOYMENT.md, "Glossary candidates".
 
-### Output language (Vietnamese and Mandarin)
+### Output language
 
 The transcript is always English; each job has one output language (`target_language`, stored in
-`jobs.target_language`, migration `0009`, default `vietnamese`). The API value is the product's own
+`jobs.target_language`, migration `0009`, eight values from `0010`, default `vietnamese`). The API value is the product's own
 name; the service codes are fixed in `app/languages.py` and never come from a request:
 
 | API value | Translator `to` | Speech `<lang xml:lang>` | Voices |
 |---|---|---|---|
 | `vietnamese` (default) | `vi` | `vi-VN` | Andrew / Emma Multilingual |
 | `mandarin_simplified` | `zh-Hans` | `zh-CN` | the same two |
+| `hindi` / `spanish` / `arabic` | `hi` / `es` / `ar` | `hi-IN` / `es-ES` / `ar-SA` | the same two |
+| `french` / `russian` / `japanese` | `fr` / `ru` / `ja` | `fr-FR` / `ru-RU` / `ja-JP` | the same two |
 
 Microsoft Learn (checked 2026-10-29): Translator lists Chinese Simplified as `zh-Hans`; the SSML
 voice page lists Chinese Mandarin `zh-CN` (and Vietnamese `vi-VN`) as `<lang>` speaking languages of
@@ -931,9 +933,42 @@ character, so space-based rules do not work):
   numbers (2026: 6, 10000: 2, 3.14: 4, 50%: 5), no punctuation. Only used to compare clips of one
   response, never instead of measured audio. The check limits are the Vietnamese ones, unchanged.
 
+**Six more languages** (Hindi, Spanish, Arabic, French, Russian, Japanese; migration `0010`).
+Mapping: Translator `hi`/`es`/`ar`/`fr`/`ru`/`ja`, Speech `hi-IN`/`es-ES`/`ar-SA`/`fr-FR`/`ru-RU`/`ja-JP`
+(Translator language list and the SSML voice page, checked 2026-10-29: all six locales are `<lang>`
+speaking languages of both voices; Arabic is offered as `ar-EG` and `ar-SA`). **Arabic** is the
+written Modern Standard Arabic Translator produces, read with the Saudi `ar-SA` accent (closer to a
+formal Modern Standard reading than the Egyptian one, which reads ج as "g"); it does not represent
+spoken varieties. `TargetLanguage.text_direction` is `rtl` for Arabic. They are not six pipelines:
+only the text rules differ, chosen per language in two places.
+
+| Rule | Hindi, Arabic, Russian | Spanish, French | Japanese |
+|---|---|---|---|
+| Word boundaries for term matching | letters of the script masked like Han (`pronunciation/scripts.py`), so `Kubernetesके`, `وDocker`, `Kubernetesом` hold the term | none needed (Latin) | Han + kana masked |
+| English read `en-US` (`pronunciation/policy.py`) | the Mandarin rules with the script (`mandarin.detect_english_in_script`): any Latin word copied from the source | `pronunciation/latin.py`: only glossary terms the **source** contains, code copied verbatim and acronyms copied with their capitals. Other Latin words keep `es-ES`/`fr-FR` (`image`, `local`, and `=Vue`/`=Tableau`, which are also French words) | as Hindi |
+| Chunks (`speech/plan.py`) | `speech/spaced.py`: the Vietnamese chunker (cut only at spaces) with sentence ends । ॥ ؟ ۔ added and "." after an initial or a common abbreviation (`Sr.`, `M.`, `т.е.`, `e.g.`) not ending a sentence; `1 024`, `mot !`, `50 %`, `« mot` kept together | same | `mandarin.chunk_unspaced` with `speech/japanese.py`: as Mandarin, and never before a small kana, ー, an iteration or combining mark or a ZWJ |
+| Characters per request | configured (2000) | configured | 600, as Mandarin |
+| Spoken length (timed checks) | `speech/spoken_units.py`: Devanagari vowel nuclei (final inherent vowel dropped), Arabic letters / 2, Cyrillic vowel groups | Latin vowel groups (French silent final e) | morae (kana 1, small kana 0, Han 2) |
+
+Numbers in `spoken_units.py` are estimated from the language's reading (digit, tens, hundred,
+thousand/万 group, decimal separator digit by digit, "%"), with any Unicode digits. Glossary
+candidates are recorded for Vietnamese only. Everything listed under "Shared, unchanged" above
+applies; the timed-mode check limits are the same.
+
+**Known limits (six languages).** Spanish/French: an English word that the glossary does not list is
+read in Spanish/French (no reliable way to tell it from a word of the language). Arabic and Japanese
+spelling does not show every syllable, so their estimates are rougher (live: Japanese clips spread
+4.4-8.0 estimated morae/s, inside the 2x check). Two protected terms glued together with nothing
+between them are one word to the glossary, as for Mandarin. Translation of ordinary words is
+Azure's (live: "image" as a picture in every language).
+
 **UI.** "Translate to" lists `GET /api/meta` `target_languages` (Vietnamese selected); the job panel
 and the result name the job's stored language, not the form's; the translated text carries its
-language tag (`lang="zh-Hans"` / `lang="vi"`); a draft keeps its language (an older draft, or one
+language tag (`lang="zh-Hans"`, `lang="ar"`, ...) and, for Arabic, `dir="rtl"` on its box only
+(the page stays left to right); inside it each Latin run (English terms, code, paths) is a
+left-to-right isolate (`lib/bidi.ts`), so `/api/v1` keeps its slash in front. With more than two
+languages the hero and the disclosures say "your chosen language" / "the translated text"
+instead of listing them; a draft keeps its language (an older draft, or one
 with a language no longer offered, starts in Vietnamese). With no list from the server nothing is
 offered or sent.
 

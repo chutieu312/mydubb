@@ -378,7 +378,11 @@ export function App() {
             <>
               <section className="hero">
                 <p className="eyebrow">Your dubbing studio</p>
-                <h1>Turn English into {languageList} audio</h1>
+                <h1>
+                  {languageList
+                    ? `Turn English into ${languageList} audio`
+                    : "Turn English into audio in your chosen language"}
+                </h1>
                 <p className="muted">
                   Paste a transcript, choose a voice and speed, then listen and download the MP3.
                 </p>
