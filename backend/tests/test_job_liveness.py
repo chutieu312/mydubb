@@ -81,7 +81,7 @@ class TranslatorFailingDuringOutage:
     def __init__(self, factory: FlakySessionFactory) -> None:
         self._factory = factory
 
-    def translate(self, text: str):
+    def translate(self, text: str, language=None):
         self._factory.down = True
         raise ProcessingError("translation_failed", "Translation failed.")
 

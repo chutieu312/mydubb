@@ -1,6 +1,12 @@
 import { useEffect, useRef } from "react";
 
-import { TERMINAL_STATUSES, type JobStatus, type VoiceOption } from "../../api/types";
+import {
+  TERMINAL_STATUSES,
+  type JobStatus,
+  type TargetLanguageOption,
+  type VoiceOption,
+} from "../../api/types";
+import { jobLanguage } from "../../lib/languages";
 import { formatClock, speedLabel } from "../../lib/speed";
 import { ResultView } from "./ResultView";
 import { useJobPolling } from "./useJobPolling";
@@ -16,12 +22,14 @@ const STAGES: { status: JobStatus; label: string }[] = [
 interface Props {
   jobId: string;
   voices: VoiceOption[];
+  // Output languages from GET /api/meta, to name the job's own (stored) language.
+  languages?: TargetLanguageOption[];
   onSessionExpired: () => void;
   // Called once when the job is completed or failed (e.g. to refresh a guest's quota).
   onFinished?: () => void;
 }
 
-export function JobPanel({ jobId, voices, onSessionExpired, onFinished }: Props) {
+export function JobPanel({ jobId, voices, languages = [], onSessionExpired, onFinished }: Props) {
   const { job, error } = useJobPolling(jobId, onSessionExpired);
   const finished = job !== null && TERMINAL_STATUSES.includes(job.status);
   const reported = useRef(false);
@@ -45,6 +53,8 @@ export function JobPanel({ jobId, voices, onSessionExpired, onFinished }: Props)
   const failed = job.status === "failed";
   const completed = job.status === "completed";
   const voiceLabel = voices.find((v) => v.id === job.voice)?.label ?? job.voice;
+  // The job's language as the server stored it, never the one picked on the form now.
+  const language = jobLanguage(job, languages);
 
   return (
     <section className="panel panel-coral" aria-labelledby="job-title">
@@ -53,8 +63,9 @@ export function JobPanel({ jobId, voices, onSessionExpired, onFinished }: Props)
       </h2>
       {/* What the server stored for this job, not what the form shows now. */}
       <p className="muted small">
-        Voice {voiceLabel} · Duration at 1x {job.target_duration} · Speed {speedLabel(job.speed)} ·
-        Planned audio length {formatClock(job.output_duration_seconds)}
+        Language {language.label} · Voice {voiceLabel} · Duration at 1x {job.target_duration} ·
+        Speed {speedLabel(job.speed)} · Planned audio length{" "}
+        {formatClock(job.output_duration_seconds)}
       </p>
       <ol className="stages" aria-label="Progress" aria-live="polite">
         {STAGES.map((stage, index) => {
@@ -80,7 +91,12 @@ export function JobPanel({ jobId, voices, onSessionExpired, onFinished }: Props)
       )}
       {error && <p className="callout warning">{error}</p>}
       {completed && (
-        <ResultView jobId={job.id} voiceLabel={voiceLabel} onSessionExpired={onSessionExpired} />
+        <ResultView
+          jobId={job.id}
+          voiceLabel={voiceLabel}
+          language={language}
+          onSessionExpired={onSessionExpired}
+        />
       )}
     </section>
   );

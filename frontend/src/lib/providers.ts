@@ -4,15 +4,16 @@ type Providers = AppMeta["providers"];
 
 /**
  * What the user must be told before submitting: which text is sent to which Azure service.
- * Null when nothing leaves the server (all mock).
+ * `languages` names the output languages offered ("Vietnamese or Mandarin Chinese"). Null when
+ * nothing leaves the server (all mock).
  */
-export function azureDisclosure(providers: Providers): string | null {
+export function azureDisclosure(providers: Providers, languages = "Vietnamese"): string | null {
   const translator = providers.translation === "azure";
   const speech = providers.speech === "azure";
   if (translator && speech) {
     return (
       "When you generate dubbing, the transcript text is sent to Microsoft Azure Translator " +
-      "to be translated, and the translated Vietnamese text is sent to Microsoft Azure " +
+      `to be translated, and the translated ${languages} text is sent to Microsoft Azure ` +
       "Speech to generate the audio."
     );
   }
@@ -24,7 +25,7 @@ export function azureDisclosure(providers: Providers): string | null {
   }
   if (speech) {
     return (
-      "When you generate dubbing, the Vietnamese text (here a mock placeholder that still " +
+      `When you generate dubbing, the ${languages} text (here a mock placeholder that still ` +
       "contains your transcript text) is sent to Microsoft Azure Speech to generate the audio."
     );
   }

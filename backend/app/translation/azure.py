@@ -1,9 +1,11 @@
-"""Azure Translator (Text Translation API v3.0) provider: English -> Vietnamese.
+"""Azure Translator (Text Translation API v3.0) provider: English -> the job's target language.
 
 Documentation checked against Microsoft Learn (translate method, authentication, service
 limits, prevent-translation) on 2026-10-22:
 
-* `POST {endpoint}/translate?api-version=3.0&from=en&to=vi&textType=html`; a global or
+* `POST {endpoint}/translate?api-version=3.0&from=en&to=<code>&textType=html`, where `<code>` is
+  `vi` (Vietnamese) or `zh-Hans` (Mandarin, Simplified Chinese; see `app/languages.py`, checked
+  2026-10-29). The answer must name the same code, or it is not used; a global or
   regional resource uses `https://api.cognitive.microsofttranslator.com`, a custom-domain
   (private) endpoint uses `/translator/text/v3.0/translate`.
 * Authentication: `Ocp-Apim-Subscription-Key`, plus `Ocp-Apim-Subscription-Region` for
@@ -34,6 +36,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import SecretStr
 
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
 from app.translation.base import TranslationResult
 from app.translation.glossary import Glossary
@@ -54,7 +57,6 @@ logger = logging.getLogger(__name__)
 
 API_VERSION = "3.0"
 SOURCE_LANGUAGE = "en"
-TARGET_LANGUAGE = "vi"
 # Documented limit of array elements per translate request.
 MAX_ELEMENTS_PER_REQUEST = 1000
 # A 50,000-character request answers with well under a megabyte; this only guards memory.
@@ -134,7 +136,9 @@ class AzureTranslationProvider:
         self._max_request_chars = max_request_chars
         self._transport = transport
 
-    def translate(self, text: str) -> TranslationResult:
+    def translate(
+        self, text: str, language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
+    ) -> TranslationResult:
         try:
             plan = plan_translation(text, self._glossary, self._max_request_chars)
         except SegmentTooLongError:
@@ -145,32 +149,36 @@ class AzureTranslationProvider:
         timeout = httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
         with httpx.Client(timeout=timeout, transport=self._transport) as client:
             for batch in plan.batches(self._max_request_chars, MAX_ELEMENTS_PER_REQUEST):
-                translated.extend(self._translate_batch(client, batch))
+                translated.extend(self._translate_batch(client, batch, language))
                 requests += 1
         # Counts only; never content.
         logger.info("Azure translation finished: %d request(s)", requests)
         return TranslationResult(text=plan.assemble(translated), is_illustrative=False)
 
-    def translate_lines(self, lines: Sequence[str]) -> TranslationResult:
+    def translate_lines(
+        self, lines: Sequence[str], language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
+    ) -> TranslationResult:
         """Each line is its own segment(s) of the plan (`segmenter.py`), so the translation keeps
         one line per input line; the count is verified rather than assumed."""
         if any("\n" in line or not line.strip() for line in lines):
             raise ValueError("lines must be non-empty and hold no line breaks")
-        result = self.translate("\n".join(lines))
+        result = self.translate("\n".join(lines), language)
         translated = result.text.split("\n")
         if len(translated) != len(lines) or not all(line.strip() for line in translated):
             logger.warning("Azure translation lost the line structure of the blocks")
             raise _failure("translation_invalid_response")
         return TranslationResult(text=result.text, is_illustrative=False, lines=tuple(translated))
 
-    def _translate_batch(self, client: httpx.Client, batch: list[Segment]) -> list[str]:
-        body = self._post(client, [segment.markup for segment in batch])
-        results = self._parse_results(body, len(batch))
+    def _translate_batch(
+        self, client: httpx.Client, batch: list[Segment], language: TargetLanguage
+    ) -> list[str]:
+        body = self._post(client, [segment.markup for segment in batch], language)
+        results = self._parse_results(body, len(batch), language)
         return [
             self._restore(result, segment) for result, segment in zip(results, batch, strict=True)
         ]
 
-    def _post(self, client: httpx.Client, markups: list[str]) -> bytes:
+    def _post(self, client: httpx.Client, markups: list[str], language: TargetLanguage) -> bytes:
         headers = {
             "Ocp-Apim-Subscription-Key": self._key.get_secret_value(),
             "Content-Type": "application/json; charset=UTF-8",
@@ -181,7 +189,7 @@ class AzureTranslationProvider:
         params = {
             "api-version": API_VERSION,
             "from": SOURCE_LANGUAGE,
-            "to": TARGET_LANGUAGE,
+            "to": language.translator_code,
             "textType": "html",
         }
         started = time.monotonic()
@@ -251,7 +259,7 @@ class AzureTranslationProvider:
         return _failure("translation_service_error")
 
     @staticmethod
-    def _parse_results(body: bytes, expected: int) -> list[str]:
+    def _parse_results(body: bytes, expected: int, language: TargetLanguage) -> list[str]:
         try:
             data = json.loads(body)
         except ValueError:
@@ -265,8 +273,9 @@ class AzureTranslationProvider:
                 raise _failure("translation_invalid_response")
             first = translations[0]
             text = first.get("text") if isinstance(first, dict) else None
-            language = first.get("to") if isinstance(first, dict) else None
-            if not isinstance(text, str) or str(language).lower() != TARGET_LANGUAGE:
+            code = first.get("to") if isinstance(first, dict) else None
+            # A translation into any other language than the one asked for is never used.
+            if not isinstance(text, str) or str(code).lower() != language.translator_code.lower():
                 raise _failure("translation_invalid_response")
             texts.append(text)
         return texts

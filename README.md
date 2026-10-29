@@ -1,20 +1,21 @@
 # MyDubb
 
-**Turn an English transcript into Vietnamese audio you can listen to.**
+**Turn an English transcript into Vietnamese or Mandarin Chinese audio you can listen to.**
 
 ### 👉 [mydubb.com](https://mydubb.com)
 
 MyDubb is for people who learn from English technical content (talks, courses, videos) and want to
-listen to it in Vietnamese. Paste an English transcript, or import the English captions of a YouTube
-video, and MyDubb:
+listen to it in Vietnamese or Mandarin Chinese. Paste an English transcript, or import the English
+captions of a YouTube video, and MyDubb:
 
-- translates it into Vietnamese and **keeps technical terms in English**, using a glossary of
+- translates it into **Vietnamese** (the default) or **Chinese — Mandarin (Simplified)** and **keeps
+  technical terms in English**, using a glossary of
   more than 2,000 technical terms (names, acronyms, tools, concepts);
 - reads it aloud with the voice you choose, **Andrew Multilingual** (male) or **Emma Multilingual**
   (female), and reads the glossary's English terms in English;
 - lets you pick the **speed** (0.5x to 2x) and fits the audio to the **timing** you give it, so it
   lasts as long as the part of the video you are dubbing;
-- shows the Vietnamese translation next to the audio, so you can read along.
+- shows the translation next to the audio, so you can read along.
 
 ## See it work
 
@@ -50,8 +51,9 @@ stretches that are too long for their time slot are sped up (pitch preserved) to
    it does not transcribe audio, so a video without English captions cannot be imported.
 3. Check the **First Sentence Start Time** and **Last Sentence Start Time**. They are filled in for
    you when the transcript has timestamps; otherwise type them from your original transcript.
-4. Pick a voice and an audio speed.
-5. Choose **Generate audio**, read the Vietnamese translation, press **Play**, and download the MP3
+4. Under **Translate to**, keep **Vietnamese** or choose **Chinese — Mandarin (Simplified)**, then
+   pick a voice and an audio speed.
+5. Choose **Generate audio**, read the translation, press **Play**, and download the MP3
    if you want to keep it. Results are kept for one hour.
 
 At 1x the audio lasts exactly the time between the two start times. Other speeds make the audio
@@ -72,7 +74,8 @@ Invited accounts do not have these limits.
 
 ## Good to know
 
-- English to Vietnamese only.
+- English to Vietnamese (the default) or to Mandarin Chinese in simplified characters; one language
+  per job. The two demos above are in Vietnamese.
 - A term that is not in the glossary may be translated, or pronounced imperfectly.
 - Your text is sent to Microsoft Azure to translate it and create the audio. A YouTube link is sent
   to Supadata to fetch the captions.

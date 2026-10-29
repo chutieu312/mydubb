@@ -25,13 +25,14 @@ FastAPI process ──────────────► PostgreSQL (sessio
 | Module | Responsibility | Depends on |
 |---|---|---|
 | `config.py` | Environment-based `Settings`; refuses unsafe combinations at startup | — |
+| `languages.py` | Output languages (`TargetLanguage`: `vietnamese`, `mandarin_simplified`), their labels and the fixed Translator/Speech codes (see [Output language](#output-language-vietnamese-and-mandarin)) | — |
 | `db.py` | Engine (with connect timeout), session factory, declarative base | — |
 | `access/` | Access Code check, server-side sessions, brute-force limiter, session router | db |
 | `auth/` | Amazon Cognito mode (`AUTH_MODE=cognito`): user pool HTTP client, users keyed by issuer + `sub`, user sessions, encrypted pending sign-in steps, password-reset revocation, `/api/auth` router, the `Principal` both modes resolve to (see [AUTHENTICATION.md](AUTHENTICATION.md)) | db, `access.rate_limit` |
 | `transcript/` | Timestamp parsing, target-duration rule, transcript cleaning, timed transcripts (captions, sentence units, estimated block starts: `timed.py`) (pure functions) | `audio.speed` |
 | `translation/` | `TranslationProvider` protocol, mock, Azure Translator provider, glossary, no-translate markup and request segmenter | `processing_errors` |
-| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter, timed-mode block requests and their split checks (`blocks.py`), spoken-syllable estimate (`spoken_length.py`) | `processing_errors`, `audio`, `translation.glossary` |
-| `pronunciation/` | English left in a translation (pure functions): Vietnamese-syllable check, detection of English words/phrases/code against the source, the per-job `SpeechTerms` matcher, candidate keys | `translation.glossary` |
+| `speech/` | `SpeechProvider` protocol, approved `Voice`s, mock, Azure Speech provider, SSML builder, text chunker, shared request-rate limiter, timed-mode block requests and their split checks (`blocks.py`), spoken-syllable estimate (`spoken_length.py`); Mandarin chunking and syllable estimate (`mandarin.py`) and the per-language choice of these rules (`plan.py`) | `processing_errors`, `audio`, `translation.glossary`, `pronunciation.han` |
+| `pronunciation/` | English left in a translation (pure functions): Vietnamese-syllable check, detection of English words/phrases/code against the source, the per-job `SpeechTerms` matcher, candidate keys; Mandarin detection (`mandarin.py`) and Han characters as word boundaries (`han.py`) | `translation.glossary` |
 | `glossary_candidates/` | Candidate table, counting per job, review/export/promote operations (used by `scripts/glossary_candidates.py`) | db, `jobs.models`, `pronunciation` |
 | `audio/` | `AudioProcessor` protocol + mock (pass-through) + `FfmpegAudioProcessor` (duration fitting), audio speed and the exact sample target (`speed.py`), WAV validation/joining, FFmpeg tempo/encode/decode/probe, exact-length conform, MP3 gapless-header reader and padding correction, MP3 fixture; timed mode: frame grouping (`grouping.py`) and placement of block clips on the timeline (`timeline.py`) | `processing_errors`, `speech.base` |
 | `storage/` | `ResultStore` protocol + `LocalFileResultStore` (temporary results) | — |
@@ -238,8 +239,8 @@ storage; that is intentionally out of scope.
 
 | Component | Mock behavior |
 |---|---|
-| Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice. `is_illustrative=true`. |
-| Speech (default; `SPEECH_PROVIDER=mock`) | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime) regardless of text/voice. `is_fixture=true`. |
+| Translation (default; `TRANSLATION_PROVIDER=mock`) | Prefixes each line with `(VI mock)` under an explicit "illustrative content, NOT a real Vietnamese translation" notice; for a Mandarin job `(ZH mock 中文示例)` under "NOT a real Mandarin Chinese (Simplified) translation", so a mock never shows Vietnamese labelled as Mandarin. `is_illustrative=true`. |
+| Speech (default; `SPEECH_PROVIDER=mock`) | Copies `audio/fixtures/mock_audio.mp3` (3 s synthetic chime, no speech in any language) regardless of text/voice/language. `is_fixture=true`. |
 | Audio processing (default; `AUDIO_PROCESSOR=mock`) | Pass-through. `duration_adjusted=false`. **No tempo change, no duration guarantee.** |
 
 With `TRANSLATION_PROVIDER=azure` the translation row above is replaced by the real Azure
@@ -460,7 +461,7 @@ Errors: 401/403 -> `speech_auth_failed`, 429 -> `speech_quota_exceeded`, 408/504
 `speech_cancelled`. Logs contain status codes, request IDs, counts and audio seconds only: never
 the key, headers, SSML, text or response content.
 
-**Privacy**: with Azure speech the translated Vietnamese text (with mock translation, the mock
+**Privacy**: with Azure speech the translated Vietnamese or Mandarin text (with mock translation, the mock
 text that still contains the transcript) is sent to Microsoft Azure Speech; the form says so
 before submit.
 
@@ -880,6 +881,68 @@ term must match, by glossary rules, a spelling actually seen), `reject`, `reopen
 changes nothing) and `promote --ref origin/main` (approved -> promoted only for lines present in
 the glossary file of a commit merged into `origin/main`). Frequency only orders the review. See
 DEPLOYMENT.md, "Glossary candidates".
+
+### Output language (Vietnamese and Mandarin)
+
+The transcript is always English; each job has one output language (`target_language`, stored in
+`jobs.target_language`, migration `0009`, default `vietnamese`). The API value is the product's own
+name; the service codes are fixed in `app/languages.py` and never come from a request:
+
+| API value | Translator `to` | Speech `<lang xml:lang>` | Voices |
+|---|---|---|---|
+| `vietnamese` (default) | `vi` | `vi-VN` | Andrew / Emma Multilingual |
+| `mandarin_simplified` | `zh-Hans` | `zh-CN` | the same two |
+
+Microsoft Learn (checked 2026-10-29): Translator lists Chinese Simplified as `zh-Hans`; the SSML
+voice page lists Chinese Mandarin `zh-CN` (and Vietnamese `vi-VN`) as `<lang>` speaking languages of
+`en-US-AndrewMultilingualNeural` and `en-US-EmmaMultilingualNeural`. The pipeline passes the job's
+language to every stage (`JobInput.target_language`); there is no retry or fallback to another
+language or to the mock.
+
+**Shared, unchanged.** Translation requests (segmenter on the English source, no-translate spans,
+term verification), glossary, SSML skeleton (one `<voice>` per request, `en-US` spans for English),
+the speech requests and their WAV checks, joining and MP3 encoding, timed-mode breaks, the split
+checks and their thresholds, grouping, the timeline, the seven speeds and fitting. Vietnamese keeps
+its chunker, English detection and syllable estimate exactly as before; a request without the field,
+and every older job, is Vietnamese.
+
+**Mandarin only** (Chinese has no spaces, and Python counts every Han character as a word
+character, so space-based rules do not work):
+
+- *Word boundaries* (`pronunciation/han.py`). Glossary and detected terms are matched on a copy of
+  the text where each Han character is replaced by `<` (one character for one; `<` is never in a
+  term, never a word character, never whitespace), so `使用Kubernetes部署` holds `Kubernetes` and
+  `machine的learning` never matches `machine learning`.
+- *English detection* (`pronunciation/mandarin.py`). Same precedence (glossary, code, words copied
+  from the source) without the Vietnamese-syllable rule: a Latin word in a Chinese translation is
+  never Chinese, so a word copied from the source is English whatever its shape (`run`, `Go`); a
+  Latin word not in the source stays `zh-CN`. Code is found with Han characters counted as spaces,
+  so `访问https://example.com了解` gives the URL alone. No glossary candidates are recorded for
+  Mandarin jobs (the candidate store is a legacy of the Vietnamese review).
+- *Chunks* (`speech/mandarin.py`). Lines are cut after 。！？!?… (with closing quotes/brackets), or
+  "." followed by a space; then after ，、；：,;:; then between any two characters. Never inside a
+  protected term or a Latin/number token (`Node.js`, `3.14`, `1,024`, `C++`). Only whitespace is
+  dropped at a cut, which is checked. Chunks are limited to `MANDARIN_MAX_CHUNK_CHARS` (600, or
+  `AZURE_SPEECH_MAX_CHUNK_CHARS` if lower): a Chinese character is a syllable, so 2,000 characters
+  would be several minutes of speech per request. At a slow 2 characters/s that is 300 s; measured
+  live about 5 characters/s for plain text (see docs/context.md). Timed requests use the same limit.
+- *Syllable estimate* for the timed-mode rate checks (`mandarin.mandarin_syllables`): one per Han
+  character, vowel groups for English words, spelled acronyms, a Mandarin reading estimate for
+  numbers (2026: 6, 10000: 2, 3.14: 4, 50%: 5), no punctuation. Only used to compare clips of one
+  response, never instead of measured audio. The check limits are the Vietnamese ones, unchanged.
+
+**UI.** "Translate to" lists `GET /api/meta` `target_languages` (Vietnamese selected); the job panel
+and the result name the job's stored language, not the form's; the translated text carries its
+language tag (`lang="zh-Hans"` / `lang="vi"`); a draft keeps its language (an older draft, or one
+with a language no longer offered, starts in Vietnamese). With no list from the server nothing is
+offered or sent.
+
+**Known limits.** The estimate can be off for unusual tokens (years read digit by digit, versions,
+units), as for Vietnamese. If the translation ever put two protected terms against each other with
+no space or Chinese between them (`Spring BootDependency Injection`), the glossary could not see
+their edges and part of them would be read `zh-CN` (never observed: Azure put spaces around every
+protected span in the live test). Translation quality of ordinary words
+(e.g. "image" as 图像 instead of 镜像 for container images) is Azure's; only glossary terms are kept.
 
 ### Milestone 3 (real providers)
 

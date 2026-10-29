@@ -4,7 +4,9 @@ Structure (the one auditioned and accepted by the Product Owner): a single `<voi
 the whole request, so one speaker reads everything, containing consecutive
 `<lang xml:lang="vi-VN">` spans for the Vietnamese text and `<lang xml:lang="en-US">` spans
 for English. Both approved voices are multilingual voices, the case Microsoft documents for
-`<lang>`. Speaking rate and everything else keep their defaults.
+`<lang>`. Speaking rate and everything else keep their defaults. A Mandarin job uses the same
+structure with `<lang xml:lang="zh-CN">` instead of `vi-VN` (`speech/mandarin.py` decides the
+chunks and spans; the skeleton here is shared).
 
 The English spans come from a `TermMatcher`: the shared glossary (known terms, always first)
 and, for a job, the English its translation kept (`pronunciation/detector.py`: words that
@@ -41,17 +43,18 @@ def escape_text(text: str) -> str:
     return escape(_XML_INVALID.sub("", text))
 
 
-def language_spans(text: str, terms: TermMatcher) -> list[tuple[str, str]]:
-    """(language, text) pieces covering `text` exactly: English for the matched terms."""
+def language_spans(text: str, terms: TermMatcher, base: str = VIETNAMESE) -> list[tuple[str, str]]:
+    """(language, text) pieces covering `text` exactly: English for the matched terms, `base`
+    (the translation's own language) for the rest."""
     spans: list[tuple[str, str]] = []
     position = 0
     for match in terms.find_matches(text):
         if match.start > position:
-            spans.append((VIETNAMESE, text[position : match.start]))
+            spans.append((base, text[position : match.start]))
         spans.append((ENGLISH, text[match.start : match.end]))
         position = match.end
     if position < len(text):
-        spans.append((VIETNAMESE, text[position:]))
+        spans.append((base, text[position:]))
     return spans
 
 
@@ -93,7 +96,9 @@ def build_ssml(text: str, voice: Voice, terms: TermMatcher) -> str:
 
 
 def build_ssml_from_spans(spans: list[tuple[str, str]], voice: Voice) -> str:
-    """SSML for (language, text) spans whose languages are ENGLISH or VIETNAMESE."""
+    """SSML for (language, text) spans: ENGLISH and the translation's language (VIETNAMESE, or
+    zh-CN for Mandarin; see `app/languages.py`). Languages come from the application, never
+    from user text."""
     body = "".join(
         f'<lang xml:lang="{language}">{escape_text(piece)}</lang>' for language, piece in spans
     )

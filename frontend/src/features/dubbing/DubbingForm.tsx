@@ -2,14 +2,16 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api } from "../../api/client";
 import { GUEST_QUOTA_CODES, guestImportsLeft, type GuestImportQuota } from "../../api/guestApi";
-import type { Job, VoiceOption, YouTubeImport } from "../../api/types";
+import type { Job, TargetLanguageOption, VoiceOption, YouTubeImport } from "../../api/types";
 import { guestImportLimitText } from "../../lib/guestQuota";
+import { VIETNAMESE } from "../../lib/languages";
 import { DEFAULT_SPEED, formatClock, previewOutputSeconds } from "../../lib/speed";
 import type { StudioDraft } from "../../lib/studioDraft";
 import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
 import { analyzeTranscriptTiming, type TranscriptTiming } from "../../lib/transcriptTiming";
 import { previewWordCount } from "../../lib/wordCount";
 import { FieldMessage } from "./FieldMessage";
+import { LanguageField } from "./LanguageField";
 import { LengthSummary } from "./LengthSummary";
 import { SpeedField } from "./SpeedField";
 import { TimestampInput } from "./TimestampInput";
@@ -24,9 +26,14 @@ const LINK_CHANGED_DURING_IMPORT =
   "Import cancelled because the link changed. Choose Import transcript to import it.";
 // The server finishes an import it started whatever the page does, and a success counts.
 const GUEST_CANCELLED_MAY_COUNT = " It may still count as one of your guest imports.";
+const NO_LANGUAGES: TargetLanguageOption[] = [];
 
 interface Props {
   voices: VoiceOption[];
+  // Output languages from GET /api/meta and the default; with none listed, nothing is offered or
+  // sent and the server translates into Vietnamese.
+  languages?: TargetLanguageOption[];
+  defaultLanguage?: string;
   // One line saying that the text is sent to an outside service on submit; null when it is not.
   disclosure: string | null;
   // The server can import a YouTube video's captions (GET /api/meta); otherwise paste only.
@@ -70,6 +77,8 @@ function fieldsFromCaptions(timing: { first: number; last: number }) {
 
 export function DubbingForm({
   voices,
+  languages = NO_LANGUAGES,
+  defaultLanguage = "",
   disclosure,
   youtubeImport = false,
   onJobCreated,
@@ -86,6 +95,12 @@ export function DubbingForm({
     return drafted !== undefined && voices.some((v) => v.id === drafted)
       ? drafted
       : (voices[0]?.id ?? "");
+  });
+  const [targetLanguage, setTargetLanguage] = useState(() => {
+    const drafted = initialDraft?.targetLanguage;
+    return drafted !== undefined && languages.some((l) => l.id === drafted)
+      ? drafted
+      : defaultLanguage;
   });
   const [speed, setSpeed] = useState<number>(initialDraft?.speed ?? DEFAULT_SPEED);
   const [ignoreTimestamps, setIgnoreTimestamps] = useState(initialDraft?.ignoreTimestamps ?? false);
@@ -104,8 +119,26 @@ export function DubbingForm({
   const cancelledSuffix = guest ? GUEST_CANCELLED_MAY_COUNT : "";
 
   useEffect(() => {
-    onDraftChange?.({ transcript, firstStart, lastStart, voice, speed, ignoreTimestamps });
-  }, [onDraftChange, transcript, firstStart, lastStart, voice, speed, ignoreTimestamps]);
+    onDraftChange?.({
+      transcript,
+      firstStart,
+      lastStart,
+      voice,
+      speed,
+      ignoreTimestamps,
+      ...(targetLanguage ? { targetLanguage } : {}),
+    });
+  }, [
+    onDraftChange,
+    transcript,
+    firstStart,
+    lastStart,
+    voice,
+    speed,
+    ignoreTimestamps,
+    targetLanguage,
+  ]);
+  const selectedLanguage = languages.find((l) => l.id === targetLanguage) ?? VIETNAMESE;
 
   const timing = useMemo(() => analyzeTranscriptTiming(transcript), [transcript]);
   const wordCount = useMemo(
@@ -247,6 +280,8 @@ export function DubbingForm({
         speed,
         // Only sent for timed transcripts; a plain request is unchanged (the server's default).
         ...(usesTimestamps ? { timing_mode: "timed" as const } : {}),
+        // The language chosen now; the job keeps it whatever the form shows later.
+        ...(targetLanguage ? { target_language: targetLanguage } : {}),
       });
       onJobCreated(job);
     } catch (err) {
@@ -276,7 +311,7 @@ export function DubbingForm({
             <label htmlFor="transcript" className="panel-title">
               English Transcript
             </label>
-            <span className="small muted">English → Vietnamese</span>
+            <span className="small muted">English → {selectedLanguage.noun}</span>
           </div>
           {youtubeImport && (
             <TranscriptSource
@@ -354,7 +389,20 @@ export function DubbingForm({
         </details>
       </section>
 
-      <aside className="panel panel-sand" aria-label="Voice and speed settings">
+      <aside
+        className="panel panel-sand"
+        aria-label={
+          languages.length > 0 ? "Language, voice and speed settings" : "Voice and speed settings"
+        }
+      >
+        {languages.length > 0 && (
+          <LanguageField
+            languages={languages}
+            value={targetLanguage}
+            onChange={setTargetLanguage}
+            error={fieldErrors.target_language}
+          />
+        )}
         <VoiceField voices={voices} value={voice} onChange={setVoice} error={fieldErrors.voice} />
         <SpeedField value={speed} onChange={setSpeed} error={fieldErrors.speed} />
         <LengthSummary

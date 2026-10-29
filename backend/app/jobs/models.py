@@ -52,6 +52,10 @@ class Job(Base):
             "audio_speed_percent IN (50, 75, 100, 125, 150, 175, 200)",
             name="audio_speed_valid",
         ),
+        CheckConstraint(
+            "target_language IN ('vietnamese', 'mandarin_simplified')",
+            name="target_language_valid",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -85,6 +89,11 @@ class Job(Base):
     # existed read as 100 through the column default.
     audio_speed_percent: Mapped[int] = mapped_column(
         SmallInteger, server_default=text("100"), default=100
+    )
+    # Output language chosen at submission (`app/languages.py` API value). Rows from before the
+    # option existed read as Vietnamese through the column default.
+    target_language: Mapped[str] = mapped_column(
+        String(32), server_default=text("'vietnamese'"), default="vietnamese"
     )
     transcript_char_count: Mapped[int] = mapped_column(Integer)
     translation_provider: Mapped[str] = mapped_column(String(50))

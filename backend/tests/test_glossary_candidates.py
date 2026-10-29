@@ -30,6 +30,7 @@ from app.jobs import pipeline as pipeline_module
 from app.jobs import service
 from app.jobs.models import JobStatus
 from app.jobs.pipeline import JobInput, JobPipeline
+from app.languages import TargetLanguage
 from app.pronunciation.detector import Candidate, CandidateKind
 from app.pronunciation.keys import candidate_key
 from app.speech.mock import MockSpeechProvider
@@ -378,8 +379,9 @@ class SampleTranslator:
 
     name = "azure-translator"
 
-    def translate(self, text: str) -> TranslationResult:
+    def translate(self, text: str, language: TargetLanguage) -> TranslationResult:
         assert text == SAMPLE_EN
+        assert language is TargetLanguage.VIETNAMESE  # a job without the field is Vietnamese
         return TranslationResult(SAMPLE_VI, is_illustrative=False)
 
 
@@ -388,9 +390,9 @@ class RecordingSpeech(MockSpeechProvider):
         super().__init__()
         self.terms = None
 
-    def synthesize(self, text, voice, work_dir, terms=None):
+    def synthesize(self, text, voice, work_dir, terms=None, language=TargetLanguage.VIETNAMESE):
         self.terms = terms
-        return super().synthesize(text, voice, work_dir, terms)
+        return super().synthesize(text, voice, work_dir, terms, language)
 
 
 class InlineSlot:

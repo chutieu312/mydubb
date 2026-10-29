@@ -1,8 +1,9 @@
 # Glossary
 
 The glossary is the list of English technical terms that MyDubb keeps in English in the
-Vietnamese translation and reads with an English voice span. This page explains how it is used,
-how to write entries, which terms belong in it and how to change it.
+Vietnamese translation and reads with an English voice span. The same list is used, unchanged, for
+Mandarin Chinese jobs (see the end of "How translation and speech use it"). This page explains how
+it is used, how to write entries, which terms belong in it and how to change it.
 
 ## Purpose and location
 
@@ -30,6 +31,11 @@ how to write entries, which terms belong in it and how to change it.
    confidently that the word is English (for example `kernel`, `VMs`). Words that could also be
    Vietnamese syllables (`run`, `map`, `Go`) stay `vi-VN`, so they may be read as Vietnamese.
    That detection never adds entries to this file.
+4. **Mandarin jobs.** Translation protects the same terms. On the Chinese translation the terms
+   are matched with Han characters as word boundaries (Chinese has no spaces), and read `en-US`
+   inside `zh-CN` text. The Vietnamese-syllable rule does not apply: a word copied from the source
+   (`run`, `Go`) is read `en-US`. The selection rules below were written for Vietnamese and are not
+   changed for Mandarin.
 
 The glossary therefore has two effects at once: it **stops translation** of a term and it makes
 speech **read it in English**. An entry that is too broad damages ordinary sentences in both

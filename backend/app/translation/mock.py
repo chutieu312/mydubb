@@ -1,12 +1,26 @@
 import time
 from collections.abc import Sequence
 
+from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
 from app.translation.base import TranslationResult
 
 ILLUSTRATIVE_NOTICE = (
     "[Development mock mode - illustrative content, NOT a real Vietnamese translation]"
 )
+# Each language's placeholder names that language, so a mock Mandarin job never shows text
+# labelled as Vietnamese (and the reverse). The Vietnamese one is unchanged.
+_NOTICES = {
+    TargetLanguage.VIETNAMESE: ILLUSTRATIVE_NOTICE,
+    TargetLanguage.MANDARIN: (
+        "[Development mock mode - illustrative content, NOT a real Mandarin Chinese "
+        "(Simplified) translation]"
+    ),
+}
+_PREFIXES = {
+    TargetLanguage.VIETNAMESE: "(VI mock) ",
+    TargetLanguage.MANDARIN: "(ZH mock 中文示例) ",
+}
 
 
 class MockTranslationProvider:
@@ -19,16 +33,22 @@ class MockTranslationProvider:
         self._unexpected_error = unexpected_error
         self._delay = delay
 
-    def translate(self, text: str) -> TranslationResult:
+    def translate(
+        self, text: str, language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
+    ) -> TranslationResult:
         self._start()
-        lines = [f"(VI mock) {line}" for line in text.split("\n")]
-        text = "\n".join([ILLUSTRATIVE_NOTICE, *lines])
+        prefix = _PREFIXES[language]
+        lines = [f"{prefix}{line}" for line in text.split("\n")]
+        text = "\n".join([_NOTICES[language], *lines])
         return TranslationResult(text=text, is_illustrative=True)
 
-    def translate_lines(self, lines: Sequence[str]) -> TranslationResult:
+    def translate_lines(
+        self, lines: Sequence[str], language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
+    ) -> TranslationResult:
         self._start()
-        translated = tuple(f"(VI mock) {line}" for line in lines)
-        text = "\n".join([ILLUSTRATIVE_NOTICE, *translated])
+        prefix = _PREFIXES[language]
+        translated = tuple(f"{prefix}{line}" for line in lines)
+        text = "\n".join([_NOTICES[language], *translated])
         return TranslationResult(text=text, is_illustrative=True, lines=translated)
 
     def _start(self) -> None:
