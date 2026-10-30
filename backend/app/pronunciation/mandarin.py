@@ -16,7 +16,14 @@ source), with what differs for Chinese:
   read `en-US`; nothing changes the text.
 * **No glossary candidates.** The candidate store (`glossary_candidates/`) is a legacy of the
   Vietnamese glossary review and is not fed from Mandarin jobs.
+
+The same rules apply to the other target languages not written in Latin letters (Hindi, Arabic,
+Russian, Japanese: `detect_english_in_script` with their script from `scripts.py`): a Latin word
+in such a translation is never a word of that language, so the source alone decides, as here.
 """
+
+import re
+from functools import partial
 
 from app.pronunciation.detector import (
     _ACRONYM,
@@ -37,8 +44,9 @@ from app.pronunciation.detector import (
     _Status,
     _Token,
 )
-from app.pronunciation.han import mask_han
+from app.pronunciation.han import HAN
 from app.pronunciation.keys import display_form
+from app.pronunciation.scripts import mask_script
 from app.translation.glossary import Glossary
 
 
@@ -50,18 +58,21 @@ def _status(token: _Token, source: _Source) -> _Status:
     return _Status.UNMATCHED
 
 
-def detect_english_mandarin(source: str, translation: str, glossary: Glossary) -> Detection:
-    """English spans of a Mandarin `translation` (see module doc). Never changes either text."""
+def detect_english_in_script(
+    source: str, translation: str, glossary: Glossary, script: re.Pattern[str]
+) -> Detection:
+    """English spans of a `translation` written in `script` (see module doc). Never changes
+    either text."""
     words = _Source(source)
     code_terms: dict[str, None] = {}  # ordered set
     english_kinds: dict[str, SpanKind] = {}
     unmatched = 0
 
     for raw_line in translation.split("\n"):
-        line = mask_han(raw_line)
+        line = mask_script(raw_line, script)
         known = glossary.find_matches(line)
         code = []
-        for token in _code_tokens(mask_han(raw_line, " ")):
+        for token in _code_tokens(mask_script(raw_line, script, " ")):
             if any(_overlaps(k, token) and not _inside(k, token) for k in known):
                 continue
             code.append(token)
@@ -96,7 +107,7 @@ def detect_english_mandarin(source: str, translation: str, glossary: Glossary) -
     spans: list[Span] = []
     offset = 0
     for raw_line in translation.split("\n"):
-        for match, kind in speech_terms.classified_matches(mask_han(raw_line)):
+        for match, kind in speech_terms.classified_matches(mask_script(raw_line, script)):
             if kind is SpanKind.TERM:
                 kind = english_kinds.get(" ".join(match.text.split()), SpanKind.TERM)
             text = raw_line[match.start : match.end]
@@ -110,3 +121,7 @@ def detect_english_mandarin(source: str, translation: str, glossary: Glossary) -
         dropped_candidates=0,
         speech_terms=speech_terms,
     )
+
+
+# Mandarin: Han characters are the script (`han.py`).
+detect_english_mandarin = partial(detect_english_in_script, script=HAN)

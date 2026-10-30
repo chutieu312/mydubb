@@ -31,6 +31,7 @@ from app.jobs import service
 from app.jobs.models import JobStatus
 from app.jobs.pipeline import JobInput, JobPipeline
 from app.languages import TargetLanguage
+from app.pronunciation import policy as policy_module
 from app.pronunciation.detector import Candidate, CandidateKind
 from app.pronunciation.keys import candidate_key
 from app.speech.mock import MockSpeechProvider
@@ -484,7 +485,8 @@ def test_a_detection_bug_falls_back_to_the_glossary(services, monkeypatch, caplo
     def broken(*_):
         raise RuntimeError("trenchcoat")
 
-    monkeypatch.setattr(pipeline_module, "detect_english", broken)
+    # The pipeline takes the Vietnamese detector from `pronunciation/policy.py`.
+    monkeypatch.setattr(policy_module, "detect_english", broken)
     caplog.set_level(logging.INFO)
     _, status, speech = run_job(services, SampleTranslator())
     assert status == JobStatus.COMPLETED

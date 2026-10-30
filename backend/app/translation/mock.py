@@ -8,18 +8,33 @@ from app.translation.base import TranslationResult
 ILLUSTRATIVE_NOTICE = (
     "[Development mock mode - illustrative content, NOT a real Vietnamese translation]"
 )
-# Each language's placeholder names that language, so a mock Mandarin job never shows text
-# labelled as Vietnamese (and the reverse). The Vietnamese one is unchanged.
+# Each language's placeholder names that language, so a mock job in one language never shows text
+# labelled as another (a Mandarin job never says Vietnamese, and the reverse). The Vietnamese and
+# Mandarin ones are unchanged; the prefix holds a few words of the language's own script.
 _NOTICES = {
     TargetLanguage.VIETNAMESE: ILLUSTRATIVE_NOTICE,
     TargetLanguage.MANDARIN: (
         "[Development mock mode - illustrative content, NOT a real Mandarin Chinese "
         "(Simplified) translation]"
     ),
+    **{
+        language: (
+            f"[Development mock mode - illustrative content, NOT a real {language.noun} "
+            "translation]"
+        )
+        for language in TargetLanguage
+        if language not in (TargetLanguage.VIETNAMESE, TargetLanguage.MANDARIN)
+    },
 }
 _PREFIXES = {
     TargetLanguage.VIETNAMESE: "(VI mock) ",
     TargetLanguage.MANDARIN: "(ZH mock 中文示例) ",
+    TargetLanguage.HINDI: "(HI mock हिन्दी उदाहरण) ",
+    TargetLanguage.SPANISH: "(ES mock ejemplo) ",
+    TargetLanguage.ARABIC: "(AR mock مثال عربي) ",
+    TargetLanguage.FRENCH: "(FR mock exemple) ",
+    TargetLanguage.RUSSIAN: "(RU mock пример) ",
+    TargetLanguage.JAPANESE: "(JA mock 日本語の例) ",
 }
 
 

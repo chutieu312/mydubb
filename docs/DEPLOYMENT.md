@@ -663,7 +663,13 @@ deployed, every deploy built before it is no longer a supported Render rollback 
 `0009` (column `jobs.target_language varchar(32) NOT NULL DEFAULT 'vietnamese'` with a CHECK on the
 two supported values, expand-only: older code never writes it and its rows read as Vietnamese). Once
 it is deployed, every deploy built before it is no longer a supported Render rollback target; check
-with `docker/rollback-target-check.sh <commit> 0009`.
+with `docker/rollback-target-check.sh <commit> 0009`. The six-output-languages pull request adds
+migration `0010`, which only replaces that CHECK with one admitting the eight languages (no column,
+default or row changes; expand-only for the old code, which writes only the first two values but
+cannot read a job stored in a new language). Once it is deployed, every deploy built before it is no
+longer a supported Render rollback target; check with `docker/rollback-target-check.sh <commit> 0010`.
+Its downgrade refuses (and changes nothing) while a job in one of the six new languages exists: such
+rows are never rewritten into another language.
 
 **Before rolling back** (read-only checks):
 
@@ -834,6 +840,24 @@ against the image of the Mandarin branch at `b11ed76` (knows `0009`), `docker/sm
 | 6 | new | database at `0009` | `UPDATE jobs SET target_language = 'french'` is refused by `ck_jobs_target_language_valid` |
 
 Production was not touched.
+
+Rehearsal for migration `0010` (six more output languages), local throwaway PostgreSQL 17 on tmpfs
+(its own Docker network), image of `b78b1a6` (`origin/main` when the story started, knows
+`0001`-`0009`) against the image of the six-languages branch (knows `0010`), `docker/smoke-test.sh`
+(Access Code mode, one mock job) run from a separate Linux container on the same network each time
+(the app image has no `curl`):
+
+| Step | Image | Startup | Result |
+|---|---|---|---|
+| 1 | `b78b1a6` | default, empty database | Migrates to `0009`; smoke test passes; a `mandarin_simplified` mock job completes |
+| 2 | new | default | `0009` -> `0010`; smoke test passes; the earlier rows keep `vietnamese`/`mandarin_simplified`; an `arabic` and a `japanese` mock job complete and job and result report their language |
+| 3 | `b78b1a6` | default, database at `0010` | Exits 1: `Can't locate revision identified by '0010'`; database unchanged (`0010`) |
+| 4 | `b78b1a6` | `RUN_MIGRATIONS_ON_START=false` | Starts; smoke test passes (writes `vietnamese`); the `arabic`/`japanese` rows are kept (that code cannot read them) |
+| 5 | new | default, after step 4 | Starts; smoke test passes; all rows kept (`arabic` 1, `japanese` 1, `mandarin_simplified` 1, `vietnamese` 4) |
+| 6 | new | `alembic downgrade 0009` | Refused: "2 job(s) use a target language that revision 0009 does not know; downgrade refused"; database stays at `0010`, rows unchanged |
+
+The backend tests also run `0010` up/down against rows written at `0009` and check that the CHECK
+refuses an unknown value (`german`). Production was not touched.
 
 Repeat it for any pull request that adds a migration: build the previous production commit
 and the new one (`git worktree add <dir> <commit>` + `docker build`), migrate a throwaway

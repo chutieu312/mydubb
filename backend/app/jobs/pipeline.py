@@ -14,10 +14,11 @@ Every stage receives the job's target language (`app/languages.py`, stored with 
 translation into it, the detection rules, the speech chunking and spans. Nothing switches
 language or provider when a stage fails.
 
-After a real translation, the English it kept is detected (`pronunciation/detector.py` for
-Vietnamese, `pronunciation/mandarin.py` for Mandarin) so speech reads it with `en-US`, and once
-the job is completed its glossary candidates are counted in their own transaction
-(`glossary_candidates/store.py`; Vietnamese jobs only, a Mandarin detection has none). That
+After a real translation, the English it kept is detected (`pronunciation/policy.py`:
+`detector.py` for Vietnamese, the rules of the language's script for the others) so speech reads
+it with `en-US`, and once the job is completed its glossary candidates are counted in their own
+transaction (`glossary_candidates/store.py`; Vietnamese jobs only, the other detections have
+none). That
 bookkeeping is auxiliary: if it fails, the completed job and its result are kept and only a log
 line (no term, text or database message) says so.
 """
@@ -42,8 +43,8 @@ from app.jobs.executor import JobSlot
 from app.jobs.models import JobStatus
 from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
-from app.pronunciation.detector import Detection, detect_english
-from app.pronunciation.mandarin import detect_english_mandarin
+from app.pronunciation.detector import Detection
+from app.pronunciation.policy import english_detector
 from app.speech.base import SpeechProvider
 from app.speech.voices import Voice
 from app.storage.result_store import ResultContent, ResultStore
@@ -249,11 +250,7 @@ class JobPipeline:
         """English kept by a real translation; None for mock text (it is the source itself)."""
         if translation.is_illustrative:
             return None
-        detect = (
-            detect_english_mandarin
-            if job.target_language is TargetLanguage.MANDARIN
-            else detect_english
-        )
+        detect = english_detector(job.target_language)
         try:
             detection = detect(job.transcript, translation.text, self._glossary)
         except Exception as exc:

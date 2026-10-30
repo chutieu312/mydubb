@@ -1,8 +1,9 @@
 """Azure Speech text to speech over the REST API: translated text -> one MP3.
 
-The text is Vietnamese or Mandarin (the job's target language, `app/languages.py`); the same two
-voices read both, and only the chunking and the language of the non-English spans differ
-(`speech/plan.py`). Everything below applies to both languages.
+The text is in the job's target language (Vietnamese, Mandarin, Hindi, Spanish, Arabic, French,
+Russian or Japanese; `app/languages.py`); the same two voices read all of them, and only the
+chunking and the language of the non-English spans differ (`speech/plan.py`). Everything below
+applies to every language.
 
 REST rather than the Speech SDK, checked against Microsoft Learn on 2026-10-22:
 
@@ -20,8 +21,9 @@ REST rather than the Speech SDK, checked against Microsoft Learn on 2026-10-22:
   below that, and a result near 10 minutes is rejected instead of being accepted as complete.
   The 64 KB SSML limit in the same table is for WebSocket and is not applied here.
 * Voices are `en-US-AndrewMultilingualNeural` / `en-US-EmmaMultilingualNeural`. One `<voice>`
-  per request holds `<lang xml:lang="vi-VN">` spans for Vietnamese (`zh-CN` for Mandarin, a
-  speaking language of both voices, checked 2026-10-29) and `<lang xml:lang="en-US">`
+  per request holds `<lang xml:lang="vi-VN">` spans for Vietnamese (the locale of the job's
+  language for the others: `zh-CN`, `hi-IN`, `es-ES`, `ar-SA`, `fr-FR`, `ru-RU`, `ja-JP`, all
+  speaking languages of both voices, checked 2026-10-29) and `<lang xml:lang="en-US">`
   spans for glossary terms and for English detected in the job's translation (see `ssml.py`
   and `pronunciation/`); the same speaker reads both.
 * `riff-24khz-16bit-mono-pcm` is requested so chunks can be joined as samples and encoded once

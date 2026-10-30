@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ApiError, api } from "../../api/client";
 import type { JobResult } from "../../api/types";
+import { ltrRuns } from "../../lib/bidi";
 import { VIETNAMESE, type JobLanguage } from "../../lib/languages";
 import { formatClock, speedLabel } from "../../lib/speed";
 import { AudioDetails } from "./AudioDetails";
@@ -25,6 +26,7 @@ const OLD_JOB_LANGUAGE: JobLanguage = {
   label: VIETNAMESE.label,
   noun: VIETNAMESE.noun,
   tag: VIETNAMESE.translator_language,
+  dir: "ltr",
 };
 
 export function ResultView({
@@ -177,9 +179,25 @@ export function ResultView({
             <p className="small muted">This is placeholder text, not a real translation.</p>
           )}
           {/* Rendered as text: React escapes it, never interpreted as HTML. The language tag lets
-              the browser choose suitable fonts and screen readers the right voice. */}
-          <div className="translation" lang={translation.is_illustrative ? undefined : language.tag}>
-            {translation.text}
+              the browser choose suitable fonts and screen readers the right voice; the direction
+              lays Arabic out right to left, with English terms and code kept in their own order
+              by the browser's bidirectional algorithm. Only this box changes direction. */}
+          <div
+            className="translation"
+            lang={translation.is_illustrative ? undefined : language.tag}
+            dir={translation.is_illustrative ? undefined : language.dir}
+          >
+            {!translation.is_illustrative && language.dir === "rtl"
+              ? ltrRuns(translation.text).map((piece, index) =>
+                  piece.ltr ? (
+                    <span key={index} dir="ltr">
+                      {piece.text}
+                    </span>
+                  ) : (
+                    piece.text
+                  ),
+                )
+              : translation.text}
           </div>
         </div>
       </details>

@@ -9,10 +9,14 @@ inside a line is normalized to single spaces, blank lines are dropped and lines 
 by one line break (as in the audition the Product Owner accepted): `speech_text`. Nothing else
 changes, so the chunks joined with their separators are exactly `speech_text(text)`, and no
 text is lost, repeated or reordered.
+
+The other target languages written with spaces between words (Hindi, Spanish, Arabic, French,
+Russian) use this same chunker through `speech/spaced.py`, which passes their own sentence ends
+(`sentence_end`); Vietnamese uses the default, unchanged.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 from app.translation.glossary import TermMatch, TermMatcher
 
@@ -33,22 +37,35 @@ def speech_text(text: str) -> str:
     return _LINE_BREAK.join(line for line in lines if line)
 
 
-def split_for_speech(text: str, terms: TermMatcher, max_chars: int) -> list[str]:
-    """Chunks of at most `max_chars` characters, in order. Blank text gives no chunks."""
+def _ends_sentence(atom: str) -> bool:
+    return bool(_SENTENCE_END.search(atom))
+
+
+def split_for_speech(
+    text: str,
+    terms: TermMatcher,
+    max_chars: int,
+    sentence_end: Callable[[str], bool] = _ends_sentence,
+) -> list[str]:
+    """Chunks of at most `max_chars` characters, in order. Blank text gives no chunks.
+
+    `sentence_end` tells whether a piece of text between spaces ends a sentence."""
     units: list[tuple[str, str]] = []  # (separator before, text)
     for line in speech_text(text).split(_LINE_BREAK):
         if line:
-            for number, unit in enumerate(_line_units(line, terms, max_chars)):
+            for number, unit in enumerate(_line_units(line, terms, max_chars, sentence_end)):
                 units.append((_LINE_BREAK if number == 0 else _SPACE, unit))
     return list(_pack(units, max_chars))
 
 
-def _line_units(line: str, terms: TermMatcher, max_chars: int) -> Iterator[str]:
+def _line_units(
+    line: str, terms: TermMatcher, max_chars: int, sentence_end: Callable[[str], bool]
+) -> Iterator[str]:
     """The line as one unit if it fits, else sentences, else groups of words."""
     if len(line) <= max_chars:
         yield line
         return
-    for sentence in _sentences(_atoms(line, terms.protected_matches(line))):
+    for sentence in _sentences(_atoms(line, terms.protected_matches(line)), sentence_end):
         joined = " ".join(sentence)
         if len(joined) <= max_chars:
             yield joined
@@ -69,11 +86,11 @@ def _atoms(line: str, matches: list[TermMatch]) -> list[str]:
     return atoms
 
 
-def _sentences(atoms: list[str]) -> Iterator[list[str]]:
+def _sentences(atoms: list[str], sentence_end: Callable[[str], bool]) -> Iterator[list[str]]:
     current: list[str] = []
     for atom in atoms:
         current.append(atom)
-        if _SENTENCE_END.search(atom):
+        if sentence_end(atom):
             yield current
             current = []
     if current:

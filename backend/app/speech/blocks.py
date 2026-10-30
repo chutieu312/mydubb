@@ -20,8 +20,8 @@ limits below): timed mode gives an estimated, group-level synchronization, not a
    the response sample for sample, and every dropped sample is at most `SILENCE_PEAK` (checked),
    so no audible sample is removed or repeated.
 4. **Each clip has speech, at a consistent rate.** Every clip must contain sound, and a clip of
-   at least `MIN_SYLLABLES_FOR_RATE` estimated syllables (`spoken_length.py` for Vietnamese,
-   `mandarin.mandarin_syllables` for Mandarin; the limits are the same) must be spoken at
+   at least `MIN_SYLLABLES_FOR_RATE` estimated syllables (the estimate of the job's language,
+   `plan.syllable_estimate`; the limits are the same for every language) must be spoken at
    0.5-2x the syllables per second of the whole request: a cut in the wrong pause would move
    speech into the neighbouring clip and break this for both, when the moved part is large enough.
 5. **Cuts where the speech predicts them.** Walking through the clips, the time actually spoken so
@@ -58,8 +58,7 @@ from pathlib import Path
 from app.audio.wav import WavInfo, read_wav_info
 from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.speech.chunker import speech_text
-from app.speech.mandarin import MANDARIN_MAX_CHUNK_CHARS
-from app.speech.plan import chunk_spans, syllable_estimate
+from app.speech.plan import chunk_spans, request_char_limit, syllable_estimate
 from app.speech.ssml import ROOT_LANGUAGE, escape_text
 from app.speech.voices import Voice
 from app.translation.glossary import TermMatcher
@@ -106,8 +105,8 @@ class BlockPiece:
 @dataclass
 class BlockRequest:
     pieces: list[BlockPiece] = field(default_factory=list)
-    # Decides the syllable estimate of checks 4 and 5 (Vietnamese or Mandarin); the checks and
-    # their limits are the same for both.
+    # Decides the syllable estimate of checks 4 and 5; the checks and their limits are the same
+    # for every language.
     language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
 
     @property
@@ -150,11 +149,10 @@ def plan_block_requests(
 
     A block longer than the chunk limit is split like any speech text of its language and
     continues in the next request; its clip is then joined from both. Pieces in one request always
-    belong to different blocks, so every break separates two blocks. Mandarin pieces are smaller
-    (`mandarin.MANDARIN_MAX_CHUNK_CHARS`), and so are Mandarin requests.
+    belong to different blocks, so every break separates two blocks. Mandarin and Japanese
+    pieces are smaller (`plan.request_char_limit`), and so are their requests.
     """
-    if language is TargetLanguage.MANDARIN:
-        max_chars = min(max_chars, MANDARIN_MAX_CHUNK_CHARS)
+    max_chars = request_char_limit(language, max_chars)
     requests: list[BlockRequest] = []
     current = BlockRequest(language=language)
     for index, raw in enumerate(texts):

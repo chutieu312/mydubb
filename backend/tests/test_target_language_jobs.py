@@ -50,7 +50,8 @@ def job_count(db_engine) -> int:
 def test_meta_lists_the_languages_and_the_vietnamese_default(client) -> None:
     meta = client.get("/api/meta").json()
     assert meta["default_target_language"] == "vietnamese"
-    assert [(item["id"], item["label"]) for item in meta["target_languages"]] == [
+    # The first two; all eight are pinned in test_output_language_jobs.py.
+    assert [(item["id"], item["label"]) for item in meta["target_languages"]][:2] == [
         ("vietnamese", "Vietnamese"),
         (MANDARIN, "Chinese — Mandarin (Simplified)"),
     ]
@@ -124,7 +125,7 @@ def test_the_database_refuses_an_unknown_language(client, db_engine) -> None:
     job_id = create_job(client, csrf).json()["id"]
     with pytest.raises(Exception, match="target_language_valid"), db_engine.begin() as conn:
         conn.execute(
-            text("UPDATE jobs SET target_language = 'french' WHERE id = :id"), {"id": job_id}
+            text("UPDATE jobs SET target_language = 'german' WHERE id = :id"), {"id": job_id}
         )
 
 

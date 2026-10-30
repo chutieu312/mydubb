@@ -72,6 +72,8 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
                 "noun": language.noun,
                 "translator_language": language.translator_code,
                 "speech_locale": language.speech_locale,
+                # "rtl" for Arabic: the UI shows the translation right to left.
+                "text_direction": language.text_direction,
             }
             for language in TargetLanguage
         ],
