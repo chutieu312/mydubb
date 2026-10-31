@@ -1,7 +1,8 @@
 // Side panel for one tab (sidepanel.html?tabId=N). It talks only to the content script of that tab
 // through a port, so commands can never reach another tab. The draft lives in
 // chrome.storage.session (memory only); it is sent to MyDubb only when the user chooses Generate
-// audio (panel/dubbing.ts). Nothing of the MyDubb account ever reaches the content script.
+// audio (panel/dubbing.ts). Nothing of the MyDubb account ever reaches the content script. The
+// MyDubb audio plays in the offscreen document (panel/player.ts), so it outlives this panel.
 
 import {
   PANEL_PORT_NAME,
@@ -17,6 +18,7 @@ import {
   type PageState,
   type PendingSelection,
 } from "../shared/messages";
+import { AUDIO_CHANNEL, OFFSCREEN_PAGE, PLAYER_PANEL_PORT, type PlaybackLinkMessage } from "../shared/playback";
 import { createApi } from "./api";
 import {
   belongsElsewhere,
@@ -27,6 +29,7 @@ import {
   type CurrentLesson,
 } from "./draft";
 import { Dubbing } from "./dubbing";
+import { PlayerLink } from "./player";
 
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
@@ -90,8 +93,19 @@ class Panel {
   private nextRequestId = 1;
   private readonly cleanup = new AbortController();
   private readonly dubbing: Dubbing;
+  private readonly audioChannel = new BroadcastChannel(AUDIO_CHANNEL);
 
   constructor(private readonly tabId: number) {
+    const player = new PlayerLink({
+      tabId,
+      hasDocument: () => chrome.offscreen.hasDocument(),
+      createDocument: () => createOffscreenDocument(),
+      connect: () => chrome.runtime.connect({ name: PLAYER_PANEL_PORT }),
+      sendAudio: (transferId, blob) => this.audioChannel.postMessage({ transferId, blob }),
+      randomId: () => crypto.randomUUID(),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (id) => window.clearTimeout(id),
+    });
     this.dubbing = new Dubbing(
       {
         tabId,
@@ -102,10 +116,13 @@ class Panel {
         launchWebAuthFlow: launchAuthWindow,
         randomId: () => crypto.randomUUID(),
         now: () => Date.now(),
-        createObjectURL: (blob) => URL.createObjectURL(blob),
-        revokeObjectURL: (url) => URL.revokeObjectURL(url),
+        player,
       },
-      { currentLesson: () => this.currentLesson(), transcript: () => ui.transcript.value },
+      {
+        currentLesson: () => this.currentLesson(),
+        transcript: () => ui.transcript.value,
+        linkPlayback: (lessonKey) => this.linkPlayback(lessonKey),
+      },
     );
   }
 
@@ -159,6 +176,7 @@ class Panel {
     }
     this.port?.disconnect();
     this.port = null;
+    this.audioChannel.close();
   }
 
   // ---- Connection to the tab ----------------------------------------------------------------
@@ -181,9 +199,11 @@ class Panel {
     port.onMessage.addListener((message: unknown) => {
       if (this.port !== port || !isContentToPanel(message)) return;
       if (message.type === "state") {
+        const first = !this.receivedState;
         this.receivedState = true;
         this.retries = 0;
         this.applyState(message.state);
+        if (first) this.dubbing.pageConnected();
       } else {
         this.applyResult(message);
       }
@@ -356,6 +376,16 @@ class Panel {
     }
   }
 
+  /** Over the tab port: the page links itself to the playback session of this lecture. */
+  private linkPlayback(lessonKey: string): void {
+    const message: PlaybackLinkMessage = { type: "playback-link", lessonKey };
+    try {
+      this.port?.postMessage(message);
+    } catch {
+      // Not connected: linked again when the port reconnects (pageConnected).
+    }
+  }
+
   private applyResult(result: CommandResult): void {
     if (!result.ok) this.setVideoError(COMMAND_ERRORS[result.error ?? "invalid"] ?? COMMAND_ERRORS.invalid);
   }
@@ -479,6 +509,22 @@ class Panel {
 
   private setDraftStatus(text: string): void {
     ui.draftStatus.textContent = text;
+  }
+}
+
+/** The offscreen document that plays the MyDubb audio; another panel may be creating it too. */
+async function createOffscreenDocument(): Promise<void> {
+  if (await chrome.offscreen.hasDocument()) return;
+  try {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_PAGE,
+      // AUDIO_PLAYBACK: it plays the audio. BLOBS: it keeps the MP3 Blob and its object URL while
+      // playback is paused (an AUDIO_PLAYBACK-only document is closed after 30 s of silence).
+      reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK, chrome.offscreen.Reason.BLOBS],
+      justification: "Plays the MyDubb audio of a lecture tab while its side panel is closed.",
+    });
+  } catch (error) {
+    if (!(await chrome.offscreen.hasDocument())) throw error;
   }
 }
 

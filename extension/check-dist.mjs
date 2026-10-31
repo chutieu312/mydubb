@@ -17,7 +17,7 @@ for (const name of readdirSync(dist)) {
 
 const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
 const permissions = [...(manifest.permissions ?? [])].sort().join(",");
-if (permissions !== "contextMenus,identity,sidePanel,storage") problems.push(`permissions: ${permissions}`);
+if (permissions !== "contextMenus,identity,offscreen,sidePanel,storage") problems.push(`permissions: ${permissions}`);
 const hosts = JSON.stringify(manifest.host_permissions ?? []);
 if (hosts !== JSON.stringify([`${expectedOrigin}/*`])) problems.push(`host_permissions: ${hosts}`);
 for (const key of ["optional_permissions", "optional_host_permissions", "externally_connectable", "web_accessible_resources", "key"]) {

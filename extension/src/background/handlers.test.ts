@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MENU_ID, handleMenuClick, handleTabRemoved, type WorkerApi } from "./handlers";
+import { MENU_ID, handleAuthChanged, handleMenuClick, handleTabRemoved, type WorkerApi } from "./handlers";
 
 const lesson = { key: "c/1", courseSlug: "c", lectureId: "1", title: "L" };
 const PAGE = "https://www.udemy.com/course/c/learn/lecture/1";
@@ -17,6 +17,7 @@ function fakeApi(reply: unknown | Error) {
       return reply;
     }),
     session: { set: vi.fn(async () => undefined), remove: vi.fn(async () => undefined) },
+    notifyPlayer: vi.fn<WorkerApi["notifyPlayer"]>(async () => undefined),
     action: { setBadgeText: vi.fn(async () => undefined), setTitle: vi.fn(async () => undefined) },
     randomId: () => "id-1",
     now: () => 42,
@@ -87,4 +88,21 @@ it("forgets a closed tab's draft and pending selection", async () => {
   await handleTabRemoved(api, 4);
   // The draft, the hand-over, the dubbing form and the followed job of that tab only.
   expect(api.session.remove).toHaveBeenCalledWith(["pending:4", "draft:4", "form:4", "job:4"]);
+  // And its playback session, if the offscreen document has one.
+  expect(api.notifyPlayer).toHaveBeenCalledWith({ type: "mydubb:player-tab-closed", tabId: 4 });
+});
+
+it("tells the player which connection is current, also when there is no player", async () => {
+  const { api } = fakeApi(null);
+  api.notifyPlayer.mockRejectedValue(new Error("Could not establish connection. Receiving end does not exist."));
+  const auth = { token: "t".repeat(43), user: { id: "u1", email: "a@b.c" }, expiresAt: "2099-01-01T00:00:00Z", connectionId: "conn-a" };
+  handleAuthChanged(api, auth);
+  handleAuthChanged(api, undefined);
+  handleAuthChanged(api, { ...auth, expiresAt: "1970-01-01T00:00:00Z" });
+  await Promise.resolve();
+  expect(api.notifyPlayer.mock.calls.map((c) => c[0])).toEqual([
+    { type: "mydubb:player-identity", connectionId: "conn-a" },
+    { type: "mydubb:player-identity", connectionId: null },
+    { type: "mydubb:player-identity", connectionId: null },
+  ]);
 });

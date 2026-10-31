@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MyDubbError, type MyDubbApi } from "./api";
 import { AUTH_KEY, type StoredAuth } from "./auth";
+import type { PanelPlayerView, PlayerCommand } from "../shared/playback";
 import { Dubbing, type DubbingDeps } from "./dubbing";
 import type { JobRecord } from "./jobs";
+import type { OpenOutcome, OpenRequest, PanelPlayer } from "./player";
 
 const html = readFileSync(join(__dirname, "../../static/sidepanel.html"), "utf8");
 const TAB = 7;
@@ -76,9 +78,65 @@ function fakeApi(overrides: Partial<Record<keyof MyDubbApi, unknown>> = {}) {
 
 type FakeApi = { [K in keyof MyDubbApi]: ReturnType<typeof vi.fn> };
 
+/** Stands in for the offscreen session (player.ts): records what the panel asks of it. */
+class FakePlayer implements PanelPlayer {
+  view: PanelPlayerView | null = null;
+  readonly opened: { request: OpenRequest; blob: Blob }[] = [];
+  readonly ended: (string | undefined)[] = [];
+  readonly commands: PlayerCommand[] = [];
+  readonly floating: boolean[] = [];
+  disposed = false;
+  nextOutcome: OpenOutcome | null = null;
+  private readonly listeners: (() => void)[] = [];
+
+  subscribe(listener: () => void): void {
+    this.listeners.push(listener);
+  }
+  async ready(): Promise<void> {}
+  async open(request: OpenRequest, blob: Blob): Promise<OpenOutcome> {
+    this.opened.push({ request, blob });
+    if (this.nextOutcome) return this.nextOutcome;
+    const sessionId = `session-${this.opened.length}`;
+    this.set({
+      sessionId,
+      lessonKey: request.lessonKey,
+      status: "ready",
+      paused: true,
+      ended: false,
+      currentTime: 0,
+      duration: 180,
+      problem: null,
+      choices: request.choices,
+      floating: false,
+      owner: request.owner,
+      linked: false,
+    });
+    return { ok: true, sessionId };
+  }
+  command(command: PlayerCommand): void {
+    this.commands.push(command);
+  }
+  setFloating(visible: boolean): void {
+    this.floating.push(visible);
+    if (this.view) this.set({ ...this.view, floating: visible });
+  }
+  end(sessionId?: string): void {
+    this.ended.push(sessionId);
+    if (this.view && (!sessionId || sessionId === this.view.sessionId)) this.set(null);
+  }
+  dispose(): void {
+    this.disposed = true;
+  }
+  set(view: PanelPlayerView | null): void {
+    this.view = view;
+    for (const listener of this.listeners) listener();
+  }
+}
+
 let transcript = "";
 let lesson: string | null | undefined = LESSON;
-let urls: { created: string[]; revoked: string[] };
+let player: FakePlayer;
+let links: string[];
 
 function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
   const deps: DubbingDeps = {
@@ -93,14 +151,13 @@ function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
       return () => `id-${++n}`;
     })(),
     now: () => Date.parse("2030-01-01T00:00:00Z"),
-    createObjectURL: () => {
-      const url = `blob:test/${urls.created.length + 1}`;
-      urls.created.push(url);
-      return url;
-    },
-    revokeObjectURL: (url) => urls.revoked.push(url),
+    player,
   };
-  const dubbing = new Dubbing(deps, { currentLesson: () => lesson, transcript: () => transcript });
+  const dubbing = new Dubbing(deps, {
+    currentLesson: () => lesson,
+    transcript: () => transcript,
+    linkPlayback: (key) => links.push(key),
+  });
   return { dubbing, storage, api };
 }
 
@@ -129,7 +186,8 @@ beforeEach(() => {
   HTMLMediaElement.prototype.play = vi.fn(async () => undefined);
   transcript = "Spring Boot uses Dependency Injection.";
   lesson = LESSON;
-  urls = { created: [], revoked: [] };
+  player = new FakePlayer();
+  links = [];
 });
 
 afterEach(() => {
@@ -220,24 +278,174 @@ describe("form and request", () => {
 });
 
 describe("job and result", () => {
-  it("plays the real MP3 through an object URL at 1x, never by itself, and releases it", async () => {
+  it("hands the MP3 to the tab's playback session with the job's own choices, never playing it", async () => {
     const { dubbing, api } = await started();
     choose("target-language", "arabic");
     $<HTMLButtonElement>("generate").click();
     await settle(12);
     expect(api.getAudio).toHaveBeenCalledWith(AUTH.token, "/api/jobs/job-1/result/audio", expect.any(AbortSignal));
-    const audio = $<HTMLAudioElement>("result-audio");
-    expect(audio.getAttribute("src")).toBe("blob:test/1");
-    expect(audio.playbackRate).toBe(1);
-    expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+    expect(player.opened).toHaveLength(1);
+    const [{ request, blob }] = player.opened as [{ request: OpenRequest; blob: Blob }];
+    expect(blob.type).toBe("audio/mpeg");
+    expect(request).toEqual({
+      lessonKey: LESSON,
+      owner: { userId: "u1", connectionId: "conn-a", jobId: "job-1", operationId: "id-1" },
+      choices: { languageLabel: "Arabic", voiceLabel: "Andrew Multilingual", speed: 1 },
+    });
+    // The form changing later does not change what the player says the file was made with.
+    choose("speed", "2");
+    expect($("player-info").textContent).toBe("Loaded: Arabic · Andrew Multilingual · 1x");
+    expect(player.commands).toEqual([]);
+    expect($("audio-status").textContent).toBe("Ready. Press play when you want to listen.");
+    // The page is asked to link itself to the session (for the lecture watch and floating player).
+    expect(links).toEqual([LESSON]);
     const translation = $("translation");
     expect(translation.textContent).toBe("<b>نص</b>");
     expect(translation.children).toHaveLength(0); // shown as text, never as HTML
     expect(translation.dir).toBe("rtl");
     expect($("result-durations").textContent).toContain("00:06:00");
+    // Closing the panel only drops the link: the session (and the audio) carries on.
     dubbing.dispose();
-    expect(urls.revoked).toEqual(["blob:test/1"]);
-    expect(audio.hasAttribute("src")).toBe(false);
+    expect(player.disposed).toBe(true);
+    expect(player.ended).toEqual([]);
+  });
+
+  it("drives the session from the panel controls", async () => {
+    await started();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect($("player-section").hidden).toBe(false);
+    expect($("player-time").textContent).toBe("0:00 / 3:00");
+    $<HTMLButtonElement>("player-play").click();
+    player.set({ ...player.view!, paused: false, currentTime: 12 });
+    expect($("player-play").textContent).toBe("Pause");
+    $<HTMLButtonElement>("player-play").click();
+    $<HTMLButtonElement>("player-back").click();
+    $<HTMLButtonElement>("player-forward").click();
+    const seek = $<HTMLInputElement>("player-seek");
+    seek.value = "90";
+    seek.dispatchEvent(new Event("input"));
+    expect($("player-time").textContent).toBe("1:30 / 3:00");
+    seek.dispatchEvent(new Event("change"));
+    expect(player.commands).toEqual([
+      { command: "play" },
+      { command: "pause" },
+      { command: "seek-by", value: -5 },
+      { command: "seek-by", value: 5 },
+      { command: "seek-to", value: 90 },
+    ]);
+    $<HTMLButtonElement>("player-floating").click();
+    expect(player.floating).toEqual([true]);
+    expect($("player-floating").textContent).toBe("Hide floating player");
+  });
+
+  it("a new Generate keeps the audio being listened to until the user switches", async () => {
+    const api = fakeApi({
+      createJob: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "job-1", status: "queued" })
+        .mockResolvedValueOnce({ id: "job-2", status: "queued" }),
+      getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_token: string, id: string) => ({ ...RESULT, job_id: id, audio: { ...RESULT.audio, url: `/api/jobs/${id}/result/audio` } })),
+    });
+    await started(undefined, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    player.set({ ...player.view!, paused: false, currentTime: 42 });
+    choose("speed", "2");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    // Nothing replaced or stopped the first audio, and the second was not downloaded yet.
+    expect(player.opened).toHaveLength(1);
+    expect(player.ended).toEqual([]);
+    expect(api.getAudio).toHaveBeenCalledTimes(1);
+    expect($("player-other").hidden).toBe(false);
+    expect($("player-other-text").textContent).toContain("1x");
+    $<HTMLButtonElement>("player-switch").click();
+    await settle(12);
+    expect(player.ended).toEqual(["session-1"]);
+    expect(player.opened[1]?.request.owner.jobId).toBe("job-2");
+    expect(player.opened[1]?.request.choices.speed).toBe(2);
+    expect($("player-other").hidden).toBe(true);
+    expect(api.createJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not download again when the tab's session already has this job (panel reopened)", async () => {
+    const record: JobRecord = {
+      operationId: "op-1",
+      userId: "u1",
+      connectionId: "conn-a",
+      lessonKey: LESSON,
+      state: "created",
+      jobId: "job-1",
+      sentAt: 0,
+      choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1.5, timed: false, firstStart: "00:00:10", lastStart: "00:06:10" },
+    };
+    player.view = {
+      sessionId: "session-x",
+      lessonKey: LESSON,
+      status: "ready",
+      paused: false,
+      ended: false,
+      currentTime: 33,
+      duration: 180,
+      problem: null,
+      choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1.5 },
+      floating: true,
+      owner: { userId: "u1", connectionId: "conn-a", jobId: "job-1", operationId: "op-1" },
+      linked: true,
+    };
+    const { api } = await started(fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record }));
+    await settle(10);
+    expect(api.getAudio).not.toHaveBeenCalled();
+    expect(player.opened).toHaveLength(0);
+    expect(player.ended).toEqual([]);
+    expect($("player-play").textContent).toBe("Pause");
+    expect($("player-time").textContent).toBe("0:33 / 3:00");
+  });
+
+  it("ends a session of another account connection or lecture instead of showing it", async () => {
+    player.view = {
+      sessionId: "session-old",
+      lessonKey: LESSON,
+      status: "ready",
+      paused: false,
+      ended: false,
+      currentTime: 1,
+      duration: 180,
+      problem: null,
+      choices: { languageLabel: "Vietnamese", voiceLabel: "Andrew", speed: 1 },
+      floating: false,
+      owner: { userId: "u1", connectionId: "conn-old", jobId: "job-9", operationId: "op-9" },
+      linked: true,
+    };
+    await started();
+    expect(player.ended).toEqual(["session-old"]);
+    expect($("player-section").hidden).toBe(true);
+  });
+
+  it("after the page released the session, Load audio downloads again without a new job", async () => {
+    const { api } = await started();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    player.set(null); // the Udemy tab reloaded
+    expect($("audio-status").textContent).toMatch(/player was released/);
+    expect($<HTMLButtonElement>("player-load").hidden).toBe(false);
+    $<HTMLButtonElement>("player-load").click();
+    await settle(12);
+    expect(api.getAudio).toHaveBeenCalledTimes(2);
+    expect(player.opened).toHaveLength(2);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect($("audio-status").textContent).toBe("Ready. Press play when you want to listen.");
+  });
+
+  it("reports a player that refused the audio, with a way to try again", async () => {
+    player.nextOutcome = { ok: false, reason: "unavailable" };
+    await started();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect($("audio-status").textContent).toMatch(/player could not start/);
+    expect($<HTMLButtonElement>("player-load").hidden).toBe(false);
   });
 
   it("keeps an unanswered request as unknown and never sends it again", async () => {
@@ -279,7 +487,7 @@ describe("job and result", () => {
     await settle(10);
     expect(api.getJob).toHaveBeenCalledWith(AUTH.token, "job-1", expect.any(AbortSignal));
     expect(api.createJob).not.toHaveBeenCalled();
-    expect($<HTMLAudioElement>("result-audio").getAttribute("src")).toBe("blob:test/1");
+    expect(player.opened).toHaveLength(1);
 
     // Another account's record is dropped, never followed.
     const other = fakeStorage({ [AUTH_KEY]: OTHER, [`job:${TAB}`]: record });
@@ -307,16 +515,18 @@ describe("isolation", () => {
     expect($("result-section").hidden).toBe(true);
     expect($("form-error").textContent).toMatch(/lecture changed/);
     expect(storage.data[`job:${TAB}`]).toBeUndefined();
-    expect($<HTMLAudioElement>("result-audio").hasAttribute("src")).toBe(false);
+    expect(player.opened).toHaveLength(0);
+    expect(player.ended).toContain(undefined);
   });
 
   it("stops the audio and clears the result when the account changes", async () => {
     const { dubbing, storage } = await started();
     $<HTMLButtonElement>("generate").click();
     await settle(12);
-    expect($<HTMLAudioElement>("result-audio").getAttribute("src")).toBe("blob:test/1");
+    expect(player.view?.sessionId).toBe("session-1");
     dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
-    expect(urls.revoked).toEqual(["blob:test/1"]);
+    expect(player.view).toBeNull();
+    expect($("player-section").hidden).toBe(true);
     expect($("translation").textContent).toBe("");
     expect($("account-status").textContent).toContain("minh@example.com");
     await settle();
@@ -485,7 +695,7 @@ describe("a late write of an older job", () => {
     expect(api.getJob.mock.calls.map((c) => c[1])).toEqual(["job-B"]);
     expect($("translation").textContent).toBe("text job-B");
     expect($("job-status").textContent).toBe("Completed.");
-    expect($<HTMLAudioElement>("result-audio").getAttribute("src")).toBe("blob:test/1");
+    expect(player.opened.map((o) => o.request.owner.jobId)).toEqual(["job-B"]);
     const stored = storage.data[`job:${TAB}`] as JobRecord;
     expect(stored.jobId).toBe("job-B");
     expect(stored.lessonKey).toBe("demo-course/2");
@@ -507,7 +717,7 @@ describe("audio download", () => {
     expect($<HTMLButtonElement>("check-again").hidden).toBe(false);
     $<HTMLButtonElement>("check-again").click();
     await settle(12);
-    expect($<HTMLAudioElement>("result-audio").getAttribute("src")).toBe("blob:test/1");
+    expect(player.opened).toHaveLength(1);
     expect(api.createJob).toHaveBeenCalledTimes(1);
   });
 });

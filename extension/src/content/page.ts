@@ -1,5 +1,7 @@
 // Content-script session for one Udemy tab. It does nothing until a MyDubb side panel connects:
-// no background scanning, and every observer/timer stops when the last panel disconnects.
+// no background scanning, and every observer/timer stops when the last panel disconnects and no
+// playback session is linked to the page (content/playback.ts keeps the lecture watch running for
+// the floating player while the panel is closed).
 
 import { parseLecture, type LessonInfo } from "../shared/lesson";
 import {
@@ -13,6 +15,8 @@ import {
   type PageState,
   type SelectionReply,
 } from "../shared/messages";
+import { isPlaybackLinkMessage } from "../shared/playback";
+import { PlaybackLink, type LinkEnv } from "./playback";
 import { AttachedVideo, isRenderedVideo, pickVideo, type VisibilityCheck } from "./video";
 
 /** The subset of chrome.runtime.Port used here, so tests can pass a fake. */
@@ -34,6 +38,8 @@ export interface PageEnv {
   isVisible?: VisibilityCheck;
   setInterval?: (fn: () => void, ms: number) => number;
   clearInterval?: (id: number) => void;
+  /** The link to the tab's MyDubb playback session; absent: no floating player. */
+  playback?: LinkEnv;
 }
 
 const REFRESH_INTERVAL_MS = 1000;
@@ -72,11 +78,27 @@ export class PageSession {
   private debounce: number | null = null;
   private listeners: AbortController | null = null;
   private lastSent = "";
+  private readonly link: PlaybackLink | null;
 
-  constructor(private readonly env: PageEnv) {}
+  constructor(private readonly env: PageEnv) {
+    this.link = env.playback ? new PlaybackLink(env.playback, () => this.stopIfUnused()) : null;
+  }
 
   get connectedPanels(): number {
     return this.ports.size;
+  }
+
+  get playbackLinked(): boolean {
+    return this.link?.active ?? false;
+  }
+
+  /** A panel is connected or a playback session is linked: the page is watched. */
+  private get inUse(): boolean {
+    return this.ports.size > 0 || this.playbackLinked;
+  }
+
+  private stopIfUnused(): void {
+    if (!this.inUse && this.running) this.stop();
   }
 
   get running(): boolean {
@@ -92,12 +114,12 @@ export class PageSession {
     this.ports.add(port);
     port.onDisconnect.addListener(() => {
       this.ports.delete(port);
-      if (this.ports.size === 0) this.stop();
+      this.stopIfUnused();
     });
     port.onMessage.addListener((message) => {
       void this.handleMessage(port, message);
     });
-    if (this.ports.size === 1) this.start();
+    if (!this.running) this.start();
     this.refresh();
     this.post(port, { type: "state", state: this.state() });
     return true;
@@ -157,12 +179,14 @@ export class PageSession {
 
   /** Re-reads the lecture identity and the video choice, then reports any change. */
   refresh(): void {
-    if (this.ports.size === 0) return;
+    if (!this.inUse) return;
     const { doc, win } = this.env;
     const lesson = parseLecture(win.location.href, doc.title);
     const lessonChanged = (lesson?.key ?? null) !== (this.lesson?.key ?? null);
     this.lesson = lesson;
     if (lessonChanged) this.lastPlayed = null;
+    // The MyDubb audio of one lecture never plays on under another one.
+    if (lessonChanged) this.link?.lesson(lesson?.key ?? null);
 
     const pick = lesson
       ? pickVideo(doc.querySelectorAll("video"), this.attached?.video ?? null, this.lastPlayed, this.env.isVisible ?? isRenderedVideo)
@@ -207,6 +231,12 @@ export class PageSession {
   }
 
   private async handleMessage(port: PortLike, message: unknown): Promise<void> {
+    if (isPlaybackLinkMessage(message)) {
+      this.refresh();
+      // Only for the lecture this page shows now.
+      if (this.lesson?.key === message.lessonKey) this.link?.link(message.lessonKey);
+      return;
+    }
     if (!isCommandMessage(message)) {
       const requestId = (message as { requestId?: unknown } | null)?.requestId;
       if (Number.isSafeInteger(requestId)) {

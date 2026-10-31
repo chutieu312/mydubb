@@ -3,7 +3,8 @@
 On a Udemy lecture: select transcript text → right-click → **Send to MyDubb** → the text appears in
 a side panel. There you can edit it, control the lecture video (Play/Pause, −5 s/+5 s, time),
 connect your **MyDubb invitation account**, choose the output language, voice and speed, **Generate
-audio**, follow the job, read the translation and listen to the MP3 in the panel.
+audio**, follow the job, read the translation and listen to the MP3, in the panel or in a small
+**floating player** on the lecture page that keeps playing when the panel is closed.
 
 This is a **prototype**, installed only with Developer mode → Load unpacked; it is not on the Chrome
 Web Store. Nothing is sent to MyDubb until you choose **Generate audio** (apart from loading the
@@ -49,9 +50,24 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
    them from its first and last caption and is dubbed in timed mode unless you tick **Ignore the
    timestamps**), **Translate to** (Vietnamese by default), **Voice** (Andrew/Emma), **Audio speed**
    (seven speeds), the expected length, then **Generate audio**.
-6. **MyDubb audio**: the job's status, the choices it was made with, then the translation, durations,
-   notices and a player for the MP3. Nothing plays by itself; the player is always 1x (the speed is
-   already in the file) and is separate from the Udemy video controls.
+6. **MyDubb audio**: the job's status, the choices it was made with, then the translation, durations
+   and notices. The MP3 is loaded into the tab's player (nothing plays by itself).
+7. **MyDubb player**: Play/Pause, −5s/+5s, a seek bar and the time, with the language, voice and speed
+   the file was made with. Always 1x (the speed is already in the file); separate from the Udemy
+   video controls. **Show floating player** puts the same player on the lecture page:
+   - drag it by its **MyDubb** handle (or focus the handle and use the arrow keys); it stays inside
+     the window when you resize or zoom;
+   - **–/+** collapses/expands it (playback goes on); **×** pauses and hides it (the job, the draft
+     and the loaded audio stay; **Show floating player** in the panel brings it back);
+   - close the side panel: the audio keeps playing and the floating player keeps working.
+
+   The panel and the floating player control **one** audio: switching between them keeps the
+   position and Play/Pause. Playing in another Udemy tab pauses this one (each keeps its position).
+   A new **Generate audio** does not replace or stop what you are listening to: when its result is
+   ready, **Use this result** stops the old audio and loads the new one.
+8. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
+   an account change stops the audio and removes the player. After a reload, **Load audio** in the
+   panel downloads the same result again (it never creates a job).
 
 The toolbar button **Open MyDubb Prototype** opens the panel for the current tab without a selection.
 If the panel could not be opened from the menu, the button shows a **!** badge; click it.
@@ -66,8 +82,9 @@ Note: Play/Seek act on the real Udemy video and may update your watch progress.
 | `sidePanel` | The tab-specific side panel. |
 | `storage` | `chrome.storage.session` only (memory, cleared when the browser quits, readable by the extension's own pages, not by content scripts): the draft, the selection hand-over, the form settings and the job a tab follows, and the MyDubb token. |
 | `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect MyDubb**. |
+| `offscreen` | One hidden extension page (`offscreen.html`) that plays the MyDubb audio, so it keeps playing when the side panel closes. Created when a result's audio is loaded; it closes itself when no tab has audio left. Reasons `AUDIO_PLAYBACK` and `BLOBS` (it holds the MP3 Blob and its object URL while paused; with `AUDIO_PLAYBACK` alone Chrome would close it after 30 s of silence). |
 | Host `https://mydubb.com/*` (the build's `MYDUBB_ORIGIN`) | Calls to the MyDubb API from the side panel. No other host. |
-| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, and finds/controls the lecture `<video>` while a panel is connected. Top frame only. |
+| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected, and draws the floating player (display and playback commands only). Top frame only. |
 
 No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`, no
 `externally_connectable` and no `web_accessible_resources`. The extension does not read cookies,
@@ -79,11 +96,14 @@ does not download video, does not intercept network requests and does not use Ud
 - **Service worker** (`src/background`): creates the menu item; on click it opens the side panel
   for that tab only (`sidePanel.setOptions({tabId, path: "sidepanel.html?tabId=N"})` + `open`, in
   the user gesture), asks the content script for the selection, and stores it as a *pending
-  selection* in `storage.session`. When a tab closes it removes that tab's draft, form and job. It
-  keeps no state in globals and plays no part in MyDubb calls, so it can be stopped at any time.
+  selection* in `storage.session`. When a tab closes it removes that tab's draft, form and job and
+  tells the offscreen document; when the stored MyDubb connection changes it tells the offscreen
+  document which connection is current. It keeps no state in globals and plays no part in MyDubb
+  calls or playback, so it can be stopped at any time (its listeners wake it).
 - **Content script** (`src/content`): idle until a panel connects. While at least one panel is
-  connected it watches the page (one MutationObserver, one 1 s timer, media events) and stops
-  everything when the last panel disconnects. It never receives anything about MyDubb.
+  connected, or a playback session is linked to the page, it watches the page (one
+  MutationObserver, one 1 s timer, media events) and stops everything when neither is left. It
+  never receives anything about the MyDubb account, job or audio address.
   - *Video choice*: only rendered `<video>` elements count. One candidate → that one. Several → the
     one you last started, the one already attached, or the only one playing; otherwise the panel
     says it cannot tell and keeps controls disabled. It never just takes the first.
@@ -123,9 +143,9 @@ does not download video, does not intercept network requests and does not use Ud
     panel closes). Closing the panel never cancels or recreates the job; reopening it (same browser
     session, same account connection and lecture) resumes following it.
   - *Result*: the translation as text (right to left for Arabic), the choices and durations, the
-    server's notices, and the MP3 fetched with the token as a Blob and played from an object URL
-    (revoked when replaced, on account/lecture change and when the panel closes). Nothing plays by
-    itself; `playbackRate` stays 1.
+    server's notices, and the MP3 fetched with the token as a Blob and handed to the tab's playback
+    session (below). Nothing plays by itself; `playbackRate` stays 1. Reopening the panel while the
+    session still has this job's audio attaches to it instead of downloading again.
   - *Isolation*: every answer is checked against the account connection, lecture and click it was
     sent for, again after each storage write; a late answer for another one is dropped, never
     stops the current job's polling, and the tab's job record is written and removed one step at
@@ -135,9 +155,37 @@ does not download video, does not intercept network requests and does not use Ud
     audio and hides the result (the job keeps running on MyDubb). Disconnecting, or a refused token,
     clears the result in every panel. Each tab has its own job and player. The draft (your Udemy
     selection) is kept on an account change.
+- **Playback** (`src/offscreen`, `src/panel/player.ts`, `src/content/playback.ts`, `floating.ts`):
+  - *Owner*: the offscreen document holds at most one session per tab: its own `<audio>` element
+    and object URL, tied to the tab, lecture, account connection, job and Generate click. The panel
+    and the floating player are remote controls of that session, so there is never a second MyDubb
+    audio for a tab, and `playbackRate` is held at 1.
+  - *Audio hand-over*: the panel downloads the MP3 with the token (same request, deadline and
+    cancellation as before), then offers the Blob on an extension-origin `BroadcastChannel`, only
+    for a transfer the offscreen document asked for on the panel's port. The offscreen document
+    never sees the token; no base64/data URL, nothing in `chrome.storage` or chrome messaging.
+  - *Ports*: the panel connects a runtime port bound to its own `?tabId` (checked against the
+    sender URL); the content script connects one whose tab Chrome sets (`sender.tab`, top frame,
+    `https://www.udemy.com`), so a page can only reach its own tab's session. The page gets display
+    state only (time, duration, Play/Pause, the file's language/voice/speed labels, floating
+    visible); commands carry the session id and lecture and are refused when either is stale.
+  - *Lifecycle*: after a session is opened the panel asks its content script (over its tab port) to
+    link; only then may the session play (otherwise nobody would notice a lecture change). The
+    content script keeps watching the lecture while linked, also with the panel closed; another
+    lecture or none ends the session, and so does the page port going away (reload, navigation,
+    closed tab), a closed tab reported by the worker, or the end of the account connection (the
+    worker forwards `storage.onChanged`; an ended connection can open nothing again). A new
+    Generate keeps the current session until **Use this result**. Ending stops the audio, revokes
+    the object URL and removes the listeners; with no session left the document closes itself.
+    Playing a tab pauses every other tab's session.
+  - *Floating UI*: a `mydubb-player` element with a closed Shadow DOM (styles isolated, placement
+    pinned with inline `!important`), built with `textContent` only; only trusted events act, so a
+    page script can neither click it nor reach the extension (`window.postMessage` is not used).
+    Labelled buttons, a labelled range input with a value text, keyboard-movable handle.
 - **Validation**: every message is shape-checked; the content script accepts ports only from this
   extension's `sidepanel.html` and selection requests only from the extension itself (not from a
-  tab). The manifest has no `externally_connectable`, so web pages cannot message the extension.
+  tab); the offscreen document checks the sender of every port and message as above. The manifest
+  has no `externally_connectable`, so web pages cannot message the extension.
 
 ## Checks
 
@@ -153,7 +201,15 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   retry, error shapes, audio fetch), PKCE (RFC 7636 vector), state/redirect checks, polling backoff
   and limits, job records, and the panel controller against a fake API (request body, timed/plain,
   double click, snapshot, field errors, unknown outcome, failed job, resume, lecture and account
-  changes, late answers, refused token, disconnect, audio object URL, 1x and cleanup).
+  changes, late answers, refused token, disconnect, 1x and cleanup). Story 3: the offscreen
+  sessions (`offscreen/hub.test.ts`: Blob only for an announced transfer and only audio, senders of
+  panel/page/worker, play only when linked, seek limits, 1x, autoplay blocked and failed start,
+  media error, one tab at a time, Close, lecture change, page gone, closed tab, ended connection,
+  replacement releasing the old audio, document closing), the message contracts, the panel link
+  (handshake, no document created to look, retry), the floating UI (trusted events only, text only,
+  seek, collapse/close, viewport clamp), the content-script link and lecture watch with the panel
+  closed, and the panel's player (choices from the job, keep-until-switch, reopened panel does not
+  download again, sessions of another connection ended, Load audio after a release).
 - `npm run check:dist`: `dist/` has no test hook or test server and exactly the documented
   permissions.
 - `npm run test:browser`: the real extension in Playwright's Chromium against **synthetic fixture
@@ -162,11 +218,23 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   Story 1 flows, plus: connect, generate with the chosen options and listen (a real MP3 decoded, 1x,
   not autoplayed, token never in the page), panel closed/reopened and tab reload resume the job,
   stopped service worker, lost answer not resent, lecture change and second tab, disconnect and
-  refused token. These are not evidence of behaviour on the real Udemy site or the real MyDubb.
-- `dist-test/` is the same build plus two hooks: one in the service worker lets the tests run the
+  refused token. Story 3 (`e2e/floating.spec.ts`, a real 30 s MP3 decoded in the offscreen
+  document): floating player shown on request, played from the page with the panel closed, no
+  token/audio address/`<audio>` on the page, video untouched; handoff keeping position and
+  Play/Pause with one audio; collapse, drag by the handle only, keyboard move, viewport clamp on
+  resize, Close and reopen; ±5 s and seek limits at 1x; SPA lecture change with the panel closed,
+  reload (no replay, Load audio without a job), tab close and the document closing itself; two tabs
+  (B pauses A); disconnect from another tab's panel; stopped service worker (and one woken by a
+  disconnect); expired result and retries without a job; synthetic clicks ignored; a paused session
+  surviving 36 s (past Chrome's 30 s silent-audio limit). Autoplay is allowed by a browser flag in
+  these tests, so Chrome's autoplay blocking is only unit-tested. These are not evidence of
+  behaviour on the real Udemy site or the real MyDubb.
+- `dist-test/` is the same build plus test hooks: one in the service worker lets the tests run the
   menu handler (Playwright cannot click a native context menu), one in the panel stands in for
-  Chrome's sign-in window (Playwright cannot drive it). Both are compiled out of `dist/`; CI checks
-  that.
+  Chrome's sign-in window (Playwright cannot drive it), an inspection message in the offscreen
+  document reports what its media elements are doing, and the floating player's shadow root is
+  open (closed in `dist/`) so Playwright can reach its controls. All are compiled out of `dist/`;
+  CI checks that.
 
 CI runs all of this in the **Chrome extension** job, part of **CI success**.
 
@@ -175,7 +243,10 @@ CI runs all of this in the **Chrome extension** job, part of **CI success**.
 Needs `EXTENSION_IDS` on the server (EXTENSION_AUTH.md) and a lecture you have access to. Real jobs
 use the Azure free allowance.
 
-1. Build, Load unpacked, add the ID to `EXTENSION_IDS`, reload the Udemy lecture.
+1. Build, Load unpacked, add the ID to `EXTENSION_IDS`, reload the Udemy lecture. Updating from an
+   earlier build: `npm run build`, then the reload icon on the extension card (Chrome asks for no
+   new permission prompt for `offscreen`), then reload every open Udemy tab. The extension ID does
+   not change as long as the folder stays the same.
 2. Send a transcript selection; Story 1 controls still work.
 3. **Connect MyDubb** → sign in with an invitation account in the MyDubb window → **Connect
    extension** → the panel says "Connected as …". (If the window already knows your website
@@ -184,6 +255,12 @@ use the Azure free allowance.
    player; press play; it is at 1x and does not move the Udemy video.
 5. Close and reopen the panel while a job runs; move to another lecture while one runs (no result
    there); use a second Udemy tab; **Disconnect** (all panels clear).
+6. Floating player: with a result loaded, play a little in the panel, **Show floating player**
+   (same position, same Play/Pause), close the side panel and keep listening; drag it, collapse it,
+   resize the window; check it does not hide the Udemy controls you need (drag it away if it does);
+   **×** pauses it, the panel shows it again. Play in a second lecture tab (the first pauses). Then
+   move to another lecture, reload, and **Disconnect** with the panel closed: each stops the audio
+   and removes the player.
 
 ## Limits (prototype)
 
@@ -191,7 +268,16 @@ use the Azure free allowance.
 - When the content script cannot be reached (e.g. inside an iframe) the selection falls back to
   Chrome's `selectionText`, which may collapse whitespace.
 - Invitation accounts only (no guest), no YouTube import, no automatic transcript extraction, no
-  floating player, no audio/video synchronization, no MP3 download button in the panel.
+  audio/video synchronization (the MyDubb audio and the Udemy video are played and seeked
+  separately), no playback speed control (the speed is chosen at Generate), no MP3 download button.
+- The audio continues only once it has been loaded in the player; a panel closed before the result
+  arrives stops following the job (reopen it to continue). A reload, lecture change or tab close
+  ends the player; reopening it downloads the result again while MyDubb still has it (1 hour).
+- The player keeps one MP3 per tab in memory until that tab's player ends. A token revoked on the
+  server is noticed at the panel's next MyDubb request, not instantly: audio already loaded can
+  play on until then (Disconnect in the extension stops it at once).
+- The floating player's default place is the top right of the window; on the real Udemy layout it
+  may cover something and has to be dragged away (not checked on udemy.com).
 - One job per tab is followed; a new Generate replaces it in the panel (the previous one keeps
   running on MyDubb, but neither the panel nor the website lists it). After a lecture change the
   panel no longer shows the earlier lecture's job. A job whose creation answer was lost cannot be

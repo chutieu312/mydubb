@@ -103,9 +103,13 @@ always with `credentials: "omit"`.
 - Disconnect removes it from storage first (every panel clears its result and stops following its
   job), then asks the server to end the token. A `401` on any call removes the stored token.
 - Audio: an `<audio>` element cannot send the Authorization header, so the panel fetches
-  `/result/audio` with the token, keeps the MP3 as a `Blob` in memory and plays it from an object URL
-  (never a data URL, never stored); the URL is revoked when the result is replaced, the account or
-  lecture changes, or the panel closes.
+  `/result/audio` with the token and hands the MP3 `Blob` to the extension's offscreen document
+  (an extension-origin `BroadcastChannel`, never a data URL, never stored), which plays it from an
+  object URL. The offscreen document never receives the token, and the Udemy page only gets display
+  state. The audio is stopped and the URL revoked when the result is replaced, the lecture changes,
+  the tab reloads or closes, or the account connection ends (Disconnect, another account, a
+  refused token: the service worker reports the change to the offscreen document, also for tabs
+  whose panel is closed). Closing the panel does not stop it (see extension/README.md).
 
 ## Verified, and not
 

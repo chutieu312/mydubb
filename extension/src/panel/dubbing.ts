@@ -1,5 +1,6 @@
 // The MyDubb half of the side panel: the account connection, the dubbing form, the job the tab
-// follows and the result player. The rules for the form and the request are the website's own
+// follows and the controls of the tab's playback session (the audio itself plays in the offscreen
+// document, see player.ts, so it carries on when the panel closes). The rules for the form and the request are the website's own
 // modules (frontend/src/lib), imported rather than copied, so both send the same request for the
 // same input. Text from the page, the user or the server is only ever set as textContent.
 //
@@ -23,9 +24,10 @@ import { editTimestamp } from "../../../frontend/src/lib/timestampInput";
 import { formatSeconds, previewTargetDuration } from "../../../frontend/src/lib/timestamps";
 import { analyzeTranscriptTiming, captionClock, type TranscriptTiming } from "../../../frontend/src/lib/transcriptTiming";
 import { formKey, jobKey } from "../shared/messages";
+import { PLAYER_SEEK_SECONDS, choicesLabel, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
 import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
 import { AUTH_KEY, connect, connectErrorMessage, isLive, isStoredAuth, type StoredAuth } from "./auth";
-import type { CurrentLesson } from "./draft";
+import { formatTime, type CurrentLesson } from "./draft";
 import {
   SEND_TIMEOUT_MS,
   STATUS_TEXT,
@@ -39,6 +41,7 @@ import {
   type JobChoices,
   type JobRecord,
 } from "./jobs";
+import type { PanelPlayer } from "./player";
 
 /** The form fields of a tab, kept with the lecture they were filled for. */
 export interface FormRecord {
@@ -94,6 +97,14 @@ const LESSON_CHANGED =
   "The lecture changed. A job already sent keeps running on MyDubb, but its result is not shown under this lecture.";
 const ACCOUNT_CHANGED = "The MyDubb account changed, so the previous job and result were cleared from this panel.";
 const CONNECTION_ENDED = "Your MyDubb connection ended (expired or disconnected). Connect again to continue.";
+const AUDIO_READY = "Ready. Press play when you want to listen.";
+const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
+  "play-blocked": "Chrome blocked playback. Press Play again.",
+  "play-failed": "The audio could not start playing. Press Play to try again, or Load audio.",
+  "media-error": "The audio could not be played. Choose Load audio to try again.",
+  "not-linked":
+    "The Udemy tab is not linked to the player yet. If this stays, reload the lecture tab, then choose Load audio.",
+};
 
 type Storage = Pick<chrome.storage.StorageArea, "get" | "set" | "remove">;
 
@@ -106,8 +117,8 @@ export interface DubbingDeps {
   launchWebAuthFlow(url: string): Promise<string | undefined>;
   randomId(): string;
   now(): number;
-  createObjectURL(blob: Blob): string;
-  revokeObjectURL(url: string): void;
+  /** The tab's playback session in the offscreen document. */
+  player: PanelPlayer;
 }
 
 export interface DubbingHost {
@@ -115,6 +126,8 @@ export interface DubbingHost {
   currentLesson(): CurrentLesson;
   /** The transcript as the panel's text box holds it. */
   transcript(): string;
+  /** Asks the tab's content script to link its page to the playback session of that lecture. */
+  linkPlayback(lessonKey: string): void;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -152,8 +165,21 @@ function dubbingUi() {
     checkAgain: byId<HTMLButtonElement>("check-again"),
     jobChoices: byId("job-choices"),
     result: byId("result"),
-    audio: byId<HTMLAudioElement>("result-audio"),
     audioStatus: byId("audio-status"),
+    playerSection: byId("player-section"),
+    player: byId("player"),
+    playerInfo: byId("player-info"),
+    playerPlay: byId<HTMLButtonElement>("player-play"),
+    playerBack: byId<HTMLButtonElement>("player-back"),
+    playerForward: byId<HTMLButtonElement>("player-forward"),
+    playerSeek: byId<HTMLInputElement>("player-seek"),
+    playerTime: byId("player-time"),
+    playerProblem: byId("player-problem"),
+    playerFloating: byId<HTMLButtonElement>("player-floating"),
+    playerOther: byId("player-other"),
+    playerOtherText: byId("player-other-text"),
+    playerSwitch: byId<HTMLButtonElement>("player-switch"),
+    playerLoad: byId<HTMLButtonElement>("player-load"),
     durations: byId("result-durations"),
     translation: byId("translation"),
     notices: byId("notices"),
@@ -197,7 +223,14 @@ export class Dubbing {
   // The Generate click whose request has not been answered yet (one at a time).
   private sendingOp: string | null = null;
   private poll: AbortController | null = null;
-  private audioUrl: string | null = null;
+  // The audio of the job this panel shows (once its result arrived), and a load started by hand.
+  private resultAudio: { path: string; record: JobRecord } | null = null;
+  private audioLoad: AbortController | null = null;
+  private loadingAudio = false;
+  // The session the content script was last asked to link, and whether one was shown.
+  private linkedFor: string | null = null;
+  private hadSession = false;
+  private seeking = false;
   private saveTimer: number | null = null;
   private disposed = false;
   // Until the stored form, account and job are read (restore()), page states and transcript
@@ -242,8 +275,7 @@ export class Dubbing {
     ui.language.addEventListener("change", () => this.update({ targetLanguage: ui.language.value }), { signal });
     ui.voice.addEventListener("change", () => this.update({ voice: ui.voice.value }), { signal });
     ui.speed.addEventListener("change", () => this.update({ speed: Number(ui.speed.value) }), { signal });
-    // The result is already at the chosen speed: the player always plays it at 1x.
-    ui.audio.addEventListener("ratechange", () => this.keepNormalRate(), { signal });
+    this.wirePlayer(signal);
     setOptions(
       ui.speed,
       AUDIO_SPEEDS.map((s) => ({ value: String(s), label: speedLabel(s) })),
@@ -267,6 +299,7 @@ export class Dubbing {
       void this.deps.storage.remove(jobKey(this.deps.tabId));
     }
     this.restored = true;
+    this.deps.player.subscribe(() => this.checkPlayer());
     // What happened while reading, in order: the lecture rule first, then the transcript.
     const held = this.heldLesson;
     this.heldLesson = null;
@@ -291,7 +324,9 @@ export class Dubbing {
     this.cleanup.abort();
     this.poll?.abort();
     this.poll = null;
-    this.clearAudio();
+    this.audioLoad?.abort();
+    // Only the link: the playback session and its audio carry on without the panel.
+    this.deps.player.dispose();
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);
       this.saveFormNow();
@@ -318,6 +353,7 @@ export class Dubbing {
     if (this.record && !recordBelongs(this.record, this.account(), key)) {
       this.dropJob(LESSON_CHANGED);
     }
+    this.checkPlayer();
     if (this.form.lessonKey !== key) {
       // The times belong to the transcript of one lecture; the language, voice and speed stay.
       if (this.form.lessonKey !== null) {
@@ -363,8 +399,10 @@ export class Dubbing {
     const hadAuth = this.auth !== null;
     this.authGen += 1;
     this.auth = next;
-    // Another account (or none): nothing of the previous one may stay on screen.
+    // Another account (or none): nothing of the previous one may stay on screen or keep playing.
     if (this.record) this.dropJob(fromChange && hadAuth ? ACCOUNT_CHANGED : null);
+    if (hadAuth) this.deps.player.end();
+    this.checkPlayer();
     this.setFieldErrors([]);
     this.ui.formError.textContent = "";
     if (next) this.ui.accountError.textContent = "";
@@ -691,8 +729,9 @@ export class Dubbing {
       sentAt: this.deps.now(),
       choices,
     };
-    // A new job replaces the one followed so far (which keeps running on the server).
-    this.dropJob(null);
+    // A new job replaces the one followed so far (which keeps running on the server). The audio
+    // loaded for an earlier result keeps playing until the user switches to the new one.
+    this.dropJob(null, false);
     this.record = record;
     this.sendingOp = record.operationId;
     this.renderGenerate();
@@ -805,7 +844,7 @@ export class Dubbing {
             this.setJobError(failedJobMessage(outcome.job));
             return;
           }
-          await this.loadResult(auth, jobId, controller.signal, current);
+          await this.loadResult(auth, record, controller.signal, current);
       }
     });
   }
@@ -814,7 +853,8 @@ export class Dubbing {
     this.ui.jobStatus.textContent = STATUS_TEXT[job.status] ?? `Status: ${job.status}`;
   }
 
-  private async loadResult(auth: StoredAuth, jobId: string, signal: AbortSignal, current: () => boolean): Promise<void> {
+  private async loadResult(auth: StoredAuth, record: JobRecord, signal: AbortSignal, current: () => boolean): Promise<void> {
+    const jobId = record.jobId ?? "";
     let result: JobResult;
     try {
       result = await this.deps.api.getResult(auth.token, jobId, signal);
@@ -828,20 +868,23 @@ export class Dubbing {
     }
     if (!current()) return;
     this.renderResult(result);
-    this.ui.audioStatus.textContent = "Loading the audio…";
-    let blob: Blob;
-    try {
-      blob = await this.deps.api.getAudio(auth.token, result.audio.url, signal);
-    } catch (error) {
-      if (!current()) return;
-      if (error instanceof MyDubbError && error.isUnauthenticated) return void this.expireAuth(auth);
-      this.ui.audioStatus.textContent = `The audio could not be loaded: ${jobErrorMessage(error)}`;
-      this.ui.checkAgain.hidden = false;
+    this.resultAudio = { path: result.audio.url, record };
+    // The tab may already have a session: this job's (panel reopened) or an earlier result's.
+    await this.deps.player.ready();
+    if (!current()) return;
+    const view = this.sessionView();
+    if (view?.owner.jobId === jobId) {
+      this.ui.audioStatus.textContent = AUDIO_READY;
+      this.checkPlayer();
       return;
     }
-    if (!current()) return;
-    this.setAudio(blob);
-    this.ui.audioStatus.textContent = "Ready. Press play when you want to listen.";
+    if (view) {
+      this.ui.audioStatus.textContent =
+        "The new result is ready. The player keeps the earlier audio until you choose Use this result.";
+      this.renderPlayer();
+      return;
+    }
+    await this.loadAudio(auth, signal, current);
   }
 
   private renderRecord(): void {
@@ -883,41 +926,208 @@ export class Dubbing {
     );
   }
 
-  // ---- Audio ---------------------------------------------------------------------------------
+  // ---- Audio (the tab's playback session) ---------------------------------------------------
 
-  private setAudio(blob: Blob): void {
-    this.clearAudio();
-    this.audioUrl = this.deps.createObjectURL(blob);
-    const audio = this.ui.audio;
-    audio.autoplay = false;
-    audio.src = this.audioUrl;
-    this.keepNormalRate();
-  }
-
-  private keepNormalRate(): void {
-    const audio = this.ui.audio;
-    if (audio.defaultPlaybackRate !== 1) audio.defaultPlaybackRate = 1;
-    if (audio.playbackRate !== 1) audio.playbackRate = 1;
-  }
-
-  private clearAudio(): void {
-    const audio = this.ui.audio;
-    audio.pause();
-    if (audio.hasAttribute("src")) {
-      audio.removeAttribute("src");
-      audio.load();
+  /** Downloads the shown result's MP3 with the token and opens it as the tab's session. */
+  private async loadAudio(auth: StoredAuth, signal: AbortSignal, current: () => boolean): Promise<void> {
+    const target = this.resultAudio;
+    const lessonKey = target?.record.lessonKey ?? this.host.currentLesson();
+    const jobId = target?.record.jobId;
+    if (!target || !jobId || typeof lessonKey !== "string") return;
+    const ui = this.ui;
+    this.loadingAudio = true;
+    this.renderPlayer();
+    try {
+      ui.audioStatus.textContent = "Loading the audio…";
+      let blob: Blob;
+      try {
+        blob = await this.deps.api.getAudio(auth.token, target.path, signal);
+      } catch (error) {
+        if (!current()) return;
+        if (error instanceof MyDubbError && error.isUnauthenticated) return void this.expireAuth(auth);
+        ui.audioStatus.textContent = `The audio could not be loaded: ${jobErrorMessage(error)}`;
+        ui.checkAgain.hidden = false;
+        return;
+      }
+      if (!current()) return;
+      const { operationId, choices } = target.record;
+      const outcome = await this.deps.player.open(
+        {
+          lessonKey,
+          owner: { userId: auth.user.id, connectionId: auth.connectionId, jobId, operationId },
+          // What the job was made with (copied at Generate), never the form as it is now.
+          choices: { languageLabel: choices.languageLabel, voiceLabel: choices.voiceLabel, speed: choices.speed },
+        },
+        blob,
+      );
+      if (!current()) {
+        // Opened for an account, lecture or click this panel no longer shows: not kept.
+        if (outcome.ok) this.deps.player.end(outcome.sessionId);
+        return;
+      }
+      if (!outcome.ok) {
+        ui.audioStatus.textContent =
+          outcome.reason === "revoked"
+            ? CONNECTION_ENDED
+            : "The audio player could not start. Choose Load audio to try again (no new job is created).";
+        return;
+      }
+      ui.audioStatus.textContent = AUDIO_READY;
+    } finally {
+      this.loadingAudio = false;
+      if (!this.disposed) this.checkPlayer();
     }
-    if (this.audioUrl) this.deps.revokeObjectURL(this.audioUrl);
-    this.audioUrl = null;
+  }
+
+  /** Load audio / Use this result: the same download again, never a new job. */
+  private loadByHand(): void {
+    const auth = this.auth;
+    const target = this.resultAudio;
+    if (!auth || !target || this.audioLoad || this.loadingAudio) return;
+    const controller = new AbortController();
+    this.audioLoad = controller;
+    const authGen = this.authGen;
+    const lessonGen = this.lessonGen;
+    const operationId = target.record.operationId;
+    const current = () =>
+      !controller.signal.aborted &&
+      !this.disposed &&
+      authGen === this.authGen &&
+      lessonGen === this.lessonGen &&
+      this.record?.operationId === operationId;
+    void this.loadAudio(auth, controller.signal, current).finally(() => {
+      if (this.audioLoad === controller) this.audioLoad = null;
+      if (!this.disposed) this.renderPlayer();
+    });
+  }
+
+  private switchToResult(): void {
+    // The earlier audio is stopped and released before the new one is loaded.
+    const view = this.sessionView();
+    if (view) this.deps.player.end(view.sessionId);
+    this.loadByHand();
+  }
+
+  private wirePlayer(signal: AbortSignal): void {
+    const ui = this.ui;
+    const player = this.deps.player;
+    const on = (target: HTMLElement, name: string, handler: () => void) => target.addEventListener(name, handler, { signal });
+    on(ui.playerPlay, "click", () => {
+      const view = this.sessionView();
+      if (view) player.command({ command: view.paused || view.ended ? "play" : "pause" });
+    });
+    on(ui.playerBack, "click", () => player.command({ command: "seek-by", value: -PLAYER_SEEK_SECONDS }));
+    on(ui.playerForward, "click", () => player.command({ command: "seek-by", value: PLAYER_SEEK_SECONDS }));
+    on(ui.playerSeek, "input", () => {
+      this.seeking = true;
+      ui.playerTime.textContent = `${formatTime(Number(ui.playerSeek.value))} / ${formatTime(this.sessionView()?.duration ?? null)}`;
+    });
+    on(ui.playerSeek, "change", () => {
+      this.seeking = false;
+      player.command({ command: "seek-to", value: Number(ui.playerSeek.value) });
+    });
+    on(ui.playerFloating, "click", () => {
+      const view = this.sessionView();
+      if (view) player.setFloating(!view.floating);
+    });
+    on(ui.playerSwitch, "click", () => this.switchToResult());
+    on(ui.playerLoad, "click", () => this.loadByHand());
+  }
+
+  /** The tab's content port is (re)connected: a session not linked yet may be linked now. */
+  pageConnected(): void {
+    this.linkedFor = null;
+    this.checkPlayer();
+  }
+
+  private sessionBelongs(view: PanelPlayerView): boolean {
+    const auth = this.auth;
+    const lesson = this.host.currentLesson();
+    return (
+      !!auth &&
+      view.owner.userId === auth.user.id &&
+      view.owner.connectionId === auth.connectionId &&
+      (lesson === undefined || view.lessonKey === lesson)
+    );
+  }
+
+  /** The tab's session, when it belongs to this account connection and lecture. */
+  private sessionView(): PanelPlayerView | null {
+    const view = this.deps.player.view;
+    return view && this.sessionBelongs(view) ? view : null;
+  }
+
+  /** Every change of the session, account or lecture: end what is not ours, link what is. */
+  private checkPlayer(): void {
+    if (!this.restored || this.disposed) return;
+    const view = this.deps.player.view;
+    if (view && !this.sessionBelongs(view)) {
+      this.deps.player.end(view.sessionId);
+    } else if (view && !view.linked && this.linkedFor !== view.sessionId && this.host.currentLesson() === view.lessonKey) {
+      this.linkedFor = view.sessionId;
+      this.host.linkPlayback(view.lessonKey);
+    }
+    const shown = this.sessionView();
+    if (this.hadSession && !shown && this.resultAudio && !this.loadingAudio) {
+      this.ui.audioStatus.textContent =
+        "The player was released (the Udemy tab reloaded, left the lecture or was closed). Choose Load audio to listen again.";
+    }
+    this.hadSession = shown !== null;
+    this.renderPlayer();
+  }
+
+  private renderPlayer(): void {
+    const ui = this.ui;
+    const view = this.sessionView();
+    const result = this.resultAudio;
+    ui.playerSection.hidden = !view && !result;
+    ui.player.hidden = !view;
+    if (view) {
+      const playing = !view.paused && !view.ended;
+      const ready = view.status === "ready";
+      ui.playerInfo.textContent = `Loaded: ${choicesLabel(view.choices)}`;
+      ui.playerPlay.textContent = playing ? "Pause" : "Play";
+      ui.playerPlay.setAttribute("aria-label", playing ? "Pause MyDubb audio" : "Play MyDubb audio");
+      ui.playerPlay.disabled = view.status === "error";
+      ui.playerBack.disabled = !ready;
+      ui.playerForward.disabled = !ready;
+      ui.playerSeek.disabled = !ready || view.duration === null;
+      ui.playerSeek.max = String(view.duration ?? 0);
+      if (!this.seeking) {
+        ui.playerSeek.value = String(view.currentTime);
+        ui.playerTime.textContent = `${formatTime(view.currentTime)} / ${formatTime(view.duration)}`;
+      }
+      ui.playerSeek.setAttribute("aria-valuetext", `${formatTime(view.currentTime)} of ${formatTime(view.duration)}`);
+      ui.playerFloating.textContent = view.floating ? "Hide floating player" : "Show floating player";
+      ui.playerProblem.textContent = view.problem
+        ? PLAYER_PROBLEMS[view.problem]
+        : view.status === "loading"
+          ? "Loading the audio…"
+          : "";
+    }
+    const other = !!view && !!result && result.record.jobId !== view.owner.jobId;
+    ui.playerOther.hidden = !other;
+    if (view && other) {
+      ui.playerOtherText.textContent = `The player still has an earlier result (${choicesLabel(view.choices)}). Use this result stops it and loads the new audio.`;
+    }
+    const busy = this.loadingAudio || this.audioLoad !== null;
+    ui.playerSwitch.disabled = busy;
+    ui.playerLoad.hidden = !result || busy || (!!view && (other || view.status !== "error"));
   }
 
   // ---- Dropping ------------------------------------------------------------------------------
 
-  /** Stop following and showing the current job (never cancels it on the server). */
-  private dropJob(message: string | null): void {
+  /**
+   * Stop following and showing the current job (never cancels it on the server). The tab's
+   * playback session ends too, except for a new Generate (`endPlayback` false).
+   */
+  private dropJob(message: string | null, endPlayback = true): void {
     this.poll?.abort();
     this.poll = null;
-    this.clearAudio();
+    this.audioLoad?.abort();
+    this.audioLoad = null;
+    this.resultAudio = null;
+    if (endPlayback) this.deps.player.end();
     if (this.record) void this.forgetRecord();
     this.record = null;
     this.sendingOp = null;
@@ -930,6 +1140,7 @@ export class Dubbing {
     ui.checkAgain.hidden = true;
     this.renderRecord();
     this.renderGenerate();
+    this.renderPlayer();
     if (message) {
       ui.resultSection.hidden = true;
       ui.formError.textContent = message;

@@ -2,20 +2,18 @@
 // play the MP3 in the panel, against the fake MyDubb server of harness.ts (https://mydubb.test)
 // and the synthetic Udemy fixtures. Local evidence only: not the real udemy.com or mydubb.com.
 
-import type { Page } from "@playwright/test";
-
-import { MYDUBB, allowConnect, expect, openLecture, openPanel, sendTranscriptSelection, sessionGet, test, type FakeMyDubb } from "./harness";
-
-async function connectAccount(panel: Page, mydubb: FakeMyDubb, extensionId: string) {
-  await allowConnect(panel, mydubb, extensionId);
-  await panel.getByRole("button", { name: "Connect MyDubb" }).click();
-  await expect(panel.getByText("Connected as Lan (lan@example.com).")).toBeVisible();
-}
-
-async function fillTimes(panel: Page) {
-  await panel.getByLabel("First Sentence Start Time").fill("000010");
-  await panel.getByLabel("Last Sentence Start Time").fill("000610");
-}
+import {
+  MYDUBB,
+  connectAccount,
+  expect,
+  fillTimes,
+  openLecture,
+  openPanel,
+  playerSessions,
+  sendTranscriptSelection,
+  sessionGet,
+  test,
+} from "./harness";
 
 test("connect, generate with the chosen options and listen in the panel", async ({ context, worker, extensionId, mydubb }) => {
   const { page, tabId } = await openLecture(context, worker, 301);
@@ -65,14 +63,10 @@ test("connect, generate with the chosen options and listen in the panel", async 
   await expect(translation.locator("b")).toHaveCount(0);
   await expect(panel.locator("#job-choices")).toContainText("Emma Multilingual");
   await expect(panel.locator("#job-choices")).toContainText("1.5x");
-  const audio = panel.locator("#result-audio");
-  await expect(audio).toHaveAttribute("src", /^blob:chrome-extension:/);
-  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.readyState)).toBeGreaterThan(0);
-  expect(await audio.evaluate((a: HTMLAudioElement) => ({ paused: a.paused, rate: a.playbackRate, duration: a.duration }))).toMatchObject({
-    paused: true,
-    rate: 1,
-  });
-  expect(await audio.evaluate((a: HTMLAudioElement) => a.duration)).toBeGreaterThan(0);
+  // The panel has no audio element of its own: the tab's session plays in the offscreen document.
+  expect(await panel.locator("audio").count()).toBe(0);
+  await expect.poll(async () => (await playerSessions(worker))[0]?.duration ?? 0).toBeGreaterThan(0);
+  expect(await playerSessions(worker)).toMatchObject([{ tabId, paused: true, rate: 1, blobSrc: true }]);
   // The audio was fetched with the token, not by the <audio> element itself.
   const [audioGet] = mydubb.gets("/api/jobs/job-1/result/audio");
   expect(audioGet?.headers.authorization).toBe(`Bearer ${auth.token}`);
@@ -80,10 +74,12 @@ test("connect, generate with the chosen options and listen in the panel", async 
   // Story 1 controls still drive the Udemy video, separately from the MyDubb player.
   await panel.getByRole("button", { name: "Play video" }).click();
   await expect.poll(() => page.evaluate(() => window.fixture.state()!.paused)).toBe(false);
-  expect(await audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(true);
-  await audio.evaluate((a: HTMLAudioElement) => a.play());
-  await expect.poll(() => audio.evaluate((a: HTMLAudioElement) => a.paused)).toBe(false);
-  expect(await audio.evaluate((a: HTMLAudioElement) => a.playbackRate)).toBe(1);
+  expect((await playerSessions(worker))[0]?.paused).toBe(true);
+  await panel.getByRole("button", { name: "Play MyDubb audio" }).click();
+  await expect.poll(async () => (await playerSessions(worker))[0]?.paused).toBe(false);
+  expect((await playerSessions(worker))[0]?.rate).toBe(1);
+  // And the MyDubb player never touches the video's volume, mute or rate.
+  expect(await page.evaluate(() => window.fixture.state())).toMatchObject({ muted: false, volume: 1, rate: 1 });
 });
 
 test("closing the panel neither cancels nor resends; reopening and reloading resume the job", async ({ context, worker, extensionId, mydubb }) => {
@@ -115,7 +111,12 @@ test("closing the panel neither cancels nor resends; reopening and reloading res
   await panel.getByLabel("Audio speed").selectOption("2");
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.locator("#job-choices")).toContainText("2x");
-  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible({ timeout: 20_000 });
+  // The audio loaded for the first job stays until the user switches to the new result.
+  await expect(panel.getByText(/new result is ready/)).toBeVisible({ timeout: 20_000 });
+  expect(mydubb.gets("/api/jobs/job-2/result/audio")).toHaveLength(0);
+  await panel.getByRole("button", { name: "Use this result" }).click();
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  await expect(panel.locator("#player-info")).toHaveText("Loaded: Vietnamese · Andrew Multilingual · 2x");
   expect(mydubb.posts("/api/jobs")).toHaveLength(2);
 });
 
@@ -163,7 +164,7 @@ test("a job of lecture A is never shown under lecture B, nor in another tab", as
   mydubb.advance = true;
   await panelA.waitForTimeout(1500);
   expect(mydubb.gets("/api/jobs/job-1/result")).toHaveLength(0);
-  await expect(panelA.locator("#result-audio")).not.toHaveAttribute("src", /.+/);
+  expect(await playerSessions(worker)).toEqual([]);
   expect(await sessionGet(worker, `job:${a.tabId}`)).toBeNull();
   await expect(panelB.locator("#result-section")).toBeHidden();
 });
@@ -182,7 +183,7 @@ test("disconnecting or an ended session clears every panel and its result", asyn
   await panelB.getByRole("button", { name: "Disconnect" }).click();
   await expect(panelA.getByRole("button", { name: "Connect MyDubb" })).toBeVisible();
   await expect(panelA.locator("#result-section")).toBeHidden();
-  await expect(panelA.locator("#result-audio")).not.toHaveAttribute("src", /.+/);
+  await expect.poll(() => playerSessions(worker)).toEqual([]);
   await expect(panelA.getByRole("button", { name: "Generate audio" })).toBeDisabled();
   expect(await sessionGet(worker, "auth")).toBeNull();
   await expect.poll(() => mydubb.posts("/api/extension/logout").length).toBe(1);
