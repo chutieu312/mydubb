@@ -8,6 +8,7 @@ import type { PanelPlayerView, PlayerCommand } from "../shared/playback";
 import { Dubbing, type DubbingDeps } from "./dubbing";
 import type { JobRecord } from "./jobs";
 import type { OpenOutcome, OpenRequest, PanelPlayer } from "./player";
+import { NO_SYNC } from "../shared/testSync";
 
 const html = readFileSync(join(__dirname, "../../static/sidepanel.html"), "utf8");
 const TAB = 7;
@@ -85,6 +86,7 @@ class FakePlayer implements PanelPlayer {
   readonly ended: (string | undefined)[] = [];
   readonly commands: PlayerCommand[] = [];
   readonly floating: boolean[] = [];
+  readonly syncs: boolean[] = [];
   disposed = false;
   nextOutcome: OpenOutcome | null = null;
   private readonly listeners: (() => void)[] = [];
@@ -108,6 +110,7 @@ class FakePlayer implements PanelPlayer {
       problem: null,
       choices: request.choices,
       floating: false,
+      sync: NO_SYNC,
       owner: request.owner,
       linked: false,
     });
@@ -119,6 +122,9 @@ class FakePlayer implements PanelPlayer {
   setFloating(visible: boolean): void {
     this.floating.push(visible);
     if (this.view) this.set({ ...this.view, floating: visible });
+  }
+  setSync(on: boolean): void {
+    this.syncs.push(on);
   }
   end(sessionId?: string): void {
     this.ended.push(sessionId);
@@ -291,6 +297,8 @@ describe("job and result", () => {
       lessonKey: LESSON,
       owner: { userId: "u1", connectionId: "conn-a", jobId: "job-1", operationId: "id-1" },
       choices: { languageLabel: "Arabic", voiceLabel: "Andrew Multilingual", speed: 1 },
+      // The result says 1.5x while the click sent 1x: the span is not confirmed, so no Sync.
+      sync: null,
     });
     // The form changing later does not change what the player says the file was made with.
     choose("speed", "2");
@@ -392,6 +400,7 @@ describe("job and result", () => {
       problem: null,
       choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1.5 },
       floating: true,
+      sync: NO_SYNC,
       owner: { userId: "u1", connectionId: "conn-a", jobId: "job-1", operationId: "op-1" },
       linked: true,
     };
@@ -416,6 +425,7 @@ describe("job and result", () => {
       problem: null,
       choices: { languageLabel: "Vietnamese", voiceLabel: "Andrew", speed: 1 },
       floating: false,
+      sync: NO_SYNC,
       owner: { userId: "u1", connectionId: "conn-old", jobId: "job-9", operationId: "op-9" },
       linked: true,
     };
@@ -719,5 +729,133 @@ describe("audio download", () => {
     await settle(12);
     expect(player.opened).toHaveLength(1);
     expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Sync with video", () => {
+  const PLAIN_RESULT = { ...RESULT, baseline_duration_seconds: 46, speed: 1.5, output_duration_seconds: 46 / 1.5 };
+  const SYNC_VIEW = (status: string, confirmed = false) => ({
+    status,
+    unavailable: status === "unavailable" ? "length-mismatch" : null,
+    start: 10,
+    end: 56,
+    duration: 30.563,
+    rate: 46 / 30.563,
+    confirmed,
+    notice: null,
+  });
+
+  async function generate(api = fakeApi({ getResult: vi.fn(async () => PLAIN_RESULT) })) {
+    const made = await started(undefined, api);
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000056");
+    choose("speed", "1.5");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    return made;
+  }
+
+  it("plain: keeps the click's two start times with the job and hands them to the player", async () => {
+    const { storage } = await generate();
+    const record = storage.data[`job:${TAB}`] as JobRecord;
+    expect(record.choices.sync).toEqual({ mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 });
+    expect(player.opened[0]!.request.sync).toEqual({ mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 });
+    // A form edit after Generate is not the job's span.
+    typeTime("first-start", "000001");
+    expect((storage.data[`job:${TAB}`] as JobRecord).choices.sync?.start).toBe(10);
+  });
+
+  it("timed: the first and last caption with milliseconds, and the changed baseline of the fields", async () => {
+    const result = {
+      ...RESULT,
+      baseline_duration_seconds: 46,
+      speed: 1.5,
+      timing: { mode: "timed", source_first_seconds: 10.25, source_last_seconds: 40.25, source_baseline_seconds: 30, selected_baseline_seconds: 46 },
+    };
+    const { dubbing, storage } = await started(undefined, fakeApi({ getResult: vi.fn(async () => result) }));
+    transcript = "0:10.250\nHello.\n0:25\nMiddle.\n0:40.250\nLast.";
+    dubbing.transcriptChanged();
+    expect($<HTMLInputElement>("last-start").value).toBe("00:00:40");
+    typeTime("last-start", "000056");
+    choose("speed", "1.5");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    const expected = { mode: "timed", start: 10.25, end: 40.25, baseline: 46, speed: 1.5 };
+    expect((storage.data[`job:${TAB}`] as JobRecord).choices.sync).toEqual(expected);
+    expect(player.opened[0]!.request.sync).toEqual(expected);
+  });
+
+  it("drops the span when the server's result disagrees with the click (another caption span, baseline or speed)", async () => {
+    const result = {
+      ...RESULT,
+      baseline_duration_seconds: 30,
+      speed: 1,
+      timing: { mode: "timed", source_first_seconds: 10.25, source_last_seconds: 41, source_baseline_seconds: 30.75, selected_baseline_seconds: 30 },
+    };
+    const { dubbing } = await started(undefined, fakeApi({ getResult: vi.fn(async () => result) }));
+    transcript = "0:10.250\nHello.\n0:40.250\nLast.";
+    dubbing.transcriptChanged();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(player.opened[0]!.request.sync).toBeNull();
+    // A plain click whose result says timed is not trusted either.
+    expect(player.opened).toHaveLength(1);
+  });
+
+  it("a job record from before Sync existed still plays, without a span (no guess from the form)", async () => {
+    const record: JobRecord = {
+      operationId: "op-1",
+      userId: "u1",
+      connectionId: "conn-a",
+      lessonKey: LESSON,
+      state: "created",
+      jobId: "job-1",
+      sentAt: 0,
+      choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1.5, timed: false, firstStart: "00:00:10", lastStart: "00:00:56" },
+    };
+    const form = { lessonKey: LESSON, firstStart: "00:00:10", lastStart: "00:00:56", ignoreTimestamps: false, targetLanguage: "arabic", voice: "", speed: 1.5, filledFrom: null };
+    await started(
+      fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record, [`form:${TAB}`]: form }),
+      fakeApi({ getResult: vi.fn(async () => PLAIN_RESULT) }),
+    );
+    await settle(12);
+    expect(player.opened).toHaveLength(1);
+    expect(player.opened[0]!.request.sync).toBeNull();
+  });
+
+  it("explains before the first time, then turns Sync on and off through the player", async () => {
+    await generate();
+    const view = player.view!;
+    player.set({ ...view, sync: SYNC_VIEW("off") as PanelPlayerView["sync"] });
+    expect($("sync-status").textContent).toBe("Sync with video: OFF");
+    expect($<HTMLButtonElement>("sync-toggle").disabled).toBe(false);
+    $<HTMLButtonElement>("sync-toggle").click();
+    expect($("sync-confirm").hidden).toBe(false);
+    expect($("sync-preview").textContent).toBe(
+      "Video 0:10 → 0:56 (46 s), MP3 30.563 s, video speed 1.505x. The video is muted: the MyDubb audio replaces the spoken part. The timing is an estimate, not word by word.",
+    );
+    expect(player.syncs).toEqual([]);
+    $<HTMLButtonElement>("sync-cancel").click();
+    expect($("sync-confirm").hidden).toBe(true);
+    expect(player.syncs).toEqual([]);
+    $<HTMLButtonElement>("sync-toggle").click();
+    $<HTMLButtonElement>("sync-on").click();
+    expect(player.syncs).toEqual([true]);
+    player.set({ ...player.view!, sync: SYNC_VIEW("playing", true) as PanelPlayerView["sync"] });
+    expect($("sync-status").textContent).toBe("Sync with video: ON · Playing");
+    expect($("sync-toggle").textContent).toBe("Turn off sync");
+    expect($("sync-toggle").getAttribute("aria-pressed")).toBe("true");
+    $<HTMLButtonElement>("sync-toggle").click();
+    expect(player.syncs).toEqual([true, false]);
+    // Confirmed once for this session: on again directly.
+    player.set({ ...player.view!, sync: { ...(SYNC_VIEW("off", true) as PanelPlayerView["sync"]), notice: "rate-changed" } });
+    expect($("sync-notice").textContent).toContain("the video speed changed from");
+    $<HTMLButtonElement>("sync-toggle").click();
+    expect(player.syncs).toEqual([true, false, true]);
+    expect($("sync-confirm").hidden).toBe(true);
+    // Unavailable: the reason, and no way to turn it on.
+    player.set({ ...player.view!, sync: SYNC_VIEW("unavailable") as PanelPlayerView["sync"] });
+    expect($("sync-status").textContent).toMatch(/^Sync unavailable: the MP3 length does not match/);
+    expect($<HTMLButtonElement>("sync-toggle").disabled).toBe(true);
   });
 });

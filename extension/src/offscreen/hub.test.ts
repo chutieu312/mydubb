@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PanelPlayerView, PlaybackOwner, PlayerToPage, PlayerToPanel } from "../shared/playback";
+import type { SyncSource } from "../shared/sync";
 import { PlaybackHub, type AudioLike, type HubDeps, type HubPort } from "./hub";
 
 const EXT = "abcdefghijklmnopabcdefghijklmnop";
@@ -127,14 +128,14 @@ const lastView = (port: FakePort<PlayerToPanel>) => {
 };
 
 /** A panel bound to `tabId` with an opened session; returns the ports and the audio. */
-function opened(hub: PlaybackHub, tabId = 4, owner = OWNER, lessonKey = LESSON) {
+function opened(hub: PlaybackHub, tabId = 4, owner = OWNER, lessonKey = LESSON, sync: SyncSource | null = null, duration = 180) {
   const panel = panelPort(tabId);
   hub.acceptPanel(panel);
   panel.receive({ type: "watch", tabId });
-  panel.receive({ type: "open", tabId, transferId: `t-${tabId}-${owner.jobId}`, lessonKey, owner, choices: CHOICES });
+  panel.receive({ type: "open", tabId, transferId: `t-${tabId}-${owner.jobId}`, lessonKey, owner, choices: CHOICES, sync });
   hub.receiveAudio({ transferId: `t-${tabId}-${owner.jobId}`, blob: blob() });
   const audio = audios.at(-1)!;
-  audio.loaded();
+  audio.loaded(duration);
   return { panel, audio, sessionId: lastView(panel)!.sessionId };
 }
 
@@ -159,7 +160,7 @@ describe("opening a session", () => {
     hub.acceptPanel(panel);
     panel.receive({ type: "watch", tabId: 4 });
     expect(panel.last()).toEqual({ type: "state", tabId: 4, view: null });
-    panel.receive({ type: "open", tabId: 4, transferId: "t1", lessonKey: LESSON, owner: OWNER, choices: CHOICES });
+    panel.receive({ type: "open", tabId: 4, transferId: "t1", lessonKey: LESSON, owner: OWNER, choices: CHOICES, sync: null });
     expect(panel.last()).toEqual({ type: "send-audio", tabId: 4, transferId: "t1" });
     // A Blob nobody asked for, or of the wrong type, is ignored or refused.
     hub.receiveAudio({ transferId: "other", blob: blob() });
@@ -182,7 +183,7 @@ describe("opening a session", () => {
     const panel = panelPort(4);
     hub.acceptPanel(panel);
     panel.receive({ type: "watch", tabId: 4 });
-    panel.receive({ type: "open", tabId: 4, transferId: "t1", lessonKey: LESSON, owner: OWNER, choices: CHOICES });
+    panel.receive({ type: "open", tabId: 4, transferId: "t1", lessonKey: LESSON, owner: OWNER, choices: CHOICES, sync: null });
     hub.receiveAudio({ transferId: "t1", blob: new Blob(["<html>"], { type: "text/html" }) });
     expect(panel.last()).toEqual({ type: "open-failed", tabId: 4, transferId: "t1", reason: "invalid-audio" });
     expect(audios).toHaveLength(0);
@@ -193,7 +194,7 @@ describe("opening a session", () => {
     const panel = panelPort(4);
     hub.acceptPanel(panel);
     panel.receive({ type: "watch", tabId: 4 });
-    panel.receive({ type: "open", tabId: 4, transferId: "t1", lessonKey: LESSON, owner: OWNER, choices: CHOICES });
+    panel.receive({ type: "open", tabId: 4, transferId: "t1", lessonKey: LESSON, owner: OWNER, choices: CHOICES, sync: null });
     for (const fn of [...timers.values()]) fn();
     expect(panel.sent.some((m) => m.type === "open-failed" && m.reason === "timeout")).toBe(true);
   });
@@ -202,7 +203,7 @@ describe("opening a session", () => {
     const hub = makeHub();
     const { panel, audio } = opened(hub);
     void audio.play();
-    panel.receive({ type: "open", tabId: 4, transferId: "t2", lessonKey: LESSON, owner: { ...OWNER, jobId: "job-2" }, choices: CHOICES });
+    panel.receive({ type: "open", tabId: 4, transferId: "t2", lessonKey: LESSON, owner: { ...OWNER, jobId: "job-2" }, choices: CHOICES, sync: null });
     hub.receiveAudio({ transferId: "t2", blob: blob() });
     expect(audio.paused).toBe(true);
     expect(audio.src).toBe("");
@@ -289,7 +290,11 @@ describe("playback", () => {
     // The page's view carries display state only.
     const view = (page.last() as unknown as { view: Record<string, unknown> }).view;
     expect(Object.keys(view).sort()).toEqual(
-      ["choices", "currentTime", "duration", "ended", "floating", "lessonKey", "paused", "problem", "sessionId", "status"].sort(),
+      ["choices", "currentTime", "duration", "ended", "floating", "lessonKey", "paused", "problem", "sessionId", "status", "sync"].sort(),
+    );
+    // The sync part is numbers and states only.
+    expect(Object.keys(view.sync as object).sort()).toEqual(
+      ["confirmed", "duration", "end", "notice", "rate", "start", "status", "unavailable"].sort(),
     );
     panel.receive({ type: "command", tabId: 4, sessionId, command: "pause" });
     expect(audio.paused).toBe(true);
@@ -408,7 +413,7 @@ describe("ending sessions", () => {
     const panel = panelPort(4);
     hub.acceptPanel(panel);
     panel.receive({ type: "watch", tabId: 4 });
-    panel.receive({ type: "open", tabId: 4, transferId: "late", lessonKey: LESSON, owner: OWNER, choices: CHOICES });
+    panel.receive({ type: "open", tabId: 4, transferId: "late", lessonKey: LESSON, owner: OWNER, choices: CHOICES, sync: null });
     expect(panel.last()).toEqual({ type: "open-failed", tabId: 4, transferId: "late", reason: "revoked" });
     hub.onWorkerMessage({ type: "mydubb:player-identity", connectionId: null }, worker);
     expect(hub.tabs.size).toBe(0);
@@ -435,7 +440,7 @@ describe("ending sessions", () => {
     expect(timers.size).toBe(0);
     panel.receive({ type: "end", tabId: 4, sessionId: null });
     expect(timers.size).toBe(1);
-    panel.receive({ type: "open", tabId: 4, transferId: "t9", lessonKey: LESSON, owner: OWNER, choices: CHOICES });
+    panel.receive({ type: "open", tabId: 4, transferId: "t9", lessonKey: LESSON, owner: OWNER, choices: CHOICES, sync: null });
     // Only the transfer's own timeout is pending now, not the idle close.
     expect(closed).toBe(0);
     hub.receiveAudio({ transferId: "t9", blob: blob() });
@@ -443,5 +448,207 @@ describe("ending sessions", () => {
     panel.receive({ type: "end", tabId: 4, sessionId: null });
     for (const fn of [...timers.values()]) fn();
     expect(closed).toBe(1);
+  });
+});
+
+describe("Sync with video", () => {
+  const SOURCE: SyncSource = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
+  const WORKER = { id: EXT, url: `chrome-extension://${EXT}/background.js` };
+  const SAMPLE = { currentTime: 20, paused: false, waiting: false, rate: 1.5, hidden: false };
+  const settle = async () => {
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+  };
+  const videoOps = (page: FakePort<PlayerToPage>) =>
+    page.sent.filter((m): m is Extract<PlayerToPage, { type: "video" }> => m.type === "video");
+  const answer = (page: FakePort<PlayerToPage>, currentTime = 10) => {
+    const op = videoOps(page).at(-1)!;
+    page.receive({
+      type: "video-reply",
+      syncId: op.syncId,
+      cmdId: op.cmdId,
+      ok: true,
+      error: null,
+      video: { currentTime, paused: true, waiting: false, rate: 1.5, hidden: false },
+    });
+  };
+
+  /** A linked session of `tabId` with Sync turned on from the panel. */
+  async function synced(hub: PlaybackHub, tabId = 4) {
+    const { panel, audio, sessionId } = opened(hub, tabId, { ...OWNER, jobId: `job-${tabId}` }, LESSON, SOURCE, 30.6);
+    const page = linkPage(hub, tabId);
+    expect(lastView(panel)?.sync.status).toBe("off");
+    panel.receive({ type: "sync", tabId, sessionId, on: true });
+    await settle();
+    expect(videoOps(page).at(-1)).toMatchObject({ op: "attach", start: 10, end: 56 });
+    answer(page);
+    await settle();
+    expect(lastView(panel)?.sync.status).toBe("paused");
+    return { panel, page, audio, sessionId };
+  }
+
+  async function playBoth(s: Awaited<ReturnType<typeof synced>>, tabId = 4) {
+    s.panel.receive({ type: "command", tabId, sessionId: s.sessionId, command: "play" });
+    await settle();
+    expect(videoOps(s.page).at(-1)?.op).toBe("seek");
+    answer(s.page);
+    await settle();
+    expect(videoOps(s.page).at(-1)?.op).toBe("play");
+    answer(s.page);
+    await settle();
+    expect(s.audio.paused).toBe(false);
+  }
+
+  it("a session opened without a span cannot sync; with one, either remote control turns it on", async () => {
+    const hub = makeHub();
+    const { panel, sessionId } = opened(hub, 4);
+    const page = linkPage(hub, 4);
+    expect(lastView(panel)?.sync).toMatchObject({ status: "unavailable", unavailable: "no-metadata" });
+    panel.receive({ type: "sync", tabId: 4, sessionId, on: true });
+    await settle();
+    expect(videoOps(page)).toEqual([]);
+    // From the page (floating player), for its own lecture only.
+    const other = makeHub();
+    const second = opened(other, 5, OWNER, LESSON, SOURCE, 30.6);
+    const page5 = linkPage(other, 5);
+    page5.receive({ type: "sync", sessionId: second.sessionId, lessonKey: LESSON, on: true });
+    await settle();
+    expect(videoOps(page5).at(-1)?.op).toBe("attach");
+  });
+
+  it("Play from the panel plays both; Close on the page pauses both", async () => {
+    const hub = makeHub();
+    const s = await synced(hub);
+    await playBoth(s);
+    s.page.receive({ type: "close", sessionId: s.sessionId, lessonKey: LESSON });
+    expect(s.audio.paused).toBe(true);
+    expect(videoOps(s.page).at(-1)?.op).toBe("pause");
+    expect(lastView(s.panel)).toMatchObject({ floating: false, sync: { status: "paused" } });
+  });
+
+  it("playing in tab B pauses tab A's audio and A's synced video, never B's page", async () => {
+    const hub = makeHub();
+    const a = await synced(hub, 4);
+    await playBoth(a);
+    const b = opened(hub, 6, { ...OWNER, jobId: "job-6" });
+    const pageB = linkPage(hub, 6);
+    b.panel.receive({ type: "command", tabId: 6, sessionId: b.sessionId, command: "play" });
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    expect(a.audio.paused).toBe(true);
+    expect(videoOps(a.page).at(-1)?.op).toBe("pause");
+    expect(lastView(a.panel)?.sync).toMatchObject({ status: "paused", notice: "other-tab" });
+    expect(videoOps(pageB)).toEqual([]);
+  });
+
+  it("ending the session gives the video back first: lecture change, closed tab, account change, another result, another page", async () => {
+    for (const end of ["lesson", "tab", "identity", "replace", "second-page"] as const) {
+      const hub = makeHub();
+      const { panel, page, sessionId } = await synced(hub);
+      const syncId = videoOps(page)[0]!.syncId;
+      if (end === "lesson") page.receive({ type: "lesson", lessonKey: "demo-course/2" });
+      if (end === "tab") hub.onWorkerMessage({ type: "mydubb:player-tab-closed", tabId: 4 }, WORKER);
+      if (end === "identity") hub.onWorkerMessage({ type: "mydubb:player-identity", connectionId: "conn-b" }, WORKER);
+      if (end === "replace") {
+        panel.receive({ type: "open", tabId: 4, transferId: "t-new", lessonKey: LESSON, owner: { ...OWNER, jobId: "job-9" }, choices: CHOICES, sync: SOURCE });
+        hub.receiveAudio({ transferId: "t-new", blob: blob() });
+      }
+      if (end === "second-page") linkPage(hub, 4);
+      expect(page.sent.some((m) => m.type === "video" && m.op === "release" && m.syncId === syncId)).toBe(true);
+      if (end === "second-page") expect(lastView(panel)?.sync).toMatchObject({ status: "off", notice: "video-replaced" });
+      else expect(lastView(panel)?.sessionId ?? null).not.toBe(sessionId);
+    }
+  });
+
+  it("drops malformed or foreign video messages from the page", async () => {
+    const hub = makeHub();
+    const { panel, page, audio } = await synced(hub);
+    const syncId = videoOps(page)[0]!.syncId;
+    page.receive({ type: "video-event", syncId, event: "user-play", video: { currentTime: "x" } });
+    page.receive({ type: "video-event", syncId: "other", event: "user-play", video: SAMPLE });
+    page.receive({ type: "video-event", syncId, event: "do-anything", video: SAMPLE });
+    await settle();
+    expect(audio.paused).toBe(true);
+    page.receive({ type: "video-event", syncId, event: "user-play", video: SAMPLE });
+    await settle();
+    expect(audio.paused).toBe(false);
+    expect(lastView(panel)?.sync.status).toBe("playing");
+  });
+});
+
+describe("one MyDubb audio at a time, however playback starts", () => {
+  const SOURCE: SyncSource = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
+  const settle = async () => {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  };
+  const videoOps = (page: FakePort<PlayerToPage>) =>
+    page.sent.filter((m): m is Extract<PlayerToPage, { type: "video" }> => m.type === "video");
+  const answer = (page: FakePort<PlayerToPage>, currentTime = 10) => {
+    const op = videoOps(page).at(-1)!;
+    page.receive({ type: "video-reply", syncId: op.syncId, cmdId: op.cmdId, ok: true, error: null, video: { currentTime, paused: true, waiting: false, rate: 1.5, hidden: false } });
+  };
+  async function synced(hub: PlaybackHub, tabId: number) {
+    const s = opened(hub, tabId, { ...OWNER, jobId: `job-${tabId}` }, LESSON, SOURCE, 30.6);
+    const page = linkPage(hub, tabId);
+    s.panel.receive({ type: "sync", tabId, sessionId: s.sessionId, on: true });
+    await settle();
+    answer(page);
+    await settle();
+    return { ...s, page, syncId: videoOps(page)[0]!.syncId };
+  }
+  async function playFromPanel(s: Awaited<ReturnType<typeof synced>>, tabId: number) {
+    s.panel.receive({ type: "command", tabId, sessionId: s.sessionId, command: "play" });
+    await settle();
+    answer(s.page);
+    await settle();
+    answer(s.page);
+    await settle();
+    expect(s.audio.paused).toBe(false);
+  }
+  const userPlay = (s: Awaited<ReturnType<typeof synced>>, at = 20) =>
+    s.page.receive({ type: "video-event", syncId: s.syncId, event: "user-play", video: { currentTime: at, paused: false, waiting: false, rate: 1.5, hidden: false } });
+
+  it("Play directly on video B pauses tab A's audio and synced video; each keeps its position", async () => {
+    const hub = makeHub();
+    const a = await synced(hub, 4);
+    const b = await synced(hub, 6);
+    await playFromPanel(a, 4);
+    a.audio.currentTime = 7;
+    userPlay(b, 25);
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    expect(a.audio.paused).toBe(true);
+    expect(videoOps(a.page).at(-1)?.op).toBe("pause");
+    expect(lastView(a.panel)?.sync).toMatchObject({ status: "paused", notice: "other-tab" });
+    expect(a.audio.currentTime).toBe(7);
+    expect(b.audio.currentTime).toBeCloseTo(15 / (46 / 30.6), 6);
+    expect(audios.filter((x) => !x.paused)).toHaveLength(1);
+  });
+
+  it("tab A with Sync off is paused as well", async () => {
+    const hub = makeHub();
+    const b = await synced(hub, 6);
+    const a = opened(hub, 4);
+    linkPage(hub, 4);
+    a.panel.receive({ type: "command", tabId: 4, sessionId: a.sessionId, command: "play" });
+    await settle();
+    expect(a.audio.paused).toBe(false);
+    userPlay(b);
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    expect(a.audio.paused).toBe(true);
+  });
+
+  it("a play from outside MyDubb's controls (media keys) in A pauses B, synced or not", async () => {
+    const hub = makeHub();
+    const b = await synced(hub, 6);
+    userPlay(b);
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    const a = opened(hub, 4);
+    linkPage(hub, 4);
+    await a.audio.play();
+    await settle();
+    expect(b.audio.paused).toBe(true);
+    expect(videoOps(b.page).at(-1)?.op).toBe("pause");
   });
 });

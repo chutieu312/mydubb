@@ -17,6 +17,8 @@ const hub = new PlaybackHub({
   setTimeout: (fn, ms) => window.setTimeout(fn, ms),
   clearTimeout: (id) => window.clearTimeout(id),
   close: () => window.close(),
+  // Numbers and op/event names only: what the Udemy video did to the rate, when (to debug Sync).
+  log: (entry) => console.debug("MyDubb sync", JSON.stringify(entry)),
 });
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -28,7 +30,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Browser tests only (dist-test/): what is playing, read from the real media elements.
   if (__MYDUBB_E2E__ && (message as { type?: unknown } | null)?.type === "mydubbE2E:inspect") {
     sendResponse(
-      [...hub.tabs].map(([tabId, { audio, view }]) => ({
+      [...hub.tabs].map(([tabId, { audio, view, drift, trace }]) => ({
         tabId,
         paused: audio.paused,
         currentTime: audio.currentTime,
@@ -38,6 +40,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         floating: view.floating,
         lessonKey: view.lessonKey,
         audioElements: document.querySelectorAll("audio").length,
+        sync: view.sync,
+        drift,
+        trace,
       })),
     );
     return false;

@@ -2,6 +2,7 @@
 // the tab's side panel asks (after a session exists for this lecture), it keeps the content
 // script's lecture watch running even with the panel closed, so a lecture change, a reload or
 // leaving the page always ends the session instead of letting the audio play on elsewhere.
+// With Sync with video on, it also runs the coordinator's video operations (sync.ts).
 
 import {
   isPlayerToPage,
@@ -10,6 +11,7 @@ import {
   type PlayerView,
 } from "../shared/playback";
 import type { FloatingActions } from "./floating";
+import { VideoSync } from "./sync";
 
 /** The subset of chrome.runtime.Port used here. */
 export interface PlayerPort {
@@ -35,11 +37,21 @@ export class PlaybackLink {
   private lessonKey: string | null = null;
   private view: PlayerView | null = null;
   private player: FloatingView | null = null;
+  private readonly sync: VideoSync | null;
 
   constructor(
     private readonly env: LinkEnv,
     private readonly onEnd: () => void,
-  ) {}
+    /** The lecture video the content script identified; absent: no Sync with video. */
+    video?: { doc: Document; current(): HTMLVideoElement | null },
+  ) {
+    this.sync = video ? new VideoSync({ ...video, send: (message) => this.post(message) }) : null;
+  }
+
+  /** The identified video may have changed: a synced one that is no longer it ends the sync. */
+  videoChanged(): void {
+    this.sync?.check();
+  }
 
   get active(): boolean {
     return this.port !== null;
@@ -60,6 +72,7 @@ export class PlaybackLink {
     port.onMessage.addListener((message) => {
       if (this.port !== port || !isPlayerToPage(message)) return;
       if (message.type === "ended") return this.end();
+      if (message.type === "video") return this.sync?.handle(message);
       // Never shown for another lecture than the one this page links.
       if (message.view.lessonKey !== this.lessonKey) return this.end();
       this.view = message.view;
@@ -84,6 +97,7 @@ export class PlaybackLink {
     this.port = null;
     this.lessonKey = null;
     this.view = null;
+    this.sync?.release();
     this.player?.hide();
     try {
       port.disconnect();
@@ -99,6 +113,10 @@ export class PlaybackLink {
       close: () => {
         const view = this.view;
         if (view && this.lessonKey) this.post({ type: "close", sessionId: view.sessionId, lessonKey: this.lessonKey });
+      },
+      sync: (on) => {
+        const view = this.view;
+        if (view && this.lessonKey) this.post({ type: "sync", sessionId: view.sessionId, lessonKey: this.lessonKey, on });
       },
     });
     return this.player;

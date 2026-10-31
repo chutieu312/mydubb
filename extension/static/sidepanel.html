@@ -126,7 +126,7 @@
 
       <section id="player-section" aria-labelledby="player-heading" hidden>
         <h2 id="player-heading">MyDubb player</h2>
-        <p class="hint">Plays the MyDubb audio only; it does not control the Udemy video. It keeps playing when this panel is closed.</p>
+        <p class="hint">Plays the MyDubb audio; it keeps playing when this panel is closed. It moves the Udemy video only while Sync with video is on.</p>
         <div id="player" role="group" aria-labelledby="player-heading" hidden>
           <p id="player-info" class="status"></p>
           <input id="player-seek" class="seek" type="range" min="0" step="0.1" value="0" aria-label="Position in the MyDubb audio" />
@@ -139,6 +139,20 @@
           <p id="player-problem" class="error" role="alert"></p>
           <div class="row">
             <button id="player-floating" type="button">Show floating player</button>
+          </div>
+          <div id="sync" class="sync" role="group" aria-label="Sync with video">
+            <p id="sync-status" class="status" role="status" aria-live="polite"></p>
+            <div class="row">
+              <button id="sync-toggle" type="button" aria-pressed="false">Sync with video</button>
+            </div>
+            <div id="sync-confirm" class="confirm" hidden>
+              <p id="sync-preview"></p>
+              <div class="row">
+                <button id="sync-on" type="button" class="primary">Turn on sync</button>
+                <button id="sync-cancel" type="button">Cancel</button>
+              </div>
+            </div>
+            <p id="sync-notice" class="error" role="alert"></p>
           </div>
         </div>
         <div id="player-other" class="confirm" hidden>

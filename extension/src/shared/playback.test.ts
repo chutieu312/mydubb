@@ -8,6 +8,7 @@ import {
   isPanelToPlayer,
   isPlaybackLinkMessage,
   isPlayerToPage,
+  isVideoCommand,
   isWorkerToPlayer,
 } from "./playback";
 
@@ -17,8 +18,8 @@ const CHOICES = { languageLabel: "Vietnamese", voiceLabel: "Andrew", speed: 1.5 
 describe("message validators", () => {
   it("accepts the panel's messages and bounded commands only", () => {
     expect(isPanelToPlayer({ type: "watch", tabId: 3 })).toBe(true);
-    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES })).toBe(true);
-    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: { ...OWNER, jobId: "" }, choices: CHOICES })).toBe(false);
+    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES, sync: null })).toBe(true);
+    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: { ...OWNER, jobId: "" }, choices: CHOICES, sync: null })).toBe(false);
     expect(isPanelToPlayer({ type: "command", tabId: 3, sessionId: "s", command: "play" })).toBe(true);
     expect(isPanelToPlayer({ type: "command", tabId: 3, sessionId: "s", command: "play", value: 1 })).toBe(false);
     expect(isPanelToPlayer({ type: "command", tabId: 3, sessionId: "s", command: "seek-by", value: 5 })).toBe(true);
@@ -69,5 +70,27 @@ describe("helpers", () => {
 
   it("labels the file's choices", () => {
     expect(choicesLabel(CHOICES)).toBe("Vietnamese · Andrew · 1.5x");
+  });
+
+  it("Sync with video: bounded video operations, replies and events; a span only as numbers", () => {
+    const sample = { currentTime: 12.5, paused: false, waiting: false, rate: 1.5, hidden: false };
+    const span = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
+    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES, sync: span })).toBe(true);
+    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES, sync: { ...span, end: 5 } })).toBe(false);
+    expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES })).toBe(false);
+    expect(isPanelToPlayer({ type: "sync", tabId: 3, sessionId: "s", on: true })).toBe(true);
+    expect(isPanelToPlayer({ type: "sync", tabId: 3, sessionId: "s", on: "yes" })).toBe(false);
+    expect(isPageToPlayer({ type: "sync", sessionId: "s", lessonKey: "c/1", on: false })).toBe(true);
+    expect(isPageToPlayer({ type: "sync", sessionId: "s", on: false })).toBe(false);
+    expect(isPageToPlayer({ type: "video-reply", syncId: "x", cmdId: 1, ok: true, error: null, video: sample })).toBe(true);
+    expect(isPageToPlayer({ type: "video-reply", syncId: "x", cmdId: 1, ok: false, error: "rm -rf", video: null })).toBe(false);
+    expect(isPageToPlayer({ type: "video-event", syncId: "x", event: "user-seek", video: sample })).toBe(true);
+    expect(isPageToPlayer({ type: "video-event", syncId: "x", event: "anything", video: sample })).toBe(false);
+    expect(isPageToPlayer({ type: "video-event", syncId: "x", event: "user-seek", video: { ...sample, currentTime: Number.NaN } })).toBe(false);
+    expect(isVideoCommand({ type: "video", syncId: "x", cmdId: 2, op: "attach", start: 10, end: 56, rate: 1.5, time: 10 })).toBe(true);
+    expect(isVideoCommand({ type: "video", syncId: "x", cmdId: 2, op: "attach", start: 56, end: 10, rate: 1.5, time: 10 })).toBe(false);
+    expect(isVideoCommand({ type: "video", syncId: "x", cmdId: 2, op: "seek", time: -1 })).toBe(false);
+    expect(isVideoCommand({ type: "video", syncId: "x", cmdId: 2, op: "eval" })).toBe(false);
+    expect(isPlayerToPage({ type: "video", syncId: "x", cmdId: 3, op: "release" })).toBe(true);
   });
 });

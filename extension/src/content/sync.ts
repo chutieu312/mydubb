@@ -1,0 +1,352 @@
+// Sync with video (story 4), the page's half: runs the offscreen coordinator's operations
+// (offscreen/sync.ts) on the one <video> the content script identified, and reports what the video
+// does that MyDubb did not ask for. It never sees the token, the job or the audio.
+//
+// Telling MyDubb's own operations apart from the user's (or the site's): it keeps what the video is
+// wanted to do (paused or playing: MyDubb's last operation, or the user's last reported action),
+// a pending seek target and the rate it set. A play/pause event that agrees with that, or that the
+// element has already overtaken (a late "pause" of a video playing again), is no news; anything
+// else is reported as "user-*" and becomes the wanted state. This does not depend on the order or
+// timing of media events. event.isTrusted is not used: media events are never trusted-only.
+//
+// The rate R: some players keep their own speed setting and put it back on the element by
+// themselves around a change of playback state (seen with the fixture's "site" player; whether and
+// when the real Udemy player does is not verified). So a rate other than R that shows up while the
+// video settles (within SETTLE_MS after attach, a MyDubb operation or a play, pause, seek or
+// "playing" of the video) with no user input on the page since then (a pointerdown or keydown
+// after that change of state: the user picking a speed) is the page's, not the user's: R is set
+// again, at most MAX_RATE_RESTORES times per RATE_RESTORE_WINDOW_MS, and if it still does not hold,
+// "rate-not-held" ends Sync (no tug of war with the page). Any other rate change is someone's
+// choice (the user's, or the site's: it cannot always be told which) and ends Sync with
+// "rate-changed"; R is not set again over it. MyDubb never sets the rate anywhere else, and never
+// on a timer. Only the time of the last input is kept, nothing about it.
+//
+// Ownership: at attach it notes the element's muted state and rate. It mutes only an unmuted video
+// and gives back only what still holds MyDubb's value when it lets go (a user's later unmute or
+// rate change is theirs to keep), and only on the same element still showing the same media (not
+// on another lecture's video, even in a reused element). Volume is never touched.
+
+import type { PageToPlayer, VideoCommand, VideoEventName, VideoOpError, VideoSample } from "../shared/playback";
+import { seekBounds } from "./video";
+
+const RANGE_EPSILON_SECONDS = 0.05;
+const RATE_EPSILON = 1e-3;
+// A seeked event this close to the target is the echo of MyDubb's seek.
+const SEEK_MATCH_SECONDS = 0.5;
+// The end of the span: the video pauses there (checked on timeupdate, about 4 per second).
+const END_MARGIN_SECONDS = 0.005;
+export const SETTLE_MS = 2000;
+export const MAX_RATE_RESTORES = 3;
+export const RATE_RESTORE_WINDOW_MS = 10_000;
+
+export interface SyncEnv {
+  doc: Document;
+  /** The video the content script identified for the lecture now shown. */
+  current(): HTMLVideoElement | null;
+  send(message: PageToPlayer): void;
+  /** Milliseconds, monotonic (default: performance.now). */
+  now?(): number;
+}
+
+interface Bound {
+  syncId: string;
+  video: HTMLVideoElement;
+  src: string;
+  start: number;
+  end: number;
+  rate: number;
+  rateBefore: number;
+  rateOwned: boolean;
+  mutedByUs: boolean;
+  wanted: "paused" | "playing";
+  seek: { cmdId: number; target: number } | null;
+  /** The last change of playback state, and until when a rate other than R is taken as the page settling. */
+  settledAt: number;
+  settleUntil: number;
+  /** When R was set again (the last RATE_RESTORE_WINDOW_MS). */
+  restores: number[];
+  /** The rate was reported lost (changed, or not held): MyDubb no longer keeps it. */
+  rateLost: boolean;
+  events: AbortController;
+}
+
+export class VideoSync {
+  private bound: Bound | null = null;
+  // The last pointerdown or keydown on the page while a video is bound.
+  private lastInput = Number.NEGATIVE_INFINITY;
+
+  private readonly now: () => number;
+
+  constructor(private readonly env: SyncEnv) {
+    this.now = env.now ?? (() => performance.now());
+  }
+
+  get attached(): HTMLVideoElement | null {
+    return this.bound?.video ?? null;
+  }
+
+  handle(message: VideoCommand): void {
+    if (message.op === "attach") return this.attach(message);
+    const b = this.bound;
+    if (!b || b.syncId !== message.syncId) {
+      if (message.op !== "release") this.reply(message, false, "not-attached");
+      return;
+    }
+    if (message.op !== "position") this.settle(b);
+    switch (message.op) {
+      case "release":
+        return this.release();
+      case "seek":
+        return this.seek(b, message.cmdId, message.time);
+      case "play":
+        return void this.play(b, message);
+      case "pause":
+        this.pauseOwn(b);
+        return this.reply(message, true);
+      case "position":
+        return this.reply(message, true);
+    }
+  }
+
+  /** The identified video changed or left the page: the binding ends (MyDubb pauses its audio). */
+  check(): void {
+    const b = this.bound;
+    if (!b) return;
+    if (this.env.current() !== b.video || !b.video.isConnected) {
+      this.emit(b, "replaced");
+      this.release();
+    }
+  }
+
+  /** Lets go of the video: paused, and what MyDubb changed given back where it still applies. */
+  release(): void {
+    const b = this.bound;
+    if (!b) return;
+    this.bound = null;
+    b.events.abort();
+    const v = b.video;
+    if (v.currentSrc !== b.src) return;
+    if (!v.paused) v.pause();
+    if (b.mutedByUs && v.muted) v.muted = false;
+    if (b.rateOwned && Math.abs(v.playbackRate - b.rate) < RATE_EPSILON) v.playbackRate = b.rateBefore;
+  }
+
+  private attach(message: Extract<VideoCommand, { op: "attach" }>): void {
+    this.release();
+    const v = this.env.current();
+    if (!v) return this.reply(message, false, "no-video");
+    if (v.readyState < HTMLMediaElement.HAVE_METADATA || !Number.isFinite(v.duration)) {
+      return this.reply(message, false, "not-ready");
+    }
+    const bounds = seekBounds(v);
+    if (!bounds || message.start < bounds[0] - RANGE_EPSILON_SECONDS || message.end > bounds[1] + RANGE_EPSILON_SECONDS) {
+      return this.reply(message, false, "range-outside-video");
+    }
+    const b: Bound = {
+      syncId: message.syncId,
+      video: v,
+      src: v.currentSrc,
+      start: message.start,
+      end: message.end,
+      rate: message.rate,
+      rateBefore: v.playbackRate,
+      rateOwned: false,
+      mutedByUs: false,
+      wanted: v.paused ? "paused" : "playing",
+      seek: null,
+      settledAt: Number.NEGATIVE_INFINITY,
+      settleUntil: Number.NEGATIVE_INFINITY,
+      restores: [],
+      rateLost: false,
+      events: new AbortController(),
+    };
+    this.bound = b;
+    this.settle(b);
+    this.listen(b);
+    this.pauseOwn(b);
+    try {
+      v.playbackRate = message.rate;
+    } catch {
+      // NotSupportedError: outside what this browser plays. Nothing is clamped.
+    }
+    if (Math.abs(v.playbackRate - message.rate) > RATE_EPSILON) {
+      this.release();
+      try {
+        v.playbackRate = b.rateBefore;
+      } catch {
+        // unchanged
+      }
+      return this.reply(message, false, "rate-unsupported");
+    }
+    b.rateOwned = Math.abs(b.rateBefore - message.rate) > RATE_EPSILON;
+    if (!v.muted) {
+      v.muted = true;
+      b.mutedByUs = true;
+    }
+    this.seek(b, message.cmdId, message.time, message.syncId);
+  }
+
+  private listen(b: Bound): void {
+    const v = b.video;
+    const options = { signal: b.events.signal };
+    const on = (name: string, handler: () => void) => v.addEventListener(name, handler, options);
+    // Playback state changes: the page may set its own speed back around them.
+    for (const name of ["play", "pause", "seeking", "seeked", "playing"]) on(name, () => this.settle(b));
+    on("play", () => {
+      if (v.paused || b.wanted === "playing") return;
+      b.wanted = "playing";
+      this.emit(b, "user-play");
+    });
+    on("pause", () => {
+      if (!v.paused || b.wanted === "paused") return;
+      b.wanted = "paused";
+      // The pause before "ended" is reported as the end.
+      if (!v.ended) this.emit(b, "user-pause");
+    });
+    on("seeked", () => {
+      const pending = b.seek;
+      if (pending && Math.abs(v.currentTime - pending.target) <= SEEK_MATCH_SECONDS) {
+        b.seek = null;
+        this.send({ type: "video-reply", syncId: b.syncId, cmdId: pending.cmdId, ok: true, error: null, video: this.sample(v) });
+        return;
+      }
+      if (pending) {
+        b.seek = null;
+        this.send({ type: "video-reply", syncId: b.syncId, cmdId: pending.cmdId, ok: false, error: "superseded", video: this.sample(v) });
+      }
+      this.emit(b, "user-seek");
+    });
+    on("waiting", () => {
+      if (!v.paused) this.emit(b, "waiting");
+    });
+    on("playing", () => this.emit(b, "playing"));
+    on("ratechange", () => this.rateChanged(b));
+    on("volumechange", () => {
+      if (b.mutedByUs && !v.muted) {
+        b.mutedByUs = false;
+        this.emit(b, "unmuted");
+      }
+    });
+    on("timeupdate", () => {
+      if (!v.paused && v.currentTime >= b.end - END_MARGIN_SECONDS) {
+        this.pauseOwn(b);
+        this.emit(b, "reached-end");
+      }
+    });
+    on("ended", () => this.emit(b, "ended"));
+    on("error", () => this.emit(b, "error"));
+    on("emptied", () => {
+      // Another source in the same element (e.g. the next lecture): not the video MyDubb bound.
+      this.emit(b, "replaced");
+      this.release();
+    });
+    for (const name of ["pointerdown", "keydown"]) {
+      this.env.doc.addEventListener(name, () => void (this.lastInput = this.now()), { ...options, capture: true, passive: true });
+    }
+    this.env.doc.addEventListener(
+      "visibilitychange",
+      () => {
+        if (this.env.doc.visibilityState === "visible") this.emit(b, "visible");
+      },
+      options,
+    );
+  }
+
+  private settle(b: Bound): void {
+    b.settledAt = this.now();
+    b.settleUntil = Math.max(b.settleUntil, b.settledAt + SETTLE_MS);
+  }
+
+  private rateChanged(b: Bound): void {
+    const v = b.video;
+    if (this.bound !== b || b.rateLost || Math.abs(v.playbackRate - b.rate) <= RATE_EPSILON) return;
+    const now = this.now();
+    if (now > b.settleUntil || this.lastInput > b.settledAt) {
+      // While it plays steadily, or after the user's input: someone chose another speed.
+      return this.lose(b, "rate-changed");
+    }
+    b.restores = b.restores.filter((t) => now - t < RATE_RESTORE_WINDOW_MS);
+    // The sample says what the page set (before R is set again), for the coordinator's trace.
+    if (b.restores.length >= MAX_RATE_RESTORES) return this.lose(b, "rate-not-held");
+    b.restores.push(now);
+    this.emit(b, "rate-restored");
+    try {
+      v.playbackRate = b.rate;
+    } catch {
+      // checked below
+    }
+    if (this.bound === b && Math.abs(v.playbackRate - b.rate) > RATE_EPSILON) this.lose(b, "rate-not-held");
+  }
+
+  /** Reported once; the rate is no longer MyDubb's to keep or to give back. */
+  private lose(b: Bound, event: "rate-changed" | "rate-not-held"): void {
+    b.rateLost = true;
+    b.rateOwned = false;
+    this.emit(b, event);
+  }
+
+  private pauseOwn(b: Bound): void {
+    b.wanted = "paused";
+    if (!b.video.paused) b.video.pause();
+  }
+
+  private seek(b: Bound, cmdId: number, time: number, syncId = b.syncId): void {
+    const v = b.video;
+    if (b.seek) {
+      this.send({ type: "video-reply", syncId, cmdId: b.seek.cmdId, ok: false, error: "superseded", video: this.sample(v) });
+      b.seek = null;
+    }
+    if (time < b.start - RANGE_EPSILON_SECONDS || time > b.end + RANGE_EPSILON_SECONDS) {
+      return this.send({ type: "video-reply", syncId, cmdId, ok: false, error: "range-outside-video", video: this.sample(v) });
+    }
+    if (Math.abs(v.currentTime - time) < 0.01 && !v.seeking) {
+      return this.send({ type: "video-reply", syncId, cmdId, ok: true, error: null, video: this.sample(v) });
+    }
+    b.seek = { cmdId, target: time };
+    v.currentTime = time;
+  }
+
+  private async play(b: Bound, message: VideoCommand): Promise<void> {
+    const v = b.video;
+    b.wanted = "playing";
+    if (!v.paused) return this.reply(message, true);
+    try {
+      await v.play();
+      if (this.bound === b) this.reply(message, true);
+    } catch (error) {
+      if (v.paused) b.wanted = "paused";
+      const name = typeof error === "object" && error !== null ? String((error as { name?: unknown }).name) : "";
+      if (this.bound === b) this.reply(message, false, name === "NotAllowedError" ? "play-blocked" : "play-failed");
+    }
+  }
+
+  private sample(v: HTMLVideoElement): VideoSample {
+    return {
+      currentTime: Number.isFinite(v.currentTime) ? v.currentTime : 0,
+      paused: v.paused,
+      waiting: !v.paused && v.readyState < HTMLMediaElement.HAVE_FUTURE_DATA,
+      rate: Number.isFinite(v.playbackRate) ? v.playbackRate : 0,
+      hidden: this.env.doc.visibilityState === "hidden",
+    };
+  }
+
+  private emit(b: Bound, event: VideoEventName): void {
+    this.send({ type: "video-event", syncId: b.syncId, event, video: this.sample(b.video) });
+  }
+
+  private reply(message: VideoCommand, ok: boolean, error: VideoOpError | null = null): void {
+    const v = this.bound?.video ?? this.env.current();
+    this.send({
+      type: "video-reply",
+      syncId: message.syncId,
+      cmdId: message.cmdId,
+      ok,
+      error,
+      video: v ? this.sample(v) : null,
+    });
+  }
+
+  private send(message: PageToPlayer): void {
+    this.env.send(message);
+  }
+}
