@@ -19,6 +19,9 @@ class Principal:
     Guest ("Try as guest"): `guest` is True, `session_id` is the `guest_sessions` row and owns
     jobs; `user` is None. A guest is resolved only by the job endpoints and the guest endpoints
     (dependencies.py), never by `require_session`.
+    Chrome extension: `bearer` is True, `session_id` is a `user_sessions` row issued to the
+    extension and the `user` owns jobs. Resolved only by the job endpoints and the extension's own
+    endpoints, from the Authorization header (never from a cookie).
     """
 
     session_id: uuid.UUID
@@ -26,6 +29,7 @@ class Principal:
     expires_at: datetime
     user: UserProfile | None = None
     guest: bool = False
+    bearer: bool = False
 
     @property
     def user_id(self) -> uuid.UUID | None:

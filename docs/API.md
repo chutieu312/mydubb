@@ -38,6 +38,15 @@ Everything below about CSRF, jobs and errors applies to both session kinds.
 `POST/PUT/PATCH/DELETE` with an `Origin` header that is neither the request's own host nor in
 `TRUSTED_ORIGINS` is rejected (`403 origin_rejected`).
 
+**Chrome extension** (Cognito mode, `EXTENSION_IDS` set; [EXTENSION_AUTH.md](EXTENSION_AUTH.md)):
+the job endpoints (`POST /api/jobs`, `GET /api/jobs/{id}`, `/result`, `/result/audio`) also accept
+`Authorization: Bearer <token>` from `POST /api/extension/token`. With an `Authorization` header
+only that token counts (cookies are ignored, no fallback); it needs no `X-CSRF-Token`; ownership,
+validation, errors and responses are the account's, unchanged. The origin
+`chrome-extension://<listed id>` is accepted only for `POST /api/extension/token` and, with a
+bearer token, `POST /api/jobs` and `POST /api/extension/logout`. The token is not accepted by any
+other endpoint (account, guest, YouTube import).
+
 **Body size**: state-changing requests above `MAX_REQUEST_BODY_BYTES` (default 10 MB) get
 `413 request_too_large`; chunked bodies without `Content-Length` get `411 length_required`.
 

@@ -56,8 +56,10 @@ from app.auth.cognito import CognitoUser
 from app.auth.crypto import DecryptionError, TokenCipher
 from app.auth.models import (
     AuthChallenge,
+    ExtensionAuthCode,
     PasswordResetAttempt,
     PasswordResetEvent,
+    SessionClient,
     User,
     UserSession,
 )
@@ -404,8 +406,60 @@ def establish_user_session(
     )
 
 
-def find_active_user_session(db: Session, token: str) -> tuple[UserSession, User] | None:
-    """The session for this cookie if it is live and its user may use it."""
+def open_extension_session(
+    db: Session, *, user_id: uuid.UUID, auth_started_at: datetime, ttl_seconds: int
+) -> tuple[User, IssuedUserSession] | None:
+    """A session for the Chrome extension, from a sign-in (website session) that started at
+    `auth_started_at`. Takes the same locks and applies the same revocation rules as
+    `establish_user_session`, so a password reset, an administrator revocation or disabling that
+    covers that sign-in also prevents this session. None when the user may not have one."""
+    _limit_lock_waits(db)
+    email = db.scalar(select(User.email_normalized).where(User.id == user_id))
+    if email is None:
+        return None
+    email_hash = sha256_hex(email)
+    _lock_email(db, email_hash)
+    user = db.scalars(
+        select(User).where(User.id == user_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if user is None or user.disabled_at is not None:
+        return None
+    if user.sessions_valid_after is not None and user.sessions_valid_after >= auth_started_at:
+        return None
+    last_reset = db.scalar(
+        select(func.max(PasswordResetEvent.reset_at)).where(
+            PasswordResetEvent.email_hash == email_hash
+        )
+    )
+    if last_reset is not None and last_reset >= auth_started_at:
+        return None
+    if db.scalar(select(_unsettled_reset_blocks(email_hash, auth_started_at))):
+        return None
+    now = datetime.now(UTC)
+    token = secrets.token_urlsafe(32)
+    record = UserSession(
+        user_id=user.id,
+        client=SessionClient.EXTENSION.value,
+        token_hash=sha256_hex(token),
+        # Never sent to the extension: a bearer token needs no CSRF token.
+        csrf_token=secrets.token_urlsafe(32),
+        auth_started_at=auth_started_at,
+        created_at=now,
+        expires_at=now + timedelta(seconds=ttl_seconds),
+    )
+    db.add(record)
+    db.flush()
+    return user, IssuedUserSession(
+        token=token, csrf_token=record.csrf_token, expires_at=record.expires_at
+    )
+
+
+def find_active_user_session(
+    db: Session, token: str, client: SessionClient = SessionClient.WEB
+) -> tuple[UserSession, User] | None:
+    """The session for this token if it is live, was issued to `client` (a cookie never
+    accepts an extension token, nor the reverse) and its user may use it."""
     unsettled_reset = exists().where(
         PasswordResetAttempt.email_hash == _email_hash_sql(User.email_normalized),
         PasswordResetAttempt.state == "pending",
@@ -417,6 +471,7 @@ def find_active_user_session(db: Session, token: str) -> tuple[UserSession, User
         .join(User, User.id == UserSession.user_id)
         .where(
             UserSession.token_hash == sha256_hex(token),
+            UserSession.client == client.value,
             UserSession.revoked_at.is_(None),
             UserSession.expires_at > datetime.now(UTC),
             User.disabled_at.is_(None),
@@ -578,8 +633,8 @@ def resolve_stale_password_resets(db: Session) -> int:
 
 
 def delete_stale_auth_rows(db: Session) -> int:
-    """Expired or revoked user sessions, finished or expired challenges, old reset events and
-    old resolved reset attempts. A pending attempt is never deleted."""
+    """Expired or revoked user sessions, finished or expired challenges and extension codes, old
+    reset events and old resolved reset attempts. A pending attempt is never deleted."""
     now = datetime.now(UTC)
     old = now - RESET_EVENT_RETENTION
     removed = 0
@@ -589,6 +644,9 @@ def delete_stale_auth_rows(db: Session) -> int:
         ),
         delete(AuthChallenge).where(
             (AuthChallenge.expires_at <= now) | AuthChallenge.consumed_at.is_not(None)
+        ),
+        delete(ExtensionAuthCode).where(
+            (ExtensionAuthCode.expires_at <= now) | ExtensionAuthCode.consumed_at.is_not(None)
         ),
         delete(PasswordResetEvent).where(PasswordResetEvent.reset_at < old),
         delete(PasswordResetAttempt).where(

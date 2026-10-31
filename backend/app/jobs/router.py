@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.audio.speed import AudioSpeed, DurationTarget
 from app.auth.principal import Principal
-from app.dependencies import get_db, get_services, require_job_csrf, require_job_session
+from app.dependencies import get_db, get_services, require_job_access, require_job_access_csrf
 from app.errors import ApiError, not_authenticated
 from app.guest.access import GuestAccess
 from app.guest.router import network_unknown
@@ -89,7 +89,7 @@ def create_job(
     body: CreateJobRequest,
     request: Request,
     response: Response,
-    principal: Principal = Depends(require_job_csrf),
+    principal: Principal = Depends(require_job_access_csrf),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResponse:
@@ -309,7 +309,7 @@ def _available_result(job: Job, services: AppServices) -> StoredResult:
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: uuid.UUID,
-    principal: Principal = Depends(require_job_session),
+    principal: Principal = Depends(require_job_access),
     db: Session = Depends(get_db),
 ) -> JobResponse:
     return JobResponse.from_job(_owned_job_or_404(db, job_id, principal))
@@ -318,7 +318,7 @@ def get_job(
 @router.get("/{job_id}/result", response_model=JobResultResponse)
 def get_result(
     job_id: uuid.UUID,
-    principal: Principal = Depends(require_job_session),
+    principal: Principal = Depends(require_job_access),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> JobResultResponse:
@@ -391,7 +391,7 @@ def get_result(
 def get_result_audio(
     job_id: uuid.UUID,
     download: bool = False,
-    principal: Principal = Depends(require_job_session),
+    principal: Principal = Depends(require_job_access),
     db: Session = Depends(get_db),
     services: AppServices = Depends(get_services),
 ) -> FileResponse:

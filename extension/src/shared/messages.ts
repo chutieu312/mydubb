@@ -108,6 +108,12 @@ export interface DraftRecord {
 
 export const pendingKey = (tabId: number): string => `pending:${tabId}`;
 export const draftKey = (tabId: number): string => `draft:${tabId}`;
+/** The dubbing settings and start times of the tab's panel (panel/dubbing.ts). */
+export const formKey = (tabId: number): string => `form:${tabId}`;
+/** The MyDubb job the tab's panel follows (panel/jobs.ts). */
+export const jobKey = (tabId: number): string => `job:${tabId}`;
+/** Everything the extension keeps for one tab; removed when the tab closes. */
+export const tabKeys = (tabId: number): string[] => [pendingKey(tabId), draftKey(tabId), formKey(tabId), jobKey(tabId)];
 
 // ---- Validators ------------------------------------------------------------------------------
 

@@ -1,4 +1,5 @@
-"""FastAPI dependencies shared by routers: services, DB session, session auth, CSRF."""
+"""FastAPI dependencies shared by routers: services, DB session, session auth, CSRF, and the
+Chrome extension's bearer token."""
 
 import hmac
 import logging
@@ -8,6 +9,7 @@ from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.access.service import find_active_session
+from app.auth.models import SessionClient
 from app.auth.principal import Principal, UserProfile
 from app.auth.service import find_active_user_session
 from app.config import AuthMode
@@ -25,6 +27,9 @@ AUTH_COOKIE = "mydubb_auth"
 # taken for an account session or the other way round.
 GUEST_COOKIE = "mydubb_guest"
 CSRF_HEADER = "X-CSRF-Token"
+# The Chrome extension's token (docs/EXTENSION_AUTH.md): `Authorization: Bearer <token>`.
+_BEARER_PREFIX = "bearer "
+_MAX_BEARER_TOKEN = 100
 
 
 def get_services(request: Request) -> AppServices:
@@ -84,6 +89,30 @@ def guest_principal(request: Request, db: Session, services: AppServices) -> Pri
     )
 
 
+def extension_principal(request: Request, db: Session, services: AppServices) -> Principal | None:
+    """The caller's extension session from the Authorization header, or None (also whenever no
+    extension is configured). Cookies are never looked at here."""
+    if not services.settings.extension_ids:
+        return None
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith(_BEARER_PREFIX):
+        return None
+    token = header[len(_BEARER_PREFIX) :].strip()
+    if not token or len(token) > _MAX_BEARER_TOKEN:
+        return None
+    found = find_active_user_session(db, token, SessionClient.EXTENSION)
+    if found is None:
+        return None
+    session, user = found
+    return Principal(
+        session_id=session.id,
+        csrf_token=session.csrf_token,
+        expires_at=session.expires_at,
+        user=UserProfile(id=user.id, email=user.email, display_name=user.display_name),
+        bearer=True,
+    )
+
+
 def _check_csrf(request: Request, principal: Principal) -> Principal:
     submitted = request.headers.get(CSRF_HEADER, "")
     if not submitted or not hmac.compare_digest(submitted, principal.csrf_token):
@@ -125,6 +154,42 @@ def require_job_csrf(
     request: Request, principal: Principal = Depends(require_job_session)
 ) -> Principal:
     return _check_csrf(request, principal)
+
+
+def require_job_access(
+    request: Request,
+    db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
+) -> Principal:
+    """The job endpoints: with an Authorization header, only the extension's bearer token (the
+    cookies are then ignored, so a request never mixes the two); otherwise the cookie sessions of
+    `require_job_session`. A guest never has a bearer token."""
+    if "authorization" in request.headers:
+        principal = extension_principal(request, db, services)
+        if principal is None:
+            raise not_authenticated()
+        return principal
+    return require_job_session(request, db, services)
+
+
+def require_job_access_csrf(
+    request: Request, principal: Principal = Depends(require_job_access)
+) -> Principal:
+    # A bearer token is never attached by the browser on its own (unlike a cookie), so a request
+    # carrying it cannot be forged cross-site: it needs no CSRF token.
+    return principal if principal.bearer else _check_csrf(request, principal)
+
+
+def require_extension_session(
+    request: Request,
+    db: Session = Depends(get_db),
+    services: AppServices = Depends(get_services),
+) -> Principal:
+    """The extension's own endpoints: its bearer token only."""
+    principal = extension_principal(request, db, services)
+    if principal is None:
+        raise not_authenticated()
+    return principal
 
 
 def require_guest_session(

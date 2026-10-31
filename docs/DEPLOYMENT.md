@@ -670,6 +670,12 @@ cannot read a job stored in a new language). Once it is deployed, every deploy b
 longer a supported Render rollback target; check with `docker/rollback-target-check.sh <commit> 0010`.
 Its downgrade refuses (and changes nothing) while a job in one of the six new languages exists: such
 rows are never rewritten into another language.
+The Chrome extension pull request adds migration `0011` (column
+`user_sessions.client varchar(10) NOT NULL DEFAULT 'web'` with a CHECK, and the table
+`extension_auth_codes`; expand-only, it runs whatever `EXTENSION_IDS` is). Once it is deployed,
+every deploy built before it is no longer a supported Render rollback target; check with
+`docker/rollback-target-check.sh <commit> 0011`. Turning the extension off is a configuration
+change (remove `EXTENSION_IDS`), not a code rollback ([EXTENSION_AUTH.md](EXTENSION_AUTH.md)).
 
 **Before rolling back** (read-only checks):
 

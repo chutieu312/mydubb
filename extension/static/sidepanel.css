@@ -125,7 +125,8 @@ button:disabled {
 }
 
 #playpause,
-#confirm-replace {
+#confirm-replace,
+#generate {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
@@ -153,4 +154,66 @@ button:disabled {
   font-variant-numeric: tabular-nums;
   font-size: 16px;
   margin: 4px 0;
+}
+
+h3 {
+  font-size: 13px;
+  margin: 12px 0 4px;
+}
+
+.fields {
+  display: grid;
+  gap: 2px;
+}
+
+.fields label,
+section > label {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  width: 100%;
+}
+
+input[type="checkbox"] {
+  width: auto;
+}
+
+.check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.timing p {
+  margin: 0 0 6px;
+}
+
+audio {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.translation {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+#notices {
+  padding-left: 18px;
 }

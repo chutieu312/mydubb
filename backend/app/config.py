@@ -76,6 +76,7 @@ _REGION = re.compile(r"[A-Za-z0-9-]{1,64}")
 # Speech region identifiers (e.g. westus2) become part of the host name, so they stay strict.
 _SPEECH_REGION = re.compile(r"[a-z0-9]{2,30}")
 _SUPPORTED_DB_SCHEMES = ("postgresql+psycopg://", "postgresql://", "postgres://")
+_EXTENSION_ID = re.compile(r"[a-p]{32}")
 # AWS region names (e.g. us-west-2) become part of the Cognito host name, so they stay strict.
 _AWS_REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-\d")
 # Patterns from the Cognito API reference (UserPoolId, ClientId).
@@ -203,6 +204,13 @@ class Settings(BaseSettings):
     client_ip_header: str | None = None
     # Extra origins allowed on state-changing requests (e.g. the Vite dev server).
     trusted_origins: list[str] = Field(default_factory=list)
+    # Chrome extension IDs allowed to connect to an account (needs AUTH_MODE=cognito); empty
+    # turns the extension endpoints off. Each ID is both the OAuth client_id and the only
+    # redirect host (https://<id>.chromiumapp.org/). An unpacked build and a published build
+    # have different IDs (docs/EXTENSION_AUTH.md).
+    extension_ids: list[str] = Field(default_factory=list)
+    # Lifetime of an extension token (never extended); capped by SESSION_TTL_SECONDS.
+    extension_session_ttl_seconds: int = Field(default=12 * 3600, ge=60, le=12 * 3600)
 
     # "Try as guest" (needs AUTH_MODE=cognito): people without an invitation use the Studio with
     # a guest session and quotas (docs/GUEST_ACCESS.md). Off by default.
@@ -263,6 +271,15 @@ class Settings(BaseSettings):
         if not url.startswith(_SUPPORTED_DB_SCHEMES):
             # Never fall back to SQLite or another engine.
             raise ValueError("DATABASE_URL must be a PostgreSQL URL (postgresql://...)")
+        return value
+
+    @field_validator("extension_ids")
+    @classmethod
+    def _extension_id_format(cls, value: list[str]) -> list[str]:
+        # Chrome extension IDs are 32 letters a-p; anything else could not be a redirect host.
+        for item in value:
+            if not _EXTENSION_ID.fullmatch(item):
+                raise ValueError("EXTENSION_IDS must list Chrome extension IDs (32 letters a-p)")
         return value
 
     @field_validator("access_code")
@@ -341,6 +358,8 @@ class Settings(BaseSettings):
             )
         if self.guest_access_enabled:
             self._check_guest_access()
+        if self.extension_ids and self.auth_mode is not AuthMode.COGNITO:
+            raise ValueError("EXTENSION_IDS needs AUTH_MODE=cognito")
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:
             raise ValueError(
                 "JOB_STALE_AFTER_SECONDS must be at least 3x JOB_HEARTBEAT_INTERVAL_SECONDS"

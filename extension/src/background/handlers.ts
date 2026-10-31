@@ -3,9 +3,9 @@
 
 import { UDEMY_ORIGIN } from "../shared/lesson";
 import {
-  draftKey,
   isSelectionReply,
   pendingKey,
+  tabKeys,
   type GetSelectionRequest,
   type PendingSelection,
   type SelectionReply,
@@ -106,5 +106,5 @@ export async function handleMenuClick(
 }
 
 export async function handleTabRemoved(api: WorkerApi, tabId: number): Promise<void> {
-  await api.session.remove([pendingKey(tabId), draftKey(tabId)]);
+  await api.session.remove(tabKeys(tabId));
 }

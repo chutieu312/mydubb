@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
+    "check:dist": "node check-dist.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
