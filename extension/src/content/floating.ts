@@ -7,7 +7,7 @@
 
 import { formatTime } from "../panel/draft";
 import { PLAYER_SEEK_SECONDS, choicesLabel, type PlayerCommand, type PlayerView } from "../shared/playback";
-import { syncNoticeText, syncPreviewText, syncStatusText } from "../shared/sync";
+import { syncNoticeText, syncPreviewText, syncShortStatusText, syncStatusText } from "../shared/sync";
 
 export interface FloatingActions {
   command(command: PlayerCommand): void;
@@ -61,7 +61,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status.problem { color: var(--error); }
 .status:empty { display: none; }
 .sync { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid var(--border); }
-.sync-state { margin: 0 0 4px; font-weight: 600; }
+.sync-state { flex: 1; font-weight: 600; }
 .sync-confirm[hidden], .sync-toggle[hidden] { display: none; }
 .sync-confirm p { margin: 4px 0; color: var(--muted); }
 `;
@@ -199,7 +199,9 @@ export class FloatingPlayer {
     const sync = el("div", "sync");
     sync.setAttribute("role", "group");
     sync.setAttribute("aria-label", "Sync with video");
-    const syncState = el("p", "sync-state");
+    // One line: the state and the toggle (the full reason is the state's title; the panel shows it).
+    const syncBar = el("div", "row");
+    const syncState = el("span", "sync-state");
     syncState.setAttribute("role", "status");
     syncState.setAttribute("aria-live", "polite");
     const syncToggle = el("button", "sync-toggle", "Sync with video");
@@ -216,7 +218,8 @@ export class FloatingPlayer {
     syncConfirm.append(syncPreview, syncRow);
     const syncNotice = el("p", "status problem");
     syncNotice.setAttribute("role", "alert");
-    sync.append(syncState, syncToggle, syncConfirm, syncNotice);
+    syncBar.append(syncState, syncToggle);
+    sync.append(syncBar, syncConfirm, syncNotice);
     body.append(info, seek, row, status, sync);
     box.append(bar, body);
 
@@ -342,7 +345,8 @@ export class FloatingPlayer {
     ui.status.textContent = problem ?? (view.status === "loading" ? "Loading the audio…" : view.ended ? "Ended." : "");
     const sync = view.sync;
     if (sync.status !== "off") this.confirmingSync = false;
-    ui.syncState.textContent = syncStatusText(sync);
+    ui.syncState.textContent = syncShortStatusText(sync);
+    ui.syncState.title = syncStatusText(sync);
     const on = sync.status !== "off" && sync.status !== "unavailable";
     ui.syncToggle.textContent = on ? "Turn off sync" : "Sync with video";
     ui.syncToggle.setAttribute("aria-pressed", String(on));

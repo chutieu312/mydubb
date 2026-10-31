@@ -144,7 +144,7 @@ describe("FloatingPlayer", () => {
     player.render({ ...VIEW, sync });
     const root = document.querySelector("mydubb-player")!.shadowRoot!;
     const toggle = root.querySelector<HTMLButtonElement>(".sync-toggle")!;
-    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync with video: OFF");
+    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync: OFF");
     isTrusted.mockReturnValueOnce(false);
     toggle.click();
     expect((root.querySelector(".sync-confirm") as HTMLElement).hidden).toBe(true);
@@ -156,7 +156,7 @@ describe("FloatingPlayer", () => {
     on!.click();
     expect(actions.sync).toHaveBeenLastCalledWith(true);
     player.render({ ...VIEW, sync: { ...sync, status: "playing", confirmed: true } });
-    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync with video: ON · Playing");
+    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync: ON · Playing");
     expect(toggle.textContent).toBe("Turn off sync");
     toggle.click();
     expect(actions.sync).toHaveBeenLastCalledWith(false);
@@ -166,5 +166,8 @@ describe("FloatingPlayer", () => {
     expect(actions.sync).toHaveBeenLastCalledWith(true);
     player.render({ ...VIEW });
     expect(toggle.disabled).toBe(true);
+    // Short on the page; the reason is in the title (and in full in the panel).
+    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync unavailable");
+    expect((root.querySelector(".sync-state") as HTMLElement).title).toContain("Generate it again");
   });
 });

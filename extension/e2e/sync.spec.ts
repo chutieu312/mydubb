@@ -225,13 +225,13 @@ test("floating player: Sync from the page with the panel closed, a Udemy rate ch
   await panel.getByRole("button", { name: "Show floating player" }).click();
   await panel.close();
   const player = floating(page);
-  await expect(player).toContainText("Sync with video: OFF");
+  await expect(player).toContainText("Sync: OFF");
   await player.getByRole("button", { name: "Sync with video" }).click();
   await expect(player).toContainText(/Video 0:10 → 0:56/);
   await player.getByRole("button", { name: "Turn on sync" }).click();
-  await expect(player).toContainText("Sync with video: ON · Paused");
+  await expect(player).toContainText("Sync: ON · Paused");
   await player.getByRole("button", { name: "Play MyDubb audio" }).click();
-  await expect(player).toContainText("Sync with video: ON · Playing");
+  await expect(player).toContainText("Sync: ON · Playing");
   await expect.poll(async () => (await video(page)).paused).toBe(false);
 
   // The user unmutes the video: kept (never muted again), Sync goes on.
@@ -243,7 +243,7 @@ test("floating player: Sync from the page with the panel closed, a Udemy rate ch
 
   // The Udemy player changes the rate: both pause, Sync ends, the rate is not forced back.
   await page.evaluate(() => (window.fixture.videos()[0]!.playbackRate = 2));
-  await expect(player).toContainText("Sync with video: OFF");
+  await expect(player).toContainText("Sync: OFF");
   await expect(player).toContainText("the video speed was changed in the Udemy player");
   expect(await video(page)).toMatchObject({ paused: true, rate: 2, muted: false });
   expect((await sessionOf(worker, tabId))!.paused).toBe(true);
@@ -251,7 +251,7 @@ test("floating player: Sync from the page with the panel closed, a Udemy rate ch
 
   // End of the span: both pause; Play starts both again from V0 / 0.
   await player.getByRole("button", { name: "Sync with video" }).click();
-  await expect(player).toContainText("Sync with video: ON · Paused");
+  await expect(player).toContainText("Sync: ON · Paused");
   const seek = player.getByRole("slider", { name: "Position in the MyDubb audio" });
   const duration = (await sessionOf(worker, tabId))!.duration;
   await seek.evaluate((el, value) => {
@@ -268,7 +268,7 @@ test("floating player: Sync from the page with the panel closed, a Udemy rate ch
   expect((await sessionOf(worker, tabId))!.paused).toBe(true);
   expect((await video(page)).currentTime).toBeLessThan(56.6);
   await player.getByRole("button", { name: "Play MyDubb audio" }).click();
-  await expect(player).toContainText("Sync with video: ON · Playing");
+  await expect(player).toContainText("Sync: ON · Playing");
   await expect.poll(async () => (await video(page)).currentTime).toBeLessThan(13);
   expect((await sessionOf(worker, tabId))!.currentTime).toBeLessThan(2);
 

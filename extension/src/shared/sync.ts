@@ -189,6 +189,13 @@ export function syncStatusText(sync: SyncView): string {
   return `Sync with video: ON · ${STATUS_TEXT[sync.status]}`;
 }
 
+/** The floating player's one-line form: "Sync: OFF", "Sync: ON · Playing", "Sync unavailable". */
+export function syncShortStatusText(sync: SyncView): string {
+  if (sync.status === "unavailable") return "Sync unavailable";
+  if (sync.status === "off") return "Sync: OFF";
+  return `Sync: ON · ${STATUS_TEXT[sync.status]}`;
+}
+
 /** What turning Sync on will do, shown before the first time. */
 export function syncPreviewText(sync: SyncView): string {
   if (sync.start === null || sync.end === null || sync.duration === null || sync.rate === null) return "";
