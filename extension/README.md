@@ -114,6 +114,10 @@ does not download video, does not intercept network requests and does not use Ud
     and only a new click sends again. Before
     sending, the job is recorded for the tab (account connection, lecture, operation id), so a panel
     closed mid-request shows the same warning when reopened.
+  - *Timeouts*: every request has a deadline that also covers reading the body (JSON 30 s, job
+    creation 60 s, MP3 120 s); the panel's own cancellation (closing, account/lecture change) is
+    told apart from a timeout and from an unreadable answer. A failed MP3 download offers
+    **Check again**.
   - *Following*: the panel polls the job itself (1 s, ×1.5 up to 10 s, 30 min limit, stops after 5
     failed requests in a row, on completed/failed, `401`, a lecture or account change, or when the
     panel closes). Closing the panel never cancels or recreates the job; reopening it (same browser
@@ -123,7 +127,11 @@ does not download video, does not intercept network requests and does not use Ud
     (revoked when replaced, on account/lecture change and when the panel closes). Nothing plays by
     itself; `playbackRate` stays 1.
   - *Isolation*: every answer is checked against the account connection, lecture and click it was
-    sent for; a late answer for another one is dropped. Moving the tab to another lecture stops the
+    sent for, again after each storage write; a late answer for another one is dropped, never
+    stops the current job's polling, and the tab's job record is written and removed one step at
+    a time, each only for its own click. On opening, the stored form is read before the waiting
+    selection and page state are applied, so the older snapshot never overwrites them (a manual
+    change of the start times for the same draft and lecture is kept). Moving the tab to another lecture stops the
     audio and hides the result (the job keeps running on MyDubb). Disconnecting, or a refused token,
     clears the result in every panel. Each tab has its own job and player. The draft (your Udemy
     selection) is kept on an account change.

@@ -375,3 +375,139 @@ describe("isolation", () => {
     expect($("account-status").textContent).toBe("Disconnected from MyDubb.");
   });
 });
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+describe("restoring a reopened panel", () => {
+  const TIMED_NEW = "0:01\nFirst caption.\n0:21\nLast caption.";
+  const OLD_FORM = {
+    lessonKey: LESSON,
+    firstStart: "00:00:10",
+    lastStart: "00:06:10",
+    ignoreTimestamps: false,
+    targetLanguage: "arabic",
+    voice: "EmmaMultilingual",
+    speed: 1.5,
+    filledFrom: null,
+  };
+
+  it("a slow stored snapshot never overwrites a selection that arrived meanwhile", async () => {
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH, [`form:${TAB}`]: OLD_FORM });
+    const read = deferred();
+    const get = storage.get;
+    storage.get = vi.fn(async (keys: string | string[]) => {
+      await read.promise;
+      return get(keys);
+    });
+    const { dubbing } = make(storage);
+    const starting = dubbing.start();
+    // The pending selection (new timestamps) and the first page state arrive before the read ends.
+    transcript = TIMED_NEW;
+    dubbing.transcriptChanged();
+    dubbing.lessonState(LESSON);
+    read.resolve();
+    await starting;
+    await settle();
+    expect($<HTMLInputElement>("first-start").value).toBe("00:00:01");
+    expect($<HTMLInputElement>("last-start").value).toBe("00:00:21");
+    // The other stored choices are still restored.
+    expect($<HTMLSelectElement>("speed").value).toBe("1.5");
+    // Saved after the 250 ms debounce: the stored form now holds the new times too.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect((storage.data[`form:${TAB}`] as { firstStart: string }).firstStart).toBe("00:00:01");
+  });
+
+  it("an edit typed before the snapshot arrives is kept", async () => {
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH, [`form:${TAB}`]: OLD_FORM });
+    const read = deferred();
+    const get = storage.get;
+    storage.get = vi.fn(async (keys: string | string[]) => {
+      await read.promise;
+      return get(keys);
+    });
+    const { dubbing } = make(storage);
+    const starting = dubbing.start();
+    await flush();
+    typeTime("first-start", "000002");
+    read.resolve();
+    await starting;
+    expect($<HTMLInputElement>("first-start").value).toBe("00:00:02");
+  });
+
+  it("keeps a manual override when the same draft and lecture are reopened", async () => {
+    transcript = TIMED_NEW;
+    const storage = fakeStorage({
+      [AUTH_KEY]: AUTH,
+      [`form:${TAB}`]: { ...OLD_FORM, firstStart: "00:00:03", lastStart: "00:00:21", filledFrom: "1-21" },
+    });
+    const { dubbing } = make(storage);
+    await dubbing.start();
+    dubbing.lessonState(LESSON);
+    dubbing.transcriptChanged();
+    expect($<HTMLInputElement>("first-start").value).toBe("00:00:03");
+    expect($("timing-override").hidden).toBe(false);
+  });
+});
+
+describe("a late write of an older job", () => {
+  it("never stops, replaces or overwrites the job of a newer lecture", async () => {
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    const held = deferred();
+    const set = storage.set;
+    storage.set = vi.fn(async (items: Record<string, unknown>) => {
+      const value = items[`job:${TAB}`] as JobRecord | undefined;
+      if (value?.state === "created" && value.jobId === "job-A") await held.promise;
+      return set(items);
+    });
+    const resultFor = (id: string) => ({ ...RESULT, job_id: id, translation: { ...RESULT.translation, text: `text ${id}` } });
+    const api = fakeApi({
+      createJob: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "job-A", status: "queued" })
+        .mockResolvedValueOnce({ id: "job-B", status: "queued" }),
+      getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_token: string, id: string) => resultFor(id)),
+    });
+    const { dubbing } = await started(storage, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle(); // A answered; its "created" write is held
+    lesson = "demo-course/2";
+    dubbing.lessonState("demo-course/2");
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    held.resolve(); // the old write and its callback finish now
+    await settle(20);
+    expect(api.createJob).toHaveBeenCalledTimes(2);
+    expect(api.getJob.mock.calls.map((c) => c[1])).toEqual(["job-B"]);
+    expect($("translation").textContent).toBe("text job-B");
+    expect($("job-status").textContent).toBe("Completed.");
+    expect($<HTMLAudioElement>("result-audio").getAttribute("src")).toBe("blob:test/1");
+    const stored = storage.data[`job:${TAB}`] as JobRecord;
+    expect(stored.jobId).toBe("job-B");
+    expect(stored.lessonKey).toBe("demo-course/2");
+  });
+});
+
+describe("audio download", () => {
+  it("a failed or timed-out MP3 download can be retried", async () => {
+    const api = fakeApi({
+      getAudio: vi
+        .fn()
+        .mockRejectedValueOnce(new MyDubbError(0, "timeout", "MyDubb did not answer in time."))
+        .mockResolvedValueOnce(new Blob(["mp3"], { type: "audio/mpeg" })),
+    });
+    await started(undefined, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect($("audio-status").textContent).toMatch(/could not be loaded: MyDubb did not answer in time/);
+    expect($<HTMLButtonElement>("check-again").hidden).toBe(false);
+    $<HTMLButtonElement>("check-again").click();
+    await settle(12);
+    expect($<HTMLAudioElement>("result-audio").getAttribute("src")).toBe("blob:test/1");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+});

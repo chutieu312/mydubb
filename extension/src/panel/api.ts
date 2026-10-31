@@ -94,13 +94,30 @@ function isResult(value: unknown): value is JobResult {
   );
 }
 
+export const AUDIO_TIMEOUT_MS = 120_000;
+
+/** Body read failed for a reason other than the deadline or the caller's cancellation. */
+const UNREADABLE_BODY = Symbol("unreadable");
+
 export function createApi({ origin, fetch }: ApiOptions) {
-  async function send(path: string, options: CallOptions): Promise<Response> {
+  /**
+   * One request: the deadline and the caller's signal cover sending, the headers **and** reading
+   * the body (`read`); cleanup happens only once the body has been read or abandoned. Failures are
+   * told apart: `timeout` (our deadline), the caller's own AbortError (cancellation, rethrown as
+   * is), `network_error` (no answer) and `unreadable_response` (an answer whose body could not be
+   * read or understood).
+   */
+  async function exchange<T>(
+    path: string,
+    options: CallOptions,
+    read: (response: Response, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
     if (options.token) headers.Authorization = `Bearer ${options.token}`;
     const controller = new AbortController();
     const abort = () => controller.abort();
+    if (options.signal?.aborted) controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
     let timedOut = false;
     const timer =
@@ -110,44 +127,63 @@ export function createApi({ origin, fetch }: ApiOptions) {
             timedOut = true;
             controller.abort();
           }, options.timeoutMs);
+    const failure = (error: unknown, code: string, message: string, status = 0): unknown => {
+      if (timedOut) return new MyDubbError(0, "timeout", "MyDubb did not answer in time.");
+      if (options.signal?.aborted) return error;
+      return new MyDubbError(status, code, message);
+    };
     try {
-      return await fetch(`${origin}${path}`, {
-        method: options.method ?? "GET",
-        headers,
-        body: options.body === undefined ? undefined : JSON.stringify(options.body),
-        credentials: "omit",
-        cache: "no-store",
-        redirect: "error",
-        referrerPolicy: "no-referrer",
-        signal: controller.signal,
-      });
-    } catch (error) {
-      if (timedOut) throw new MyDubbError(0, "timeout", "MyDubb did not answer in time.");
-      if (options.signal?.aborted) throw error;
-      throw new MyDubbError(0, "network_error", "Cannot reach MyDubb. Check your connection.");
+      let response: Response;
+      try {
+        response = await fetch(`${origin}${path}`, {
+          method: options.method ?? "GET",
+          headers,
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          credentials: "omit",
+          cache: "no-store",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+          signal: controller.signal,
+        });
+      } catch (error) {
+        throw failure(error, "network_error", "Cannot reach MyDubb. Check your connection.");
+      }
+      try {
+        return await read(response, controller.signal);
+      } catch (error) {
+        if (error instanceof MyDubbError) throw error;
+        throw failure(error, "unreadable_response", "The answer from MyDubb could not be read.", response.status);
+      }
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
     }
   }
 
-  async function call<T>(path: string, guard: (v: unknown) => v is T, options: CallOptions = {}): Promise<T> {
-    const response = await send(path, options);
-    let payload: unknown = null;
+  /** The JSON body, or UNREADABLE_BODY when it is not JSON; an aborted read throws. */
+  async function jsonBody(response: Response, signal: AbortSignal): Promise<unknown> {
+    if (response.status === 204) return null;
     try {
-      payload = response.status === 204 ? null : await response.json();
-    } catch {
-      payload = null;
+      return await response.json();
+    } catch (error) {
+      if (signal.aborted) throw error;
+      return UNREADABLE_BODY;
     }
-    if (!response.ok) throw errorOf(response, payload);
-    if (!guard(payload)) {
-      throw new MyDubbError(response.status, "unreadable_response", "MyDubb sent an unexpected response.");
-    }
-    return payload;
+  }
+
+  async function call<T>(path: string, guard: (v: unknown) => v is T, options: CallOptions = {}): Promise<T> {
+    return exchange(path, options, async (response, signal) => {
+      const payload = await jsonBody(response, signal);
+      if (!response.ok) throw errorOf(response, payload === UNREADABLE_BODY ? null : payload);
+      if (payload === UNREADABLE_BODY || !guard(payload)) {
+        throw new MyDubbError(response.status, "unreadable_response", "MyDubb sent an unexpected response.");
+      }
+      return payload;
+    });
   }
 
   return {
-    meta: () => call("/api/meta", (v): v is AppMeta => isRecord(v)),
+    meta: () => call("/api/meta", (v): v is AppMeta => isRecord(v), { timeoutMs: 30_000 }),
     exchangeCode: (body: { client_id: string; redirect_uri: string; code: string; code_verifier: string }) =>
       call("/api/extension/token", isTokenGrant, {
         method: "POST",
@@ -158,11 +194,12 @@ export function createApi({ origin, fetch }: ApiOptions) {
       call("/api/extension/session", (v): v is { user: ExtensionUser; expires_at: string } => isRecord(v) && isUser(v.user), {
         token,
         signal,
+        timeoutMs: 30_000,
       }),
-    logout: async (token: string) => {
-      const response = await send("/api/extension/logout", { method: "POST", token, timeoutMs: 10_000 });
-      if (!response.ok && response.status !== 401) throw errorOf(response, null);
-    },
+    logout: (token: string) =>
+      exchange("/api/extension/logout", { method: "POST", token, timeoutMs: 10_000 }, async (response) => {
+        if (!response.ok && response.status !== 401) throw errorOf(response, null);
+      }),
     /** Sent once. A timeout or lost answer is reported, never retried: the job may exist. */
     createJob: (token: string, body: CreateJobInput, timeoutMs: number) =>
       call("/api/jobs", isJob, { method: "POST", token, body, timeoutMs }),
@@ -175,21 +212,17 @@ export function createApi({ origin, fetch }: ApiOptions) {
       if (!path.startsWith("/api/jobs/")) {
         throw new MyDubbError(0, "unreadable_response", "MyDubb sent an unexpected audio address.");
       }
-      const response = await send(path, { token, signal });
-      if (!response.ok) {
-        let payload: unknown = null;
-        try {
-          payload = await response.json();
-        } catch {
-          payload = null;
+      return exchange(path, { token, signal, timeoutMs: AUDIO_TIMEOUT_MS }, async (response, readSignal) => {
+        if (!response.ok) {
+          const payload = await jsonBody(response, readSignal);
+          throw errorOf(response, payload === UNREADABLE_BODY ? null : payload);
         }
-        throw errorOf(response, payload);
-      }
-      const blob = await response.blob();
-      if (!blob.type.startsWith("audio/")) {
-        throw new MyDubbError(response.status, "unreadable_response", "MyDubb sent something that is not audio.");
-      }
-      return blob;
+        const blob = await response.blob();
+        if (!blob.type.startsWith("audio/")) {
+          throw new MyDubbError(response.status, "unreadable_response", "MyDubb sent something that is not audio.");
+        }
+        return blob;
+      });
     },
   };
 }

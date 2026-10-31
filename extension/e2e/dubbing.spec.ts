@@ -198,3 +198,33 @@ test("disconnecting or an ended session clears every panel and its result", asyn
   expect(await sessionGet(worker, "auth")).toBeNull();
   expect(mydubb.requests.every((r) => new URL(MYDUBB + r.path).origin === MYDUBB)).toBe(true);
 });
+
+test("opening the panel with a new timestamped selection is not undone by the stored form", async ({ context, worker, extensionId }) => {
+  const { tabId } = await openLecture(context, worker, 307);
+  // An older form of this tab and lecture, and a selection with new caption times waiting for the panel.
+  await worker.evaluate(
+    async ([tab, lesson]) => {
+      await chrome.storage.session.set({
+        [`form:${tab}`]: {
+          lessonKey: lesson,
+          firstStart: "00:00:10",
+          lastStart: "00:06:10",
+          ignoreTimestamps: false,
+          targetLanguage: "arabic",
+          voice: "EmmaMultilingual",
+          speed: 1.5,
+          filledFrom: null,
+        },
+        [`pending:${tab}`]: { id: "sel-1", text: "0:01\nFirst caption.\n0:21\nLast caption.", problem: null, lessonKey: lesson, at: Date.now() },
+      });
+    },
+    [tabId, "demo-course/307"] as const,
+  );
+  const panel = await openPanel(context, extensionId, tabId);
+  await expect(panel.getByRole("textbox", { name: "Transcript selection" })).toHaveValue("0:01\nFirst caption.\n0:21\nLast caption.");
+  await expect(panel.getByLabel("First Sentence Start Time")).toHaveValue("00:00:01");
+  await expect(panel.getByLabel("Last Sentence Start Time")).toHaveValue("00:00:21");
+  await expect(panel.getByLabel("Audio speed")).toHaveValue("1.5");
+  await panel.waitForTimeout(500);
+  await expect(panel.getByLabel("First Sentence Start Time")).toHaveValue("00:00:01");
+});

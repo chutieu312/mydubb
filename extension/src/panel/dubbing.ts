@@ -200,6 +200,15 @@ export class Dubbing {
   private audioUrl: string | null = null;
   private saveTimer: number | null = null;
   private disposed = false;
+  // Until the stored form, account and job are read (restore()), page states and transcript
+  // changes are held and replayed afterwards, so the stored snapshot never overwrites them.
+  private restored = false;
+  private heldLesson: { key: string | null } | null = null;
+  private heldTranscript = false;
+  // Form edits made before restore(): the newer in-memory form then wins over the snapshot.
+  private formEdits = 0;
+  // Writes and removals of this tab's job record, one at a time, each checked when it runs.
+  private jobStore: Promise<void> = Promise.resolve();
   private readonly cleanup = new AbortController();
 
   constructor(
@@ -207,7 +216,14 @@ export class Dubbing {
     private readonly host: DubbingHost,
   ) {}
 
+  /** restore() then loadRemote(): what the panel does, in one call (used by tests). */
   async start(): Promise<void> {
+    await this.restore();
+    await this.loadRemote();
+  }
+
+  /** Wires the form and reads this tab's stored form, account and job (no network). */
+  async restore(): Promise<void> {
     const signal = this.cleanup.signal;
     const ui = this.ui;
     ui.connect.addEventListener("click", () => void this.connectAccount(), { signal });
@@ -235,8 +251,9 @@ export class Dubbing {
     );
 
     const stored = await this.deps.storage.get([AUTH_KEY, formKey(this.deps.tabId), jobKey(this.deps.tabId)]);
+    if (this.disposed) return;
     const form = stored[formKey(this.deps.tabId)];
-    if (isFormRecord(form)) this.form = form;
+    if (isFormRecord(form) && this.formEdits === 0) this.form = form;
     this.applyAuth(stored[AUTH_KEY], false);
     const record = stored[jobKey(this.deps.tabId)];
     if (isJobRecord(record) && recordBelongs(record, this.account(), this.host.currentLesson())) {
@@ -244,10 +261,26 @@ export class Dubbing {
       this.renderRecord();
       if (record.state === "created") this.follow(record);
       else this.setJobError(UNKNOWN_OUTCOME);
+    } else if (isJobRecord(record)) {
+      void this.forgetRecord(record.operationId);
     } else if (record !== undefined) {
       void this.deps.storage.remove(jobKey(this.deps.tabId));
     }
-    this.renderForm();
+    this.restored = true;
+    // What happened while reading, in order: the lecture rule first, then the transcript.
+    const held = this.heldLesson;
+    this.heldLesson = null;
+    if (held) this.lessonState(held.key);
+    if (this.heldTranscript) {
+      this.heldTranscript = false;
+      this.transcriptChanged();
+    } else {
+      this.renderForm();
+    }
+  }
+
+  /** Checks the stored token with the server and loads the options (languages, voices). */
+  async loadRemote(): Promise<void> {
     void this.verifyAuth();
     await this.loadMeta();
   }
@@ -274,6 +307,10 @@ export class Dubbing {
 
   /** Every page state: forget what belongs to another lecture. */
   lessonState(key: string | null): void {
+    if (!this.restored) {
+      this.heldLesson = { key };
+      return;
+    }
     if (key !== this.lastLesson) {
       if (this.lastLesson !== undefined) this.lessonGen += 1;
       this.lastLesson = key;
@@ -293,6 +330,10 @@ export class Dubbing {
   }
 
   transcriptChanged(): void {
+    if (!this.restored) {
+      this.heldTranscript = true;
+      return;
+    }
     if (!this.form.ignoreTimestamps) this.fillFromCaptions(this.timing());
     this.renderForm();
   }
@@ -455,6 +496,7 @@ export class Dubbing {
   }
 
   private update(change: Partial<FormRecord>): void {
+    if (!this.restored) this.formEdits += 1;
     this.form = { ...this.form, ...change };
     this.scheduleSave();
     this.renderForm();
@@ -665,7 +707,13 @@ export class Dubbing {
       this.record?.operationId === record.operationId;
     // Written before sending: if the panel closes before the answer, reopening it says that the
     // outcome is unknown instead of assuming that nothing was created.
-    await this.deps.storage.set({ [jobKey(this.deps.tabId)]: record });
+    await this.saveRecord(record);
+    if (!current()) {
+      // The account or lecture changed while writing: nothing is sent for this click.
+      if (this.sendingOp === record.operationId) this.sendingOp = null;
+      this.renderGenerate();
+      return;
+    }
 
     let job: Job;
     try {
@@ -681,7 +729,9 @@ export class Dubbing {
     if (!current()) return;
     const created: JobRecord = { ...record, state: "created", jobId: job.id };
     this.record = created;
-    await this.deps.storage.set({ [jobKey(this.deps.tabId)]: created });
+    await this.saveRecord(created);
+    // Checked again after the write: a newer click or a lecture/account change owns the panel now.
+    if (!current()) return;
     this.showStatus(job);
     this.follow(created);
   }
@@ -694,7 +744,7 @@ export class Dubbing {
       return;
     }
     // The server refused it: no job was created.
-    this.forgetRecord();
+    void this.forgetRecord();
     this.ui.resultSection.hidden = true;
     if (error instanceof MyDubbError && error.isUnauthenticated) {
       void this.expireAuth(auth);
@@ -709,7 +759,8 @@ export class Dubbing {
   private follow(record: JobRecord): void {
     const auth = this.auth;
     const jobId = record.jobId;
-    if (!auth || !jobId) return;
+    // A stale record (an older click) must not stop or replace the polling of the current one.
+    if (!auth || !jobId || this.record?.operationId !== record.operationId) return;
     this.poll?.abort();
     const controller = new AbortController();
     this.poll = controller;
@@ -738,7 +789,7 @@ export class Dubbing {
           await this.expireAuth(auth);
           return;
         case "gone":
-          this.forgetRecord();
+          void this.forgetRecord(record.operationId);
           this.setJobError("MyDubb no longer has this job.");
           return;
         case "gave-up":
@@ -770,7 +821,7 @@ export class Dubbing {
     } catch (error) {
       if (!current()) return;
       if (error instanceof MyDubbError && error.isUnauthenticated) return void this.expireAuth(auth);
-      if (error instanceof MyDubbError && error.code === "result_expired") this.forgetRecord();
+      if (error instanceof MyDubbError && error.code === "result_expired") void this.forgetRecord();
       else this.ui.checkAgain.hidden = false;
       this.setJobError(jobErrorMessage(error));
       return;
@@ -867,7 +918,7 @@ export class Dubbing {
     this.poll?.abort();
     this.poll = null;
     this.clearAudio();
-    if (this.record) this.forgetRecord();
+    if (this.record) void this.forgetRecord();
     this.record = null;
     this.sendingOp = null;
     const ui = this.ui;
@@ -886,13 +937,28 @@ export class Dubbing {
     this.setJobError("");
   }
 
-  private forgetRecord(): void {
-    const record = this.record;
-    if (!record) return;
+  /** Runs this tab's job-record storage steps one after another (a failed step does not block). */
+  private queueJobStore(task: () => Promise<void>): Promise<void> {
+    const run = this.jobStore.then(task, task);
+    this.jobStore = run.catch(() => undefined);
+    return run;
+  }
+
+  /** Stores the record only if it is still the one this panel shows when the write runs. */
+  private saveRecord(record: JobRecord): Promise<void> {
+    return this.queueJobStore(async () => {
+      if (this.record?.operationId !== record.operationId) return;
+      await this.deps.storage.set({ [jobKey(this.deps.tabId)]: record });
+    });
+  }
+
+  /** Removes the stored record of that click only; a newer click is never touched. */
+  private forgetRecord(operationId = this.record?.operationId): Promise<void> {
+    if (!operationId) return Promise.resolve();
     const key = jobKey(this.deps.tabId);
-    void this.deps.storage.get(key).then((stored) => {
-      const value = stored[key];
-      if (isJobRecord(value) && value.operationId === record.operationId) void this.deps.storage.remove(key);
+    return this.queueJobStore(async () => {
+      const value = (await this.deps.storage.get(key))[key];
+      if (isJobRecord(value) && value.operationId === operationId) await this.deps.storage.remove(key);
     });
   }
 

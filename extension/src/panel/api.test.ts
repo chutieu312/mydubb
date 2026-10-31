@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { MyDubbError, createApi } from "./api";
+import { AUDIO_TIMEOUT_MS, MyDubbError, NO_ANSWER, createApi } from "./api";
 
 const ORIGIN = "https://mydubb.test";
 const json = (status: number, body: unknown) =>
@@ -88,5 +88,77 @@ describe("MyDubb API client", () => {
     await expect(
       api.exchangeCode({ client_id: "c", redirect_uri: "r", code: "x", code_verifier: "v" }),
     ).rejects.toMatchObject({ code: "unreadable_response" });
+  });
+});
+
+/** Headers arrive at once; the body never does, and errors when the request is aborted (as in Chrome). */
+function stalledBody(contentType: string) {
+  return vi.fn(
+    async (_url: string, init: RequestInit) =>
+      new Response(
+        new ReadableStream({
+          start(stream) {
+            init.signal?.addEventListener("abort", () => stream.error(new DOMException("aborted", "AbortError")));
+          },
+        }),
+        { status: 200, headers: { "Content-Type": contentType } },
+      ),
+  );
+}
+
+describe("deadline and cancellation cover the response body", () => {
+  it("times out a job answer whose JSON body never arrives, and does not resend", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = stalledBody("application/json");
+      const api = createApi({ origin: ORIGIN, fetch });
+      const caught = api.createJob("tok", BODY, 5000).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(5000);
+      const error = (await caught) as MyDubbError;
+      expect(error).toBeInstanceOf(MyDubbError);
+      expect(error.code).toBe("timeout");
+      expect(NO_ANSWER.has(error.code)).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes the caller's cancellation through while the body is read", async () => {
+    const api = createApi({ origin: ORIGIN, fetch: stalledBody("application/json") });
+    const controller = new AbortController();
+    const pending = api.getJob("tok", "j1", controller.signal).catch((e: unknown) => e);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    const error = (await pending) as DOMException;
+    expect(error).not.toBeInstanceOf(MyDubbError);
+    expect(error.name).toBe("AbortError");
+  });
+
+  it("times out or cancels an MP3 body that stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createApi({ origin: ORIGIN, fetch: stalledBody("audio/mpeg") });
+      const caught = api.getAudio("tok", "/api/jobs/j1/result/audio").catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(AUDIO_TIMEOUT_MS);
+      expect(((await caught) as MyDubbError).code).toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+    const api = createApi({ origin: ORIGIN, fetch: stalledBody("audio/mpeg") });
+    const controller = new AbortController();
+    const pending = api.getAudio("tok", "/api/jobs/j1/result/audio", controller.signal).catch((e: unknown) => e);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    expect(((await pending) as DOMException).name).toBe("AbortError");
+  });
+
+  it("reports a body that is not JSON as unreadable, not as a timeout or a refusal", async () => {
+    const api = createApi({
+      origin: ORIGIN,
+      fetch: async () => new Response("{not json", { status: 202, headers: { "Content-Type": "application/json" } }),
+    });
+    await expect(api.createJob("tok", BODY, 5000)).rejects.toMatchObject({ code: "unreadable_response", status: 202 });
   });
 });

@@ -136,11 +136,13 @@ class Panel {
     const draft = stored[draftKey(this.tabId)];
     this.draft = isDraftRecord(draft) ? draft : null;
     ui.transcript.value = this.draft?.text ?? "";
-    const dubbing = this.dubbing.start();
+    // The stored form, account and job first: a selection or page state arriving now must not be
+    // overwritten by that older snapshot (Dubbing also holds anything that arrives meanwhile).
+    await this.dubbing.restore();
     this.connect(true);
     const pending = stored[pendingKey(this.tabId)];
     if (isPendingSelection(pending)) this.processPending(pending);
-    await dubbing;
+    await this.dubbing.loadRemote();
   }
 
   private dispose(): void {
