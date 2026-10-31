@@ -16,7 +16,14 @@ import {
   type PageState,
   type PendingSelection,
 } from "../shared/messages";
-import { decidePending, draftFromSelection, draftIsStale, formatTime } from "./draft";
+import {
+  belongsElsewhere,
+  decidePending,
+  draftFromSelection,
+  draftIsStale,
+  formatTime,
+  type CurrentLesson,
+} from "./draft";
 
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
@@ -221,12 +228,20 @@ class Panel {
     const nextKey = next.lesson?.key ?? null;
     this.state = next;
 
-    if (previous && prevKey !== nextKey && prevKey !== null) {
-      this.discardDraft(nextKey ? "The lecture changed. The previous draft was cleared." : "You left the lecture. The previous draft was cleared.");
-      this.setVideoError("");
-    } else if (!previous && draftIsStale(this.draft, nextKey)) {
-      this.discardDraft("This tab now shows a different lecture. The earlier draft was cleared.");
-    } else if (this.draft && this.draft.lessonKey === null && nextKey) {
+    const lessonChanged = previous !== null && prevKey !== nextKey;
+    if (lessonChanged) this.setVideoError("");
+    // Every state is checked against the draft's own lecture, not only the first one after
+    // connecting: draft A must not survive a detour (A -> non-lecture page -> B) under B's label.
+    if (draftIsStale(this.draft, nextKey) || (lessonChanged && this.draft?.lessonKey === null)) {
+      this.discardDraft(
+        nextKey ? "The lecture changed. The previous draft was cleared." : "You left the lecture. The previous draft was cleared.",
+      );
+    } else if (this.awaitingConfirm && belongsElsewhere(this.awaitingConfirm.lessonKey, nextKey)) {
+      this.awaitingConfirm = null;
+      ui.confirm.hidden = true;
+      this.setDraftStatus("The lecture changed, so the waiting selection was discarded.");
+    } else if (!previous && this.draft && this.draft.lessonKey === null && nextKey) {
+      // A draft started before the tab's lecture was known belongs to the first lecture reported.
       this.draft = { ...this.draft, lessonKey: nextKey };
       this.scheduleSave();
     }
@@ -338,8 +353,7 @@ class Panel {
   private processPending(pending: PendingSelection): void {
     if (this.tabClosed) return;
     void chrome.storage.session.remove(pendingKey(this.tabId));
-    const currentKey = this.state?.lesson?.key ?? null;
-    const decision = decidePending(this.draft, pending, currentKey);
+    const decision = decidePending(this.draft, pending, this.currentLesson());
     switch (decision.action) {
       case "reject":
         this.setDraftStatus(
@@ -366,7 +380,9 @@ class Panel {
     ui.confirm.hidden = true;
     ui.transcript.focus();
     if (!pending) return;
-    if (replace) this.acceptSelection(pending);
+    if (replace && belongsElsewhere(pending.lessonKey, this.currentLesson())) {
+      this.setDraftStatus("That selection came from a different lecture, so it was ignored.");
+    } else if (replace) this.acceptSelection(pending);
     else this.setDraftStatus("Kept your edited draft. The new selection was discarded.");
   }
 
@@ -376,6 +392,11 @@ class Panel {
     this.saveDraftNow();
     const lines = pending.text.split("\n").length;
     this.setDraftStatus(`Selection received (${pending.text.length} characters, ${lines} line${lines === 1 ? "" : "s"}).`);
+  }
+
+  /** The lecture now shown; undefined until the tab has reported a state. */
+  private currentLesson(): CurrentLesson {
+    return this.state ? (this.state.lesson?.key ?? null) : undefined;
   }
 
   private onEdit(): void {

@@ -7,6 +7,17 @@ export type PendingDecision =
   | { action: "confirm" }
   | { action: "reject"; reason: "empty" | "too-long" | "other-lesson" };
 
+/**
+ * The lecture the linked tab shows: a lecture key, null once the tab is confirmed to be on a page
+ * that is not a lecture, or undefined while no page state has arrived yet (unknown).
+ */
+export type CurrentLesson = string | null | undefined;
+
+/** True when something tied to `lessonKey` does not belong to the lecture now shown. */
+export function belongsElsewhere(lessonKey: string | null, current: CurrentLesson): boolean {
+  return lessonKey !== null && current !== undefined && lessonKey !== current;
+}
+
 export function isEdited(draft: DraftRecord | null): boolean {
   return !!draft && draft.text.trim() !== "" && draft.text !== draft.baseline;
 }
@@ -15,11 +26,11 @@ export function isEdited(draft: DraftRecord | null): boolean {
 export function decidePending(
   draft: DraftRecord | null,
   pending: PendingSelection,
-  currentLessonKey: string | null,
+  current: CurrentLesson,
 ): PendingDecision {
   if (pending.problem === "too-long") return { action: "reject", reason: "too-long" };
   if (pending.problem === "empty" || pending.text.trim() === "") return { action: "reject", reason: "empty" };
-  if (pending.lessonKey && currentLessonKey && pending.lessonKey !== currentLessonKey) {
+  if (belongsElsewhere(pending.lessonKey, current)) {
     return { action: "reject", reason: "other-lesson" };
   }
   return isEdited(draft) ? { action: "confirm" } : { action: "replace" };
@@ -30,9 +41,12 @@ export function draftFromSelection(pending: PendingSelection, currentLessonKey: 
   return { lessonKey: pending.lessonKey ?? currentLessonKey, text: pending.text, baseline: pending.text };
 }
 
-/** True when a stored draft belongs to a different lecture than the one now linked. */
-export function draftIsStale(draft: DraftRecord | null, currentLessonKey: string | null): boolean {
-  return !!draft && !!draft.lessonKey && !!currentLessonKey && draft.lessonKey !== currentLessonKey;
+/**
+ * True when a draft belongs to another lecture than the one now shown, including when the tab is
+ * known to have left the lecture. Checked on every page state, not only the first.
+ */
+export function draftIsStale(draft: DraftRecord | null, current: CurrentLesson): boolean {
+  return !!draft && belongsElsewhere(draft.lessonKey, current);
 }
 
 export function formatTime(seconds: number | null): string {

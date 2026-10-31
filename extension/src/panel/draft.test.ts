@@ -32,7 +32,12 @@ describe("decidePending", () => {
 
   it("accepts when either lecture is still unknown", () => {
     expect(decidePending(null, pending("x", null), "c/1")).toEqual({ action: "replace" });
-    expect(decidePending(null, pending("x"), null)).toEqual({ action: "replace" });
+    expect(decidePending(null, pending("x"), undefined)).toEqual({ action: "replace" });
+  });
+
+  it("rejects a lecture's selection once the tab has left that lecture", () => {
+    expect(decidePending(null, pending("x", "c/1"), null)).toEqual({ action: "reject", reason: "other-lesson" });
+    expect(decidePending(null, pending("x", null), null)).toEqual({ action: "replace" });
   });
 });
 
@@ -50,6 +55,9 @@ describe("draft helpers", () => {
     expect(draftIsStale({ lessonKey: "c/1", text: "x", baseline: "x" }, "c/2")).toBe(true);
     expect(draftIsStale({ lessonKey: "c/1", text: "x", baseline: "x" }, "c/1")).toBe(false);
     expect(draftIsStale({ lessonKey: null, text: "x", baseline: "x" }, "c/2")).toBe(false);
+    // Confirmed non-lecture page: the draft no longer belongs here. Unknown state: keep it.
+    expect(draftIsStale({ lessonKey: "c/1", text: "x", baseline: "x" }, null)).toBe(true);
+    expect(draftIsStale({ lessonKey: "c/1", text: "x", baseline: "x" }, undefined)).toBe(false);
   });
 
   it("formats times", () => {

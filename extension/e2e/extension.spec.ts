@@ -39,6 +39,10 @@ const test = base.extend<Fixtures>({
       if (url.origin === ORIGIN && lecture) {
         return route.fulfill({ contentType: "text/html", body: fixtureHtml.replace("__LECTURE__", lecture[1]!) });
       }
+      // A Udemy page that is not a lecture (course overview).
+      if (url.origin === ORIGIN && /^\/course\/demo-course\/?$/.test(url.pathname)) {
+        return route.fulfill({ contentType: "text/html", body: fixtureHtml.replace("Lecture __LECTURE__", "Course overview") });
+      }
       if (url.origin === "https://example.test") {
         return route.fulfill({ contentType: "text/html", body: "<title>Other site</title><video></video>" });
       }
@@ -293,4 +297,48 @@ test("unsupported tab and missing tab are reported with controls disabled", asyn
   const unlinked = await context.newPage();
   await unlinked.goto(`chrome-extension://${extensionId}/sidepanel.html`);
   await expect(unlinked.getByText(/not linked to a tab/)).toBeVisible();
+});
+
+test("a lecture's draft never survives a detour through a non-lecture page to another lecture", async ({ context, worker, extensionId }) => {
+  const { page, tabId } = await openLecture(context, worker, 108);
+  let panel = await openPanel(context, extensionId, tabId);
+  await sendTranscriptSelection(page, worker, tabId);
+  await panel.getByRole("textbox", { name: "Transcript selection" }).fill("Edited draft for lecture 108");
+  await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toMatchObject({
+    lessonKey: "demo-course/108",
+    text: "Edited draft for lecture 108",
+  });
+
+  // Lecture A has a draft; close the panel and go to a Udemy page that is not a lecture.
+  await panel.close();
+  await page.goto(`${ORIGIN}/course/demo-course/?videos=0`);
+  expect(await sessionGet(worker, `draft:${tabId}`)).toMatchObject({ lessonKey: "demo-course/108" });
+
+  // Reopen the panel there: leaving the lecture is confirmed, so draft A is discarded.
+  panel = await openPanel(context, extensionId, tabId);
+  const textarea = panel.getByRole("textbox", { name: "Transcript selection" });
+  await expect(panel.locator("#lesson-label")).toHaveText("Not a Udemy lecture page");
+  await expect(panel.getByText(/You left the lecture\. The previous draft was cleared/)).toBeVisible();
+  await expect(textarea).toHaveValue("");
+  await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toBeNull();
+
+  // SPA navigation to lecture B: linked to B, with no trace of A's draft.
+  await page.evaluate(() => window.fixture.navigate(208));
+  await expect(panel.getByText("Lecture 208 | Demo Course | Udemy (lecture 208)")).toBeVisible();
+  await expect(textarea).toHaveValue("");
+  expect(await sessionGet(worker, `draft:${tabId}`)).toBeNull();
+  expect(await sessionGet(worker, `pending:${tabId}`)).toBeNull();
+
+  // An edit whose debounced save is still pending cannot restore a draft after the lecture changes.
+  await textarea.fill("Typed on lecture 208");
+  await page.evaluate(() => window.fixture.navigate(209));
+  await expect(panel.getByText("Lecture 209 | Demo Course | Udemy (lecture 209)")).toBeVisible();
+  await expect(textarea).toHaveValue("");
+  await panel.waitForTimeout(600); // longer than the 250 ms save debounce
+  expect(await sessionGet(worker, `draft:${tabId}`)).toBeNull();
+
+  // A new selection on the current lecture is accepted and stored under that lecture.
+  await sendTranscriptSelection(page, worker, tabId);
+  await expect(textarea).not.toHaveValue("");
+  await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toMatchObject({ lessonKey: "demo-course/209" });
 });

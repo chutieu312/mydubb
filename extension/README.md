@@ -68,8 +68,11 @@ intercept network requests and does not use Udemy APIs.
     command for a different lecture or video (`stale`). Seeks are clamped to the seekable range.
     `muted`, `volume` and `playbackRate` are never changed.
 - **Side panel** (`src/panel`): bound to one tab id. It connects a port to that tab's top-frame
-  content script, reconnects after reload/navigation, and reports a closed tab. On a lecture change
-  it clears the draft and says so.
+  content script, reconnects after reload/navigation, and reports a closed tab. Every page state is
+  checked against the lecture the draft (and any waiting selection) belongs to: when the tab shows
+  another lecture, or is confirmed to be on a non-lecture page, the draft is cleared from the panel
+  and from session storage, and the panel says so. Reloading or reconnecting to the same lecture
+  keeps the draft.
 - **Validation**: every message is shape-checked; the content script accepts ports only from this
   extension's `sidepanel.html` and selection requests only from the extension itself (not from a
   tab). The manifest has no `externally_connectable`, so web pages cannot message the extension.
