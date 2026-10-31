@@ -226,9 +226,22 @@ does not download video, does not intercept network requests and does not use Ud
   - *Controls*: Play aligns the video to the audio, starts it, then starts the audio where the video
     is. A seek on the video inside V0..V1 moves the audio; outside it pauses both and turns Sync off
     (the video is not pulled back). Reaching V1 or the end of the MP3 pauses both; Play then starts
-    both from the beginning. A rate change in the Udemy player pauses both and turns Sync off (the
-    rate is not forced back; another audio speed needs a new Generate). An unmute is respected
-    (shown, never muted again).
+    both from the beginning. An unmute is respected (shown, never muted again).
+  - *The video's rate*: some players put their own speed back on the element by themselves around
+    a start, pause or seek (the fixture's "site" player does; whether the real Udemy player does is
+    not verified). A rate other than R within 2 s after attach, a MyDubb operation or a play,
+    pause, seek or "playing" of the video, with no pointerdown/keydown on the page since then, is
+    the page's: R is set again, at most 3 times per 10 s; if it still does not hold, both pause and
+    Sync turns off with "the video speed did not stay at R" (no tug of war, no timer). Any other
+    rate change (while it plays steadily, or after the user's click or key: picking a speed) pauses
+    both and turns Sync off, saying the speed changed from R, without claiming who changed it; it
+    is not forced back. Only the time of the last input is kept. The MP3's rate, the job's span and
+    speed are never touched to work around it.
+  - *Diagnostics*: the coordinator keeps a trace of the last 60 steps (op, reply and event names,
+    command ids, the action generation, the activation id's first 8 characters, the expected R and
+    the video's actual `playbackRate`, times) and logs each with `console.debug("MyDubb sync", …)`
+    in the offscreen document (chrome://extensions → MyDubb → Inspect views: offscreen.html,
+    console level Verbose). No token, transcript, account, job or lecture URL is in it.
   - *Buffering and errors*: intent (paused/playing) is kept apart from buffering. While one side
     waits for data the other is held; only an intent to play still in force resumes it (a Pause
     during buffering stays paused). A play refused by Chrome or a failing side pauses the other and
@@ -287,7 +300,9 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   echoes and late answers, buffering on each side, Pause during buffering, blocked play, timeouts,
   small and large drift, limited corrections, background tab), the page side (`content/sync.test.ts`:
   ownership of mute and rate, user unmute and rate change, reused element, replaced element,
-  echoes vs user actions, end of span) and the hub (two tabs, Close, ending sessions).
+  echoes vs user actions, end of span, a page resetting the rate on play/playing/seek, a tug of war
+  (bounded), the restore limit per window, a speed picked right after Play, late rate events across
+  off/on) and the hub (two tabs, Close, ending sessions).
 - `npm run check:dist`: `dist/` has no test hook or test server and exactly the documented
   permissions.
 - `npm run test:browser`: the real extension in Playwright's Chromium against **synthetic fixture
@@ -309,8 +324,9 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   default, the explanation, on/off restoring mute and rate, Play/Pause/±5 s from the panel, drift
   measured over 24 s of playback at R ≈ 1.5 (both by the test and by the coordinator), play, pause
   and seek on the video inside and outside the span, a timed job with changed start times
-  (R ≈ 0.98 at 1.5x), an MP3 that does not fit, the floating player with the panel closed, a rate
-  change in the video, an unmute, the end of the span and Play again, Close, two tabs, a replaced
+  (R ≈ 0.98 at 1.5x), an MP3 that does not fit, the floating player with the panel closed, a
+  speed picked in the page's player, a page that puts 1x back on play (Sync sets R again and both
+  play) or on every rate change (bounded, then both pause with the reason), an unmute, the end of the span and Play again, Close, two tabs, a replaced
   video, a stopped service worker, Disconnect, reload and an SPA lecture change. Autoplay is allowed
   by a browser flag in these tests, so Chrome's autoplay blocking is only unit-tested, and
   background-tab throttling is not reproduced (unit-tested only). These are not evidence of
@@ -355,7 +371,10 @@ use the Azure free allowance.
    (panel closed): voice and picture stay together within the stated estimate for the whole span;
    Pause, ±5 s and the seek bar move both. On the Udemy player: Play/Pause and seeking inside the
    span move the audio; seeking before V0 or after V1 turns Sync off with both paused. Change the
-   speed in the Udemy player: Sync turns off, both paused. Unmute the video: it stays unmuted.
+   speed in the Udemy player: Sync turns off, both paused. With the video at 1x before turning
+   Sync on, Play must run it at R without touching the Udemy speed menu; if Sync still turns off,
+   copy the "MyDubb sync" lines from the offscreen console (above): they show which step the rate
+   changed after and to what. Unmute the video: it stays unmuted.
    Let it reach the end: both pause; Play starts again from V0. Switch to another tab for a while
    and come back: the video catches up. Turn Sync off: the video's sound and speed are back.
    Also: × on the floating player, playing another lecture tab, moving to another lecture,

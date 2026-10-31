@@ -93,6 +93,7 @@ export type SyncStatus = "unavailable" | "off" | "starting" | "paused" | "playin
 
 export type SyncNotice =
   | "rate-changed"
+  | "rate-not-held"
   | "seek-outside"
   | "video-replaced"
   | "no-video"
@@ -114,6 +115,7 @@ export type SyncNotice =
 
 export const SYNC_NOTICES: readonly SyncNotice[] = [
   "rate-changed",
+  "rate-not-held",
   "seek-outside",
   "video-replaced",
   "no-video",
@@ -208,11 +210,14 @@ export function syncPreviewText(sync: SyncView): string {
 
 export function syncNoticeText(sync: SyncView): string {
   const range = sync.start !== null && sync.end !== null ? `${clockLabel(sync.start)}–${clockLabel(sync.end)}` : "the synced part";
+  const need = sync.rate !== null ? rateLabel(sync.rate) : "the synced speed";
   switch (sync.notice) {
     case null:
       return "";
     case "rate-changed":
-      return "Sync turned off: the video speed was changed in the Udemy player. Both are paused. For another audio speed, Generate the audio again at that speed.";
+      return `Sync turned off: the video speed changed from ${need}, the speed Sync needs, while it played. Both are paused; the video keeps its new speed. Turn Sync on again to go back to ${need}.`;
+    case "rate-not-held":
+      return `Sync turned off: the video speed did not stay at ${need}, the speed Sync needs (the page kept setting another speed). Both are paused.`;
     case "seek-outside":
       return `Sync turned off: the video was moved outside ${range}, the part this audio covers. Both are paused.`;
     case "video-replaced":

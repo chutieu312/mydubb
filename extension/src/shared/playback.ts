@@ -112,6 +112,8 @@ export interface VideoSample {
   paused: boolean;
   /** Waiting for data while not paused. */
   waiting: boolean;
+  /** Its playbackRate (for the coordinator's diagnostics). */
+  rate: number;
   /** The lecture tab is in the background. */
   hidden: boolean;
 }
@@ -161,6 +163,8 @@ export type VideoEventName =
   | "waiting"
   | "playing"
   | "rate-changed"
+  | "rate-restored"
+  | "rate-not-held"
   | "unmuted"
   | "reached-end"
   | "ended"
@@ -175,6 +179,8 @@ export const VIDEO_EVENTS: readonly VideoEventName[] = [
   "waiting",
   "playing",
   "rate-changed",
+  "rate-restored",
+  "rate-not-held",
   "unmuted",
   "reached-end",
   "ended",
@@ -319,6 +325,7 @@ function isSample(value: unknown): value is VideoSample {
     isFiniteNumber(value.currentTime) &&
     typeof value.paused === "boolean" &&
     typeof value.waiting === "boolean" &&
+    isFiniteNumber(value.rate) &&
     typeof value.hidden === "boolean"
   );
 }

@@ -13,6 +13,8 @@ interface Window {
     videos(): HTMLVideoElement[];
     replaceVideo(seconds?: number): void;
     navigate(lectureId: number): void;
+    siteResetsRate(on: "play" | "playing" | "seeked" | "ratechange" | null, rate?: number, times?: number): void;
+    siteResets(): number;
     state(index?: number): FixtureVideoState | null;
   };
 }

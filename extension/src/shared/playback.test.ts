@@ -73,7 +73,7 @@ describe("helpers", () => {
   });
 
   it("Sync with video: bounded video operations, replies and events; a span only as numbers", () => {
-    const sample = { currentTime: 12.5, paused: false, waiting: false, hidden: false };
+    const sample = { currentTime: 12.5, paused: false, waiting: false, rate: 1.5, hidden: false };
     const span = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
     expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES, sync: span })).toBe(true);
     expect(isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices: CHOICES, sync: { ...span, end: 5 } })).toBe(false);

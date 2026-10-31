@@ -2,15 +2,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { PageToPlayer, VideoCommand, VideoEvent, VideoReply } from "../shared/playback";
-import { VideoSync } from "./sync";
+import { MAX_RATE_RESTORES, RATE_RESTORE_WINDOW_MS, SETTLE_MS, VideoSync } from "./sync";
 import { fakeVideo } from "./testVideo";
 
-type Video = ReturnType<typeof fakeVideo> & { rate: { value: number; max: number }; volumeWrites: number };
+type Video = ReturnType<typeof fakeVideo> & { rate: { value: number; max: number; queued: boolean; writes: number }; volumeWrites: number };
 
-/** fakeVideo plus rate, mute and source, with the events a real element fires for them. */
+/**
+ * fakeVideo plus rate, mute and source, with the events a real element fires for them. Its
+ * ratechange fires at once, or (`rate.queued`) a little later, as a browser's queued media task.
+ */
 function video(src = "blob:https://www.udemy.com/lecture-1"): Video {
   const v = fakeVideo(document, { duration: 120, seekable: [[0, 120]] }) as Video;
-  v.rate = { value: 1, max: 16 };
+  v.rate = { value: 1, max: 16, queued: false, writes: 0 };
   v.volumeWrites = 0;
   let muted = false;
   Object.defineProperty(v, "playbackRate", {
@@ -19,7 +22,9 @@ function video(src = "blob:https://www.udemy.com/lecture-1"): Video {
     set: (value: number) => {
       if (value > v.rate.max) throw new DOMException("unsupported", "NotSupportedError");
       v.rate.value = value;
-      v.dispatchEvent(new Event("ratechange"));
+      v.rate.writes += 1;
+      if (v.rate.queued) queueMicrotask(() => v.dispatchEvent(new Event("ratechange")));
+      else v.dispatchEvent(new Event("ratechange"));
     },
   });
   Object.defineProperty(v, "muted", {
@@ -42,6 +47,7 @@ function video(src = "blob:https://www.udemy.com/lecture-1"): Video {
 }
 
 let sent: PageToPlayer[];
+let clock: number;
 let current: HTMLVideoElement | null;
 let sync: VideoSync;
 let v: Video;
@@ -61,9 +67,10 @@ beforeEach(() => {
   document.body.replaceChildren();
   sent = [];
   cmd = 0;
+  clock = 0;
   v = video();
   current = v;
-  sync = new VideoSync({ doc: document, current: () => current, send: (m) => sent.push(structuredClone(m)) });
+  sync = new VideoSync({ doc: document, current: () => current, send: (m) => sent.push(structuredClone(m)), now: () => clock });
 });
 
 afterEach(() => sync.release());
@@ -125,6 +132,8 @@ describe("binding the video", () => {
     seeked();
     v.muted = false;
     expect(events()).toEqual(["unmuted"]);
+    // Playing steadily (past the settling time): a rate change is someone's choice.
+    clock += SETTLE_MS + 1;
     v.playbackRate = 2;
     expect(events()).toEqual(["unmuted", "rate-changed"]);
     // Not forced back, and not restored over the user's choice.
@@ -259,5 +268,196 @@ describe("own operations and the user's", () => {
     seeked();
     v.playbackRate = 3;
     expect(events()).toEqual([]);
+  });
+});
+
+describe("the video's rate while it settles and while it plays steadily", () => {
+  /** Lets queued media tasks (the fake's ratechange) and promise jobs run. */
+  const settleTasks = async () => {
+    for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  };
+  /**
+   * A site player that puts its own speed back on the element on `on` (a media event), like the
+   * fixture's; registered before MyDubb's listeners, as a page's own are.
+   */
+  function siteResets(on: string, rate = 1, times = Infinity) {
+    let left = times;
+    let resets = 0;
+    v.addEventListener(on, () => {
+      if (left <= 0 || v.playbackRate === rate) return;
+      left -= 1;
+      resets += 1;
+      v.playbackRate = rate;
+    });
+    return () => resets;
+  }
+  const sample = (name: string) => sent.filter((m): m is VideoEvent => m.type === "video-event" && m.event === name).map((m) => m.video.rate);
+  const playOp = async () => {
+    sync.handle(command({ op: "play" }));
+    await settleTasks();
+  };
+
+  beforeEach(() => {
+    v.rate.queued = true;
+  });
+
+  it("from 1x: the site puts 1x back when MyDubb plays the video; R is set again, nothing ends Sync", async () => {
+    const resets = siteResets("play");
+    attach();
+    seeked();
+    await settleTasks();
+    expect(v.playbackRate).toBe(1.5);
+    await playOp();
+    expect(resets()).toBe(1);
+    expect(v.playbackRate).toBe(1.5);
+    expect(lastReply()).toMatchObject({ ok: true });
+    expect(events()).toEqual(["rate-restored"]);
+    // The event says what the page had set.
+    expect(sample("rate-restored")).toEqual([1]);
+    // Still MyDubb's rate: given back on release.
+    sync.release();
+    await settleTasks();
+    expect(v).toMatchObject({ playbackRate: 1, muted: false, paused: true });
+  });
+
+  it("the same when the site does it on the video's own play, on 'playing' after buffering, or after a seek", async () => {
+    siteResets("play");
+    siteResets("playing");
+    siteResets("seeked");
+    attach();
+    seeked();
+    await settleTasks();
+    // Long after any MyDubb operation: the user plays, the video buffers and plays on, the user seeks.
+    clock += 60_000;
+    await v.play();
+    await settleTasks();
+    clock += 60_000;
+    v.dispatchEvent(new Event("playing"));
+    await settleTasks();
+    clock += 60_000;
+    v.dispatchEvent(new Event("seeking"));
+    v.currentTime = 30;
+    seeked();
+    await settleTasks();
+    // The first after the attach's own seek.
+    expect(events()).toEqual(["rate-restored", "user-play", "rate-restored", "playing", "rate-restored", "user-seek", "rate-restored"]);
+    expect(v.playbackRate).toBe(1.5);
+  });
+
+  it("a page that keeps putting its speed back: R is set again a bounded number of times, then rate-not-held", async () => {
+    // A tug of war: the site sets 1x on every rate change.
+    siteResets("ratechange");
+    attach();
+    seeked();
+    await settleTasks();
+    expect(events()).toEqual([...Array<string>(MAX_RATE_RESTORES).fill("rate-restored"), "rate-not-held"]);
+    // MyDubb stopped: its writes are the attach and the restores, nothing more, and the page's speed stays.
+    expect(v.rate.writes).toBe(1 + MAX_RATE_RESTORES + (MAX_RATE_RESTORES + 1));
+    expect(v.playbackRate).toBe(1);
+    await settleTasks();
+    expect(events()).toHaveLength(MAX_RATE_RESTORES + 1);
+    // Failing gives back what is still MyDubb's (the sound), not a rate over the page's.
+    sync.release();
+    expect(v).toMatchObject({ muted: false, playbackRate: 1 });
+  });
+
+  it("a rate that cannot be set again ends at once with rate-not-held", async () => {
+    siteResets("play", 1);
+    attach();
+    seeked();
+    await settleTasks();
+    v.rate.max = 1.2;
+    await playOp();
+    expect(events()).toEqual(["rate-restored", "rate-not-held"]);
+    expect(v.playbackRate).toBe(1);
+  });
+
+  it("at most MAX_RATE_RESTORES within RATE_RESTORE_WINDOW_MS; plays spread out are each set right", async () => {
+    siteResets("play");
+    attach();
+    seeked();
+    await settleTasks();
+    for (let i = 0; i < 5; i += 1) {
+      clock += RATE_RESTORE_WINDOW_MS + 1;
+      await playOp();
+      sync.handle(command({ op: "pause" }));
+      await settleTasks();
+    }
+    expect(events()).toEqual(Array<string>(5).fill("rate-restored"));
+    // Then four plays in a row: the fourth is not fought over.
+    clock += RATE_RESTORE_WINDOW_MS + 1;
+    for (let i = 0; i < MAX_RATE_RESTORES + 1; i += 1) {
+      clock += 100;
+      await playOp();
+      sync.handle(command({ op: "pause" }));
+      await settleTasks();
+    }
+    expect(events().slice(5)).toEqual([...Array<string>(MAX_RATE_RESTORES).fill("rate-restored"), "rate-not-held"]);
+  });
+
+  it("the user changes the rate while it plays steadily: rate-changed, never set back", async () => {
+    attach();
+    seeked();
+    await playOp();
+    clock += SETTLE_MS + 1;
+    v.playbackRate = 1.25;
+    await settleTasks();
+    expect(events()).toEqual(["rate-changed"]);
+    expect(sample("rate-changed")).toEqual([1.25]);
+    expect(v.playbackRate).toBe(1.25);
+    expect(v.rate.writes).toBe(2);
+    sync.release();
+    expect(v.playbackRate).toBe(1.25);
+  });
+
+  it("the user picks a speed right after Play (input after the start): rate-changed, never set back", async () => {
+    siteResets("play");
+    attach();
+    seeked();
+    await playOp();
+    expect(events()).toEqual(["rate-restored"]);
+    // Within the settling time, but after the start: a click on the page, then the new speed.
+    clock += 300;
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    clock += 50;
+    v.playbackRate = 1.25;
+    await settleTasks();
+    expect(events()).toEqual(["rate-restored", "rate-changed"]);
+    expect(v.playbackRate).toBe(1.25);
+  });
+
+  it("the click or key that started the video does not make the page's reset the user's", async () => {
+    siteResets("play");
+    attach();
+    seeked();
+    await settleTasks();
+    clock += 60_000;
+    // The user clicks the site's play button (or presses a key): input first, then the start.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: " " }));
+    clock += 5;
+    await v.play();
+    await settleTasks();
+    expect(events()).toEqual(["user-play", "rate-restored"]);
+    expect(v.playbackRate).toBe(1.5);
+  });
+
+  it("late ratechange events of its own writes, of an earlier binding, or across off/on are no news", async () => {
+    attach();
+    seeked();
+    // Turned off and on again before any rate event arrives: release gives 1x back, attach sets R.
+    sync.release();
+    sync.handle(command({ op: "attach", start: 10, end: 56, rate: 1.5, time: 16 }, "sync-2"));
+    await settleTasks();
+    // Late, long after: the element is at R.
+    clock += 60_000;
+    v.dispatchEvent(new Event("ratechange"));
+    await settleTasks();
+    expect(events()).toEqual([]);
+    expect(sent.every((m) => m.type !== "video-event")).toBe(true);
+    expect(v.playbackRate).toBe(1.5);
+    // The old binding's syncId gets nothing more; the current one still sees a real change.
+    v.playbackRate = 2;
+    await settleTasks();
+    expect(sent.filter((m) => m.type === "video-event").map((m) => [m.syncId, (m as VideoEvent).event])).toEqual([["sync-2", "rate-changed"]]);
   });
 });

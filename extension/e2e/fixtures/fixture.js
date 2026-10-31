@@ -26,12 +26,24 @@ function silentWav(seconds) {
 
 const player = document.getElementById("player");
 
+// A site player that keeps its own speed setting and puts it back on the element by itself, as
+// some players do when playback starts (set with fixture.siteResetsRate). Not the real Udemy player.
+let siteRate = null;
+
 function makeVideo(seconds = 30) {
   const video = document.createElement("video");
   video.src = silentWav(seconds);
   video.preload = "auto";
   video.width = 320;
   video.height = 180;
+  for (const name of ["play", "playing", "seeked", "ratechange"]) {
+    video.addEventListener(name, () => {
+      if (!siteRate || siteRate.on !== name || siteRate.left <= 0 || video.playbackRate === siteRate.rate) return;
+      siteRate.left -= 1;
+      siteRate.resets += 1;
+      video.playbackRate = siteRate.rate;
+    });
+  }
   return video;
 }
 
@@ -51,6 +63,14 @@ window.fixture = {
     document.title = `Lecture ${lectureId} | Demo Course | Udemy`;
     this.replaceVideo(20);
   },
+  /** From now on the "site" sets its own speed back on `on` (a media event), at most `times` times; null stops. */
+  siteResetsRate(on, rate = 1, times = Infinity) {
+    siteRate = on ? { on, rate, left: times, resets: 0 } : null;
+  },
+  /** How many times the "site" put its speed back. */
+  siteResets() {
+    return siteRate ? siteRate.resets : 0;
+  },
   state(index = 0) {
     const v = videos()[index];
     return v ? { paused: v.paused, currentTime: v.currentTime, duration: v.duration, muted: v.muted, volume: v.volume, rate: v.playbackRate } : null;
@@ -62,3 +82,11 @@ const count = Number(params.get("videos") ?? "1");
 // ?seconds=N: a longer lecture video (the sync tests need room for the job's span).
 const seconds = Number(params.get("seconds") ?? "30");
 for (let i = 0; i < count; i += 1) player.append(makeVideo(seconds));
+
+// The site player's own speed control: the user picks a speed by clicking it (real input).
+const speed = document.createElement("button");
+speed.type = "button";
+speed.id = "speed-2x";
+speed.textContent = "Speed 2x";
+speed.addEventListener("click", () => videos().forEach((v) => (v.playbackRate = 2)));
+player.after(speed);

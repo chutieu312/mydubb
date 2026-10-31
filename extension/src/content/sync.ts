@@ -9,6 +9,18 @@
 // else is reported as "user-*" and becomes the wanted state. This does not depend on the order or
 // timing of media events. event.isTrusted is not used: media events are never trusted-only.
 //
+// The rate R: some players keep their own speed setting and put it back on the element by
+// themselves around a change of playback state (seen with the fixture's "site" player; whether and
+// when the real Udemy player does is not verified). So a rate other than R that shows up while the
+// video settles (within SETTLE_MS after attach, a MyDubb operation or a play, pause, seek or
+// "playing" of the video) with no user input on the page since then (a pointerdown or keydown
+// after that change of state: the user picking a speed) is the page's, not the user's: R is set
+// again, at most MAX_RATE_RESTORES times per RATE_RESTORE_WINDOW_MS, and if it still does not hold,
+// "rate-not-held" ends Sync (no tug of war with the page). Any other rate change is someone's
+// choice (the user's, or the site's: it cannot always be told which) and ends Sync with
+// "rate-changed"; R is not set again over it. MyDubb never sets the rate anywhere else, and never
+// on a timer. Only the time of the last input is kept, nothing about it.
+//
 // Ownership: at attach it notes the element's muted state and rate. It mutes only an unmuted video
 // and gives back only what still holds MyDubb's value when it lets go (a user's later unmute or
 // rate change is theirs to keep), and only on the same element still showing the same media (not
@@ -23,12 +35,17 @@ const RATE_EPSILON = 1e-3;
 const SEEK_MATCH_SECONDS = 0.5;
 // The end of the span: the video pauses there (checked on timeupdate, about 4 per second).
 const END_MARGIN_SECONDS = 0.005;
+export const SETTLE_MS = 2000;
+export const MAX_RATE_RESTORES = 3;
+export const RATE_RESTORE_WINDOW_MS = 10_000;
 
 export interface SyncEnv {
   doc: Document;
   /** The video the content script identified for the lecture now shown. */
   current(): HTMLVideoElement | null;
   send(message: PageToPlayer): void;
+  /** Milliseconds, monotonic (default: performance.now). */
+  now?(): number;
 }
 
 interface Bound {
@@ -43,13 +60,26 @@ interface Bound {
   mutedByUs: boolean;
   wanted: "paused" | "playing";
   seek: { cmdId: number; target: number } | null;
+  /** The last change of playback state, and until when a rate other than R is taken as the page settling. */
+  settledAt: number;
+  settleUntil: number;
+  /** When R was set again (the last RATE_RESTORE_WINDOW_MS). */
+  restores: number[];
+  /** The rate was reported lost (changed, or not held): MyDubb no longer keeps it. */
+  rateLost: boolean;
   events: AbortController;
 }
 
 export class VideoSync {
   private bound: Bound | null = null;
+  // The last pointerdown or keydown on the page while a video is bound.
+  private lastInput = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly env: SyncEnv) {}
+  private readonly now: () => number;
+
+  constructor(private readonly env: SyncEnv) {
+    this.now = env.now ?? (() => performance.now());
+  }
 
   get attached(): HTMLVideoElement | null {
     return this.bound?.video ?? null;
@@ -62,6 +92,7 @@ export class VideoSync {
       if (message.op !== "release") this.reply(message, false, "not-attached");
       return;
     }
+    if (message.op !== "position") this.settle(b);
     switch (message.op) {
       case "release":
         return this.release();
@@ -123,9 +154,14 @@ export class VideoSync {
       mutedByUs: false,
       wanted: v.paused ? "paused" : "playing",
       seek: null,
+      settledAt: Number.NEGATIVE_INFINITY,
+      settleUntil: Number.NEGATIVE_INFINITY,
+      restores: [],
+      rateLost: false,
       events: new AbortController(),
     };
     this.bound = b;
+    this.settle(b);
     this.listen(b);
     this.pauseOwn(b);
     try {
@@ -154,6 +190,8 @@ export class VideoSync {
     const v = b.video;
     const options = { signal: b.events.signal };
     const on = (name: string, handler: () => void) => v.addEventListener(name, handler, options);
+    // Playback state changes: the page may set its own speed back around them.
+    for (const name of ["play", "pause", "seeking", "seeked", "playing"]) on(name, () => this.settle(b));
     on("play", () => {
       if (v.paused || b.wanted === "playing") return;
       b.wanted = "playing";
@@ -182,12 +220,7 @@ export class VideoSync {
       if (!v.paused) this.emit(b, "waiting");
     });
     on("playing", () => this.emit(b, "playing"));
-    on("ratechange", () => {
-      if (Math.abs(v.playbackRate - b.rate) <= RATE_EPSILON) return;
-      // Changed by the user or the site: MyDubb no longer owns it and never sets it again.
-      b.rateOwned = false;
-      this.emit(b, "rate-changed");
-    });
+    on("ratechange", () => this.rateChanged(b));
     on("volumechange", () => {
       if (b.mutedByUs && !v.muted) {
         b.mutedByUs = false;
@@ -207,6 +240,9 @@ export class VideoSync {
       this.emit(b, "replaced");
       this.release();
     });
+    for (const name of ["pointerdown", "keydown"]) {
+      this.env.doc.addEventListener(name, () => void (this.lastInput = this.now()), { ...options, capture: true, passive: true });
+    }
     this.env.doc.addEventListener(
       "visibilitychange",
       () => {
@@ -214,6 +250,39 @@ export class VideoSync {
       },
       options,
     );
+  }
+
+  private settle(b: Bound): void {
+    b.settledAt = this.now();
+    b.settleUntil = Math.max(b.settleUntil, b.settledAt + SETTLE_MS);
+  }
+
+  private rateChanged(b: Bound): void {
+    const v = b.video;
+    if (this.bound !== b || b.rateLost || Math.abs(v.playbackRate - b.rate) <= RATE_EPSILON) return;
+    const now = this.now();
+    if (now > b.settleUntil || this.lastInput > b.settledAt) {
+      // While it plays steadily, or after the user's input: someone chose another speed.
+      return this.lose(b, "rate-changed");
+    }
+    b.restores = b.restores.filter((t) => now - t < RATE_RESTORE_WINDOW_MS);
+    // The sample says what the page set (before R is set again), for the coordinator's trace.
+    if (b.restores.length >= MAX_RATE_RESTORES) return this.lose(b, "rate-not-held");
+    b.restores.push(now);
+    this.emit(b, "rate-restored");
+    try {
+      v.playbackRate = b.rate;
+    } catch {
+      // checked below
+    }
+    if (this.bound === b && Math.abs(v.playbackRate - b.rate) > RATE_EPSILON) this.lose(b, "rate-not-held");
+  }
+
+  /** Reported once; the rate is no longer MyDubb's to keep or to give back. */
+  private lose(b: Bound, event: "rate-changed" | "rate-not-held"): void {
+    b.rateLost = true;
+    b.rateOwned = false;
+    this.emit(b, event);
   }
 
   private pauseOwn(b: Bound): void {
@@ -256,6 +325,7 @@ export class VideoSync {
       currentTime: Number.isFinite(v.currentTime) ? v.currentTime : 0,
       paused: v.paused,
       waiting: !v.paused && v.readyState < HTMLMediaElement.HAVE_FUTURE_DATA,
+      rate: Number.isFinite(v.playbackRate) ? v.playbackRate : 0,
       hidden: this.env.doc.visibilityState === "hidden",
     };
   }

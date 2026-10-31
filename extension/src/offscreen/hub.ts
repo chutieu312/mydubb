@@ -36,7 +36,7 @@ import {
   type VideoCommand,
 } from "../shared/playback";
 import type { SyncSource } from "../shared/sync";
-import { SyncController, type DriftStats } from "./sync";
+import { SyncController, type DriftStats, type SyncTraceEntry } from "./sync";
 
 export const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 const TRANSFER_TIMEOUT_MS = 30_000;
@@ -86,6 +86,8 @@ export interface HubDeps {
   clearTimeout(id: number): void;
   /** Closes the offscreen document (nothing left to play). */
   close(): void;
+  /** Sync diagnostics (the offscreen console). */
+  log?(entry: SyncTraceEntry): void;
 }
 
 const MEDIA_EVENTS = [
@@ -119,7 +121,7 @@ class Session {
     private readonly url: string,
     public floating: boolean,
     syncSource: SyncSource | null,
-    private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now" | "randomId" | "setTimeout" | "clearTimeout">,
+    private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now" | "randomId" | "setTimeout" | "clearTimeout" | "log">,
     private readonly onChange: (session: Session) => void,
     page: { post(message: VideoCommand): boolean; linked(): boolean; claim(): void },
   ) {
@@ -131,6 +133,7 @@ class Session {
       setTimeout: (fn, ms) => deps.setTimeout(fn, ms),
       clearTimeout: (id) => deps.clearTimeout(id),
       changed: () => onChange(this),
+      log: (entry) => deps.log?.(entry),
     });
     const options = { signal: this.events.signal };
     for (const name of MEDIA_EVENTS) audio.addEventListener(name, () => this.changed(name), options);
@@ -219,8 +222,10 @@ export class PlaybackHub {
   }
 
   /** Sessions by tab, for tests and the browser-test inspection hook. */
-  get tabs(): ReadonlyMap<number, { audio: AudioLike; view: PlayerView; drift: DriftStats }> {
-    return new Map([...this.sessions].map(([tab, s]) => [tab, { audio: s.audio, view: s.view(), drift: { ...s.sync.stats } }]));
+  get tabs(): ReadonlyMap<number, { audio: AudioLike; view: PlayerView; drift: DriftStats; trace: SyncTraceEntry[] }> {
+    return new Map(
+      [...this.sessions].map(([tab, s]) => [tab, { audio: s.audio, view: s.view(), drift: { ...s.sync.stats }, trace: [...s.sync.trace] }]),
+    );
   }
 
   // ---- Side panel ----------------------------------------------------------------------------

@@ -123,4 +123,13 @@ describe("texts", () => {
     expect(syncNoticeText({ ...view, notice: "seek-outside" })).toContain("outside 0:10.250–0:40.250");
     expect(syncNoticeText(view)).toBe("");
   });
+
+  it("says which speed the video could not keep, without blaming the user for a change of unknown origin", () => {
+    expect(syncNoticeText({ ...view, notice: "rate-not-held" })).toBe(
+      "Sync turned off: the video speed did not stay at 0.982x, the speed Sync needs (the page kept setting another speed). Both are paused.",
+    );
+    const changed = syncNoticeText({ ...view, notice: "rate-changed" });
+    expect(changed).toContain("the video speed changed from 0.982x, the speed Sync needs, while it played");
+    for (const text of [changed, syncNoticeText({ ...view, notice: "rate-not-held" })]) expect(text).not.toMatch(/\byou\b/i);
+  });
 });

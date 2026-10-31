@@ -241,10 +241,11 @@ test("floating player: Sync from the page with the panel closed, a Udemy rate ch
   expect((await video(page)).muted).toBe(false);
   expect((await sessionOf(worker, tabId))!.paused).toBe(false);
 
-  // The Udemy player changes the rate: both pause, Sync ends, the rate is not forced back.
-  await page.evaluate(() => (window.fixture.videos()[0]!.playbackRate = 2));
+  // The user picks another speed in the site's player (a real click): both pause, Sync ends, the
+  // rate is not forced back.
+  await page.getByRole("button", { name: "Speed 2x" }).click();
   await expect(player).toContainText("Sync: OFF");
-  await expect(player).toContainText("the video speed was changed in the Udemy player");
+  await expect(player).toContainText("the video speed changed from 1.50");
   expect(await video(page)).toMatchObject({ paused: true, rate: 2, muted: false });
   expect((await sessionOf(worker, tabId))!.paused).toBe(true);
   await page.evaluate(() => (window.fixture.videos()[0]!.playbackRate = 1));
@@ -385,4 +386,53 @@ test("Play directly on the Udemy video of tab B pauses tab A (synced or not); on
   await b.page.waitForTimeout(1000);
   expect(await playingTabs()).toEqual([b.tabId]);
   expect((await video(a.page)).paused).toBe(true);
+});
+
+test("the video starts at 1x and the site puts its own speed back when playback starts: Sync sets R again, both play", async ({ context, worker, extensionId, mydubb }) => {
+  test.setTimeout(60_000);
+  const { page, tabId, panel } = await plainResult(context, worker, extensionId, mydubb, 609);
+  expect((await video(page)).rate).toBe(1);
+  // Like a player that re-applies its stored speed (1x) on "play" (fixture; not the real Udemy player).
+  await page.evaluate(() => window.fixture.siteResetsRate("play", 1));
+  await turnOnSync(panel);
+  const rate = (await sessionOf(worker, tabId))!.sync.rate!;
+  expect(rate).toBeCloseTo(1.505, 2);
+  await panel.getByRole("button", { name: "Play MyDubb audio" }).click();
+  await page.waitForTimeout(3000);
+  const notice = await panel.locator("#sync-notice").textContent();
+  console.log(`site reset on play: ${await page.evaluate(() => window.fixture.siteResets())} reset(s); panel notice: "${notice}"`);
+  await expect(panel.getByText("Sync with video: ON · Playing")).toBeVisible();
+  const v = await video(page);
+  expect(v.paused).toBe(false);
+  expect(v.rate).toBeCloseTo(rate, 6);
+  expect((await sessionOf(worker, tabId))!.paused).toBe(false);
+  expect(await page.evaluate(() => window.fixture.siteResets())).toBeGreaterThanOrEqual(1);
+  expect(Math.abs(await measuredDrift(page, worker, tabId, 10, rate))).toBeLessThan(0.3);
+  // The diagnostics trace shows what happened: the page's 1x right after the play, R set again.
+  const trace = (await sessionOf(worker, tabId))!.trace;
+  const restored = trace.find((e) => e.step === "event:rate-restored")!;
+  expect(restored.videoRate).toBe(1);
+  expect(restored.expectedRate).toBeCloseTo(rate, 9);
+  expect(trace.findIndex((e) => e.step === "op:play")).toBeLessThan(trace.indexOf(restored));
+  expect(trace.some((e) => e.step.startsWith("off:"))).toBe(false);
+});
+
+test("a page that keeps setting its own speed: R is set again a bounded number of times, then both pause and the reason is shown", async ({ context, worker, extensionId, mydubb }) => {
+  test.setTimeout(60_000);
+  const { page, tabId, panel } = await plainResult(context, worker, extensionId, mydubb, 610);
+  // A tug of war: the "site" puts 1x back on every rate change, so on the one Sync makes when it
+  // is turned on (fixture; not the real Udemy player).
+  await page.evaluate(() => window.fixture.siteResetsRate("ratechange", 1));
+  await panel.getByRole("button", { name: "Sync with video" }).click();
+  await panel.getByRole("button", { name: "Turn on sync" }).click();
+  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
+  await expect(panel.locator("#sync-notice")).toHaveText(/^Sync turned off: the video speed did not stay at 1\.50\dx, the speed Sync needs/);
+  await page.waitForTimeout(1000);
+  // Bounded: three restores (and the site's answers), then MyDubb stops; the page keeps its speed, the sound is given back.
+  expect(await page.evaluate(() => window.fixture.siteResets())).toBe(4);
+  expect(await video(page)).toMatchObject({ paused: true, muted: false, rate: 1 });
+  const s = (await sessionOf(worker, tabId))!;
+  expect(s.paused).toBe(true);
+  expect(s.trace.filter((e) => e.step === "event:rate-restored")).toHaveLength(3);
+  expect(s.trace.at(-1)?.step).toBe("off:rate-not-held");
 });

@@ -849,7 +849,7 @@ describe("Sync with video", () => {
     expect(player.syncs).toEqual([true, false]);
     // Confirmed once for this session: on again directly.
     player.set({ ...player.view!, sync: { ...(SYNC_VIEW("off", true) as PanelPlayerView["sync"]), notice: "rate-changed" } });
-    expect($("sync-notice").textContent).toContain("the video speed was changed in the Udemy player");
+    expect($("sync-notice").textContent).toContain("the video speed changed from");
     $<HTMLButtonElement>("sync-toggle").click();
     expect(player.syncs).toEqual([true, false, true]);
     expect($("sync-confirm").hidden).toBe(true);

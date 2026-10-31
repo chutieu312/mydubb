@@ -454,7 +454,7 @@ describe("ending sessions", () => {
 describe("Sync with video", () => {
   const SOURCE: SyncSource = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
   const WORKER = { id: EXT, url: `chrome-extension://${EXT}/background.js` };
-  const SAMPLE = { currentTime: 20, paused: false, waiting: false, hidden: false };
+  const SAMPLE = { currentTime: 20, paused: false, waiting: false, rate: 1.5, hidden: false };
   const settle = async () => {
     for (let i = 0; i < 6; i += 1) await Promise.resolve();
   };
@@ -468,7 +468,7 @@ describe("Sync with video", () => {
       cmdId: op.cmdId,
       ok: true,
       error: null,
-      video: { currentTime, paused: true, waiting: false, hidden: false },
+      video: { currentTime, paused: true, waiting: false, rate: 1.5, hidden: false },
     });
   };
 
@@ -584,7 +584,7 @@ describe("one MyDubb audio at a time, however playback starts", () => {
     page.sent.filter((m): m is Extract<PlayerToPage, { type: "video" }> => m.type === "video");
   const answer = (page: FakePort<PlayerToPage>, currentTime = 10) => {
     const op = videoOps(page).at(-1)!;
-    page.receive({ type: "video-reply", syncId: op.syncId, cmdId: op.cmdId, ok: true, error: null, video: { currentTime, paused: true, waiting: false, hidden: false } });
+    page.receive({ type: "video-reply", syncId: op.syncId, cmdId: op.cmdId, ok: true, error: null, video: { currentTime, paused: true, waiting: false, rate: 1.5, hidden: false } });
   };
   async function synced(hub: PlaybackHub, tabId: number) {
     const s = opened(hub, tabId, { ...OWNER, jobId: `job-${tabId}` }, LESSON, SOURCE, 30.6);
@@ -605,7 +605,7 @@ describe("one MyDubb audio at a time, however playback starts", () => {
     expect(s.audio.paused).toBe(false);
   }
   const userPlay = (s: Awaited<ReturnType<typeof synced>>, at = 20) =>
-    s.page.receive({ type: "video-event", syncId: s.syncId, event: "user-play", video: { currentTime: at, paused: false, waiting: false, hidden: false } });
+    s.page.receive({ type: "video-event", syncId: s.syncId, event: "user-play", video: { currentTime: at, paused: false, waiting: false, rate: 1.5, hidden: false } });
 
   it("Play directly on video B pauses tab A's audio and synced video; each keeps its position", async () => {
     const hub = makeHub();

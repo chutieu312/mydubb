@@ -24,6 +24,13 @@
 //   the audio's rate), at most once per 3 s and 3 times per 30 s; the next one pauses both and
 //   says so. A lecture tab in the background is not counted against that limit, and coming back
 //   to it re-aligns at once.
+// - The video's rate is kept by the content script (content/sync.ts): R set again, a bounded
+//   number of times, when the page puts its own speed back while the video settles;
+//   "rate-not-held" when that does not hold, "rate-changed" for a change while it plays steadily.
+//   Both end Sync. Nothing here sets the rate.
+// - Diagnostics: a short trace (numbers, op and event names, the activation's id; nothing about
+//   the job, the account or the lecture) of the last steps, for the inspection hook and the
+//   offscreen console (console.debug), to tell on a real site what changed the rate and when.
 
 import type { VideoCommand, VideoEventName, VideoOp, VideoOpError, VideoReply, VideoSample } from "../shared/playback";
 import {
@@ -71,7 +78,30 @@ export interface SyncDeps {
   changed(): void;
   /** The audio is about to start: every other tab's session is paused first (one MyDubb audio). */
   claim(): void;
+  /** Diagnostics only (the offscreen console). */
+  log?(entry: SyncTraceEntry): void;
 }
+
+/** One step of the diagnostics trace. */
+export interface SyncTraceEntry {
+  /** deps.now() */
+  t: number;
+  /** "enable", "op:seek", "reply:play", "event:rate-restored", "off:rate-not-held"... */
+  step: string;
+  /** The first 8 characters of the activation's id. */
+  sync: string | null;
+  cmd: number | null;
+  /** The user-action generation. */
+  action: number;
+  /** R, when there is a mapping. */
+  expectedRate: number | null;
+  /** The video's playbackRate in the reply or event, when there is one. */
+  videoRate: number | null;
+  ok?: boolean;
+  error?: string | null;
+}
+
+export const TRACE_LENGTH = 60;
 
 type Reply = Pick<VideoReply, "ok" | "error" | "video"> | { ok: false; error: "timeout" | "no-page"; video: null };
 
@@ -107,7 +137,7 @@ export class SyncController {
   private state: "off" | "starting" | "on" = "off";
   private syncId: string | null = null;
   private nextCmd = 1;
-  private readonly pending = new Map<number, { resolve(reply: Reply): void; timer: number }>();
+  private readonly pending = new Map<number, { op: VideoOp["op"]; resolve(reply: Reply): void; timer: number }>();
   private intent: "paused" | "playing" = "paused";
   private phase: "idle" | "aligning" | "playing" | "buffering" = "idle";
   private buffering: "audio" | "video" | null = null;
@@ -128,6 +158,7 @@ export class SyncController {
   // The browser paused the video of a background tab while the audio went on.
   private realignOnVisible = false;
   readonly stats: DriftStats = { samples: 0, corrections: 0, maxAbsDrift: 0, lastDrift: null };
+  readonly trace: SyncTraceEntry[] = [];
 
   constructor(
     private readonly source: SyncSource | null,
@@ -187,6 +218,7 @@ export class SyncController {
     this.notice = null;
     this.resetDrift();
     this.pauseAudio();
+    this.record("enable");
     this.deps.changed();
     const a = Math.min(m.duration, Math.max(0, this.audio.currentTime));
     const reply = await this.video({ op: "attach", start: m.start, end: m.end, rate: m.rate, time: videoTime(m, a) });
@@ -205,6 +237,7 @@ export class SyncController {
 
   private finish(notice: SyncNotice | null): void {
     if (this.state === "off") return;
+    this.record(`off:${notice ?? "user"}`);
     this.action += 1;
     this.pauseAudio();
     this.stopTicks();
@@ -402,6 +435,9 @@ export class SyncController {
     if (reply.syncId !== this.syncId) return;
     const waiting = this.pending.get(reply.cmdId);
     if (!waiting) return;
+    if (waiting.op !== "position") {
+      this.record(`reply:${waiting.op}`, { cmd: reply.cmdId, videoRate: reply.video?.rate ?? null, ok: reply.ok, error: reply.error });
+    }
     this.pending.delete(reply.cmdId);
     this.deps.clearTimeout(waiting.timer);
     waiting.resolve(reply);
@@ -410,11 +446,12 @@ export class SyncController {
   /** Something happened to the synced video that MyDubb did not ask for. */
   onVideoEvent(syncId: string, event: VideoEventName, sample: VideoSample): void {
     if (syncId !== this.syncId) return;
+    this.record(`event:${event}`, { videoRate: sample.rate });
     if (this.state === "starting") {
       // Only what makes the binding itself void matters before it is answered.
       if (event === "replaced") this.finish("video-replaced");
       else if (event === "error") this.finish("video-error");
-      else if (event === "rate-changed") this.finish("rate-changed");
+      else if (event === "rate-changed" || event === "rate-not-held") this.finish(event);
       return;
     }
     if (this.state !== "on") return;
@@ -464,7 +501,11 @@ export class SyncController {
         if (this.intent === "playing" && this.buffering === "video") void this.followVideoPlay(m, sample, true);
         return;
       case "rate-changed":
-        return this.finish("rate-changed");
+      case "rate-not-held":
+        return this.finish(event);
+      case "rate-restored":
+        // The content script set R again; only the trace keeps it.
+        return;
       case "unmuted":
         this.notice = "unmuted";
         this.deps.changed();
@@ -579,11 +620,15 @@ export class SyncController {
     const syncId = this.syncId;
     if (!syncId) return Promise.resolve({ ok: false, error: "no-page", video: null });
     const cmdId = this.nextCmd++;
+    if (op.op !== "position") this.record(`op:${op.op}`, { cmd: cmdId });
     return new Promise<Reply>((resolve) => {
       const timer = this.deps.setTimeout(() => {
-        if (this.pending.delete(cmdId)) resolve({ ok: false, error: "timeout", video: null });
+        if (this.pending.delete(cmdId)) {
+          this.record(`timeout:${op.op}`, { cmd: cmdId });
+          resolve({ ok: false, error: "timeout", video: null });
+        }
       }, VIDEO_TIMEOUTS_MS[op.op]);
-      this.pending.set(cmdId, { resolve, timer });
+      this.pending.set(cmdId, { op: op.op, resolve, timer });
       if (!this.deps.post({ type: "video", syncId, cmdId, ...op })) {
         this.pending.delete(cmdId);
         this.deps.clearTimeout(timer);
@@ -598,6 +643,23 @@ export class SyncController {
       waiting.resolve({ ok: false, error: "timeout", video: null });
     }
     this.pending.clear();
+  }
+
+  private record(step: string, extra: Partial<SyncTraceEntry> = {}): void {
+    const result = this.mapping();
+    const entry: SyncTraceEntry = {
+      t: this.deps.now(),
+      step,
+      sync: this.syncId?.slice(0, 8) ?? null,
+      cmd: null,
+      action: this.action,
+      expectedRate: result.ok ? result.mapping.rate : null,
+      videoRate: null,
+      ...extra,
+    };
+    this.trace.push(entry);
+    if (this.trace.length > TRACE_LENGTH) this.trace.splice(0, this.trace.length - TRACE_LENGTH);
+    this.deps.log?.(entry);
   }
 
   private setNotice(notice: SyncNotice): void {

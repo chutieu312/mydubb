@@ -351,6 +351,8 @@ export interface PlayingSession {
   sync: { status: string; notice: string | null; start: number | null; end: number | null; duration: number | null; rate: number | null };
   /** Drift the coordinator measured (MP3 seconds) and the corrections it made. */
   drift: { samples: number; corrections: number; maxAbsDrift: number; lastDrift: number | null };
+  /** The coordinator's diagnostics trace (offscreen/sync.ts SyncTraceEntry). */
+  trace: { t: number; step: string; sync: string | null; cmd: number | null; action: number; expectedRate: number | null; videoRate: number | null }[];
 }
 
 /**

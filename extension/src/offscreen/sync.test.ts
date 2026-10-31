@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { VideoCommand, VideoEventName, VideoSample } from "../shared/playback";
 import type { SyncSource } from "../shared/sync";
 import type { AudioLike } from "./hub";
-import { SyncController } from "./sync";
+import { SyncController, TRACE_LENGTH } from "./sync";
 
 // Plain 00:00:10 -> 00:00:56 at 1.5x, MP3 30.563 s: R = 46 / 30.563.
 const SOURCE: SyncSource = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
@@ -111,6 +111,7 @@ const sample = (currentTime: number, extra: Partial<VideoSample> = {}): VideoSam
   currentTime,
   paused: false,
   waiting: false,
+  rate: 1.5,
   hidden: false,
   ...extra,
 });
@@ -367,6 +368,7 @@ describe("controls on the Udemy video", () => {
   it("a Udemy rate change, a replaced or broken video turn Sync off with both paused", async () => {
     for (const [name, notice] of [
       ["rate-changed", "rate-changed"],
+      ["rate-not-held", "rate-not-held"],
       ["replaced", "video-replaced"],
       ["error", "video-error"],
     ] as const) {
@@ -677,5 +679,74 @@ describe("audio events across the lifecycle (no stale expectation)", () => {
     await flush();
     expect(claims).toBe(3);
     expect(audio.paused).toBe(true);
+  });
+});
+
+describe("the video's rate", () => {
+  it("R set again by the page's content script changes nothing: Sync plays on", async () => {
+    await on();
+    await play();
+    event("rate-restored", sample(12, { rate: 1 }));
+    await flush();
+    expect(c.view()).toMatchObject({ status: "playing", notice: null });
+    expect(audio.paused).toBe(false);
+    expect(ops()).not.toContain("release");
+  });
+
+  it("rate not held while Sync is being turned on, or right after Play: off, both paused, released", async () => {
+    void c.enable();
+    await flush();
+    event("rate-not-held", sample(10, { paused: true, rate: 1 }));
+    expect(c.view()).toMatchObject({ status: "off", notice: "rate-not-held" });
+    expect(last().op).toBe("release");
+
+    posted = [];
+    await on();
+    void c.play();
+    await flush();
+    await reply(last(), true, sample(10, { paused: true }));
+    event("rate-not-held", sample(10, { rate: 1 }));
+    await flush();
+    expect(c.view()).toMatchObject({ status: "off", notice: "rate-not-held" });
+    expect(audio.paused).toBe(true);
+    expect(last().op).toBe("release");
+    // The play reply arriving now changes nothing.
+    await reply(posted.find((m) => m.op === "play")!, true, sample(10));
+    expect(audio.paused).toBe(true);
+    expect(timers).toEqual([]);
+  });
+
+  it("a late rate event of an earlier activation does not end the current one", async () => {
+    await on();
+    const old = posted[0]!.syncId;
+    c.disable();
+    posted = [];
+    await on();
+    await play();
+    event("rate-changed", sample(12, { rate: 1 }), old);
+    event("rate-not-held", sample(12, { rate: 1 }), old);
+    expect(c.view()).toMatchObject({ status: "playing", notice: null });
+    expect(audio.paused).toBe(false);
+  });
+
+  it("keeps a short trace: activation, command, expected and actual rate of each step", async () => {
+    await on();
+    await play();
+    event("rate-restored", sample(12, { rate: 1 }));
+    event("rate-not-held", sample(12, { rate: 1 }));
+    const steps = c.trace.map((e) => e.step);
+    expect(steps).toEqual(["enable", "op:attach", "reply:attach", "op:seek", "reply:seek", "op:play", "reply:play", "event:rate-restored", "event:rate-not-held", "off:rate-not-held"]);
+    const restored = c.trace.find((e) => e.step === "event:rate-restored")!;
+    expect(restored).toMatchObject({ sync: "sync-1", videoRate: 1 });
+    expect(restored.expectedRate).toBeCloseTo(R, 12);
+    expect(c.trace.find((e) => e.step === "reply:play")).toMatchObject({ cmd: 3, ok: true, videoRate: 1.5 });
+    // Only numbers and names: nothing about the job, the account or the lecture.
+    expect(Object.keys(restored).sort()).toEqual(["action", "cmd", "expectedRate", "step", "sync", "t", "videoRate"]);
+    // Bounded: the oldest steps go.
+    posted = [];
+    await on();
+    for (let i = 0; i < TRACE_LENGTH; i += 1) event("unmuted", sample(12));
+    expect(c.trace).toHaveLength(TRACE_LENGTH);
+    expect(c.trace.at(-1)).toMatchObject({ step: "event:unmuted", sync: "sync-2" });
   });
 });
