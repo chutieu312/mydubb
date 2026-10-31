@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyDubb Prototype</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>MyDubb Prototype</h1>
+        <p class="hint">Local prototype. Nothing is sent to MyDubb or anywhere else.</p>
+      </header>
+
+      <section aria-labelledby="link-heading">
+        <h2 id="link-heading">Linked lecture</h2>
+        <dl class="link">
+          <dt>Tab</dt>
+          <dd id="tab-label">—</dd>
+          <dt>Lecture</dt>
+          <dd id="lesson-label">—</dd>
+        </dl>
+        <p id="link-status" class="status" role="status" aria-live="polite"></p>
+        <button id="reconnect" type="button" hidden>Reconnect</button>
+      </section>
+
+      <section aria-labelledby="draft-heading">
+        <h2 id="draft-heading"><label for="transcript">Transcript selection</label></h2>
+        <p class="hint" id="draft-hint">
+          Select transcript text on the Udemy page, right-click, then choose “Send to MyDubb”. You can edit
+          the text here.
+        </p>
+        <textarea id="transcript" rows="10" spellcheck="false" aria-describedby="draft-hint draft-status"></textarea>
+        <div class="row">
+          <button id="clear" type="button">Clear</button>
+        </div>
+        <p id="draft-status" class="status" role="status" aria-live="polite"></p>
+        <div id="confirm" class="confirm" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-desc" hidden>
+          <p id="confirm-title"><strong>Replace your edited draft?</strong></p>
+          <p id="confirm-desc">A new selection arrived from the page. Replacing it discards your edits.</p>
+          <div class="row">
+            <button id="confirm-replace" type="button">Replace draft</button>
+            <button id="confirm-keep" type="button">Keep my draft</button>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="video-heading">
+        <h2 id="video-heading">Video</h2>
+        <p id="video-status" class="status" role="status" aria-live="polite"></p>
+        <p class="time" aria-label="Playback position">
+          <span id="time-current">--:--</span> / <span id="time-duration">--:--</span>
+        </p>
+        <div class="row controls" role="group" aria-label="Video controls">
+          <button id="back" type="button" aria-label="Back 5 seconds" disabled>−5s</button>
+          <button id="playpause" type="button" disabled>Play</button>
+          <button id="forward" type="button" aria-label="Forward 5 seconds" disabled>+5s</button>
+        </div>
+        <p id="video-error" class="error" role="alert"></p>
+      </section>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
