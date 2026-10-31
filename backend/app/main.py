@@ -19,6 +19,7 @@ from app.access.router import router as access_router
 from app.auth.router import router as auth_router
 from app.config import AppEnv, AuthMode, Settings, load_settings
 from app.errors import error_response, install_error_handlers
+from app.extension.router import router as extension_router
 from app.guest.router import router as guest_router
 from app.jobs.router import router as jobs_router
 from app.maintenance import (
@@ -35,6 +36,11 @@ from app.youtube_import.router import router as youtube_import_router
 logger = logging.getLogger(__name__)
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# State-changing calls the Chrome extension makes from its own origin
+# (chrome-extension://<id>, for an id in EXTENSION_IDS): the token exchange, and creating a job or
+# signing out with its bearer token. Nothing else is accepted from that origin.
+_EXTENSION_TOKEN_PATH = "/api/extension/token"  # noqa: S105 (a path)
+_EXTENSION_BEARER_PATHS = {"/api/jobs", "/api/extension/logout"}
 
 _SECURITY_HEADERS = [
     (b"x-content-type-options", b"nosniff"),
@@ -54,10 +60,17 @@ class RequestGuardMiddleware:
     request-body size guard. Implemented as pure ASGI to avoid buffering bodies."""
 
     def __init__(
-        self, app: ASGIApp, *, trusted_origins: list[str], max_body_bytes: int, hsts: bool
+        self,
+        app: ASGIApp,
+        *,
+        trusted_origins: list[str],
+        max_body_bytes: int,
+        hsts: bool,
+        extension_ids: list[str] | None = None,
     ):
         self.app = app
         self.trusted_origins = {o.rstrip("/") for o in trusted_origins}
+        self.extension_origins = {f"chrome-extension://{i}" for i in extension_ids or []}
         self.max_body_bytes = max_body_bytes
         self.hsts = hsts
 
@@ -89,16 +102,16 @@ class RequestGuardMiddleware:
             await send(message)
 
         if is_api and scope["method"] in _UNSAFE_METHODS:
-            rejection = self._check_unsafe_request(headers)
+            rejection = self._check_unsafe_request(headers, path)
             if rejection is not None:
                 await rejection(scope, receive, send_with_headers)
                 return
 
         await self.app(scope, receive, send_with_headers)
 
-    def _check_unsafe_request(self, headers: dict[str, str]):
+    def _check_unsafe_request(self, headers: dict[str, str], path: str):
         origin = headers.get("origin")
-        if origin is not None and not self._origin_allowed(origin, headers.get("host", "")):
+        if origin is not None and not self._origin_allowed(origin, headers, path):
             return error_response(403, "origin_rejected", "Cross-origin request rejected.")
         length = headers.get("content-length")
         if length is None:
@@ -115,9 +128,15 @@ class RequestGuardMiddleware:
             )
         return None
 
-    def _origin_allowed(self, origin: str, host: str) -> bool:
+    def _origin_allowed(self, origin: str, headers: dict[str, str], path: str) -> bool:
         if origin.rstrip("/") in self.trusted_origins:
             return True
+        if origin in self.extension_origins:
+            if path == _EXTENSION_TOKEN_PATH:
+                return True
+            bearer = headers.get("authorization", "").lower().startswith("bearer ")
+            return bearer and path in _EXTENSION_BEARER_PATHS
+        host = headers.get("host", "")
         return bool(host) and urlsplit(origin).netloc == host
 
 
@@ -226,12 +245,15 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
         trusted_origins=settings.trusted_origins,
         max_body_bytes=settings.max_request_body_bytes,
         hsts=settings.app_env is AppEnv.PRODUCTION,
+        extension_ids=settings.extension_ids,
     )
     install_error_handlers(app)
     app.include_router(system_router)
     # The two login modes are exclusive: only the active mode's endpoints exist.
     if settings.auth_mode is AuthMode.COGNITO:
         app.include_router(auth_router)
+        # With EXTENSION_IDS empty it answers 404 extension_disabled.
+        app.include_router(extension_router)
     else:
         app.include_router(access_router)
     app.include_router(jobs_router)

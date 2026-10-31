@@ -4,10 +4,11 @@ import { ApiError, api } from "../../api/client";
 import { GUEST_QUOTA_CODES, guestImportsLeft, type GuestImportQuota } from "../../api/guestApi";
 import type { Job, TargetLanguageOption, VoiceOption, YouTubeImport } from "../../api/types";
 import { guestImportLimitText } from "../../lib/guestQuota";
+import { buildJobRequest, captionKey, fieldsFromCaptions } from "../../lib/jobRequest";
 import { VIETNAMESE } from "../../lib/languages";
 import { DEFAULT_SPEED, formatClock, previewOutputSeconds } from "../../lib/speed";
 import type { StudioDraft } from "../../lib/studioDraft";
-import { formatSeconds, previewTargetDuration } from "../../lib/timestamps";
+import { previewTargetDuration } from "../../lib/timestamps";
 import { analyzeTranscriptTiming, type TranscriptTiming } from "../../lib/transcriptTiming";
 import { previewWordCount } from "../../lib/wordCount";
 import { FieldMessage } from "./FieldMessage";
@@ -61,19 +62,6 @@ export interface GuestLimits {
 }
 
 type FieldErrors = Partial<Record<string, string>>;
-
-// The caption pair the two time fields were last filled from.
-function captionKey(timing: TranscriptTiming): string | null {
-  return timing.kind === "timed" ? `${timing.first}-${timing.last}` : null;
-}
-
-// The two fields for the first and last caption: their starts truncated to whole seconds (the
-// fields' HH:MM:SS contract, as the import suggests them). Null when both fall in the same second.
-function fieldsFromCaptions(timing: { first: number; last: number }) {
-  const first = Math.floor(timing.first);
-  const last = Math.floor(timing.last);
-  return last > first ? { first: formatSeconds(first), last: formatSeconds(last) } : null;
-}
 
 export function DubbingForm({
   voices,
@@ -146,8 +134,6 @@ export function DubbingForm({
     [guest, transcript],
   );
   const preview = previewTargetDuration(firstStart, lastStart);
-  const usesTimestamps =
-    (timing.kind === "timed" || timing.kind === "invalid") && !ignoreTimestamps;
   const captionFields = timing.kind === "timed" ? fieldsFromCaptions(timing) : null;
   const overridden =
     captionFields !== null &&
@@ -272,17 +258,13 @@ export function DubbingForm({
     setFormError(null);
     setQuotaRefused(false);
     try {
-      const job = await api.createJob({
-        transcript,
-        first_sentence_start: firstStart,
-        last_sentence_start: lastStart,
-        voice,
-        speed,
-        // Only sent for timed transcripts; a plain request is unchanged (the server's default).
-        ...(usesTimestamps ? { timing_mode: "timed" as const } : {}),
-        // The language chosen now; the job keeps it whatever the form shows later.
-        ...(targetLanguage ? { target_language: targetLanguage } : {}),
-      });
+      // Shared with the Chrome extension (lib/jobRequest.ts): the same input gives the same request.
+      const job = await api.createJob(
+        buildJobRequest(
+          { transcript, firstStart, lastStart, voice, speed, targetLanguage, ignoreTimestamps },
+          timing,
+        ),
+      );
       onJobCreated(job);
     } catch (err) {
       if (err instanceof ApiError && err.isUnauthenticated) {

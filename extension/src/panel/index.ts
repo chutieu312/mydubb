@@ -1,6 +1,7 @@
 // Side panel for one tab (sidepanel.html?tabId=N). It talks only to the content script of that tab
 // through a port, so commands can never reach another tab. The draft lives in
-// chrome.storage.session (memory only) and is never sent over the network.
+// chrome.storage.session (memory only); it is sent to MyDubb only when the user chooses Generate
+// audio (panel/dubbing.ts). Nothing of the MyDubb account ever reaches the content script.
 
 import {
   PANEL_PORT_NAME,
@@ -16,6 +17,7 @@ import {
   type PageState,
   type PendingSelection,
 } from "../shared/messages";
+import { createApi } from "./api";
 import {
   belongsElsewhere,
   decidePending,
@@ -24,6 +26,7 @@ import {
   formatTime,
   type CurrentLesson,
 } from "./draft";
+import { Dubbing } from "./dubbing";
 
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
@@ -86,8 +89,25 @@ class Panel {
   private awaitingConfirm: PendingSelection | null = null;
   private nextRequestId = 1;
   private readonly cleanup = new AbortController();
+  private readonly dubbing: Dubbing;
 
-  constructor(private readonly tabId: number) {}
+  constructor(private readonly tabId: number) {
+    this.dubbing = new Dubbing(
+      {
+        tabId,
+        origin: __MYDUBB_ORIGIN__,
+        extensionId: chrome.runtime.id,
+        api: createApi({ origin: __MYDUBB_ORIGIN__, fetch: (input, init) => fetch(input, init) }),
+        storage: chrome.storage.session,
+        launchWebAuthFlow: launchAuthWindow,
+        randomId: () => crypto.randomUUID(),
+        now: () => Date.now(),
+        createObjectURL: (blob) => URL.createObjectURL(blob),
+        revokeObjectURL: (url) => URL.revokeObjectURL(url),
+      },
+      { currentLesson: () => this.currentLesson(), transcript: () => ui.transcript.value },
+    );
+  }
 
   async start(): Promise<void> {
     ui.tabLabel.textContent = `#${this.tabId}`;
@@ -116,13 +136,19 @@ class Panel {
     const draft = stored[draftKey(this.tabId)];
     this.draft = isDraftRecord(draft) ? draft : null;
     ui.transcript.value = this.draft?.text ?? "";
+    // The stored form, account and job first: a selection or page state arriving now must not be
+    // overwritten by that older snapshot (Dubbing also holds anything that arrives meanwhile).
+    await this.dubbing.restore();
     this.connect(true);
     const pending = stored[pendingKey(this.tabId)];
     if (isPendingSelection(pending)) this.processPending(pending);
+    await this.dubbing.loadRemote();
   }
 
   private dispose(): void {
     this.cleanup.abort();
+    // Stops following the job and releases the audio; the job itself keeps running on MyDubb.
+    this.dubbing.dispose();
     chrome.storage.onChanged.removeListener(this.onStorageChanged);
     chrome.tabs.onRemoved.removeListener(this.onTabRemoved);
     chrome.tabs.onUpdated.removeListener(this.onTabUpdated);
@@ -218,6 +244,7 @@ class Panel {
     ui.lessonLabel.textContent = "—";
     this.setLinkStatus("The linked tab was closed. Open a Udemy lecture and send a selection to start again.");
     this.renderVideo();
+    this.dubbing.tabClosed();
   }
 
   // ---- Page state -----------------------------------------------------------------------------
@@ -260,6 +287,8 @@ class Panel {
       ? `${next.lesson.title || "Untitled lecture"} (lecture ${next.lesson.lectureId})`
       : "Not a Udemy lecture page";
     this.renderVideo();
+    // After the draft decision above, so the form and the job follow the same lecture rule.
+    this.dubbing.lessonState(nextKey);
   }
 
   private renderVideo(): void {
@@ -346,6 +375,7 @@ class Panel {
     area: string,
   ): void => {
     if (area !== "session") return;
+    this.dubbing.onStorageChanged(changes);
     const change = changes[pendingKey(this.tabId)];
     if (change && isPendingSelection(change.newValue)) this.processPending(change.newValue);
   };
@@ -390,6 +420,7 @@ class Panel {
     this.draft = draftFromSelection(pending, this.state?.lesson?.key ?? null);
     ui.transcript.value = this.draft.text;
     this.saveDraftNow();
+    this.dubbing.transcriptChanged();
     const lines = pending.text.split("\n").length;
     this.setDraftStatus(`Selection received (${pending.text.length} characters, ${lines} line${lines === 1 ? "" : "s"}).`);
   }
@@ -407,6 +438,7 @@ class Panel {
       baseline: this.draft?.baseline ?? "",
     };
     this.scheduleSave();
+    this.dubbing.transcriptChanged();
   }
 
   private onClear(): void {
@@ -420,6 +452,7 @@ class Panel {
     this.awaitingConfirm = null;
     ui.confirm.hidden = true;
     ui.transcript.value = "";
+    this.dubbing.transcriptChanged();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = null;
     void chrome.storage.session.remove([draftKey(this.tabId), pendingKey(this.tabId)]);
@@ -447,6 +480,16 @@ class Panel {
   private setDraftStatus(text: string): void {
     ui.draftStatus.textContent = text;
   }
+}
+
+/** Chrome's sign-in window. The browser-test build lets a test stand in for it (never in dist/). */
+function launchAuthWindow(url: string): Promise<string | undefined> {
+  if (__MYDUBB_E2E__) {
+    const hook = (globalThis as { mydubbE2EAuthFlow?: (url: string) => Promise<string | undefined> })
+      .mydubbE2EAuthFlow;
+    if (hook) return hook(url);
+  }
+  return chrome.identity.launchWebAuthFlow({ url, interactive: true });
 }
 
 const tabId = parseTabId(location.search);

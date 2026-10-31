@@ -10,7 +10,7 @@
     <main>
       <header>
         <h1>MyDubb Prototype</h1>
-        <p class="hint">Local prototype. Nothing is sent to MyDubb or anywhere else.</p>
+        <p class="hint">Nothing is sent to MyDubb until you choose Generate audio.</p>
       </header>
 
       <section aria-labelledby="link-heading">
@@ -47,7 +47,7 @@
       </section>
 
       <section aria-labelledby="video-heading">
-        <h2 id="video-heading">Video</h2>
+        <h2 id="video-heading">Udemy video</h2>
         <p id="video-status" class="status" role="status" aria-live="polite"></p>
         <p class="time" aria-label="Playback position">
           <span id="time-current">--:--</span> / <span id="time-duration">--:--</span>
@@ -58,6 +58,72 @@
           <button id="forward" type="button" aria-label="Forward 5 seconds" disabled>+5s</button>
         </div>
         <p id="video-error" class="error" role="alert"></p>
+      </section>
+
+      <section aria-labelledby="account-heading">
+        <h2 id="account-heading">MyDubb account</h2>
+        <p id="account-status" class="status" role="status" aria-live="polite"></p>
+        <div class="row">
+          <button id="connect" type="button" hidden>Connect MyDubb</button>
+          <button id="disconnect" type="button" hidden>Disconnect</button>
+        </div>
+        <p id="account-error" class="error" role="alert"></p>
+      </section>
+
+      <section aria-labelledby="dub-heading">
+        <h2 id="dub-heading">Dubbing</h2>
+        <p id="meta-status" class="status" role="status" aria-live="polite"></p>
+        <button id="meta-retry" type="button" hidden>Try again</button>
+        <div id="timing" class="confirm" role="status" hidden>
+          <p id="timing-text"></p>
+          <p id="timing-override" hidden>
+            <span id="timing-override-text"></span>
+            <button id="use-transcript-times" type="button">Use the transcript times</button>
+          </p>
+          <label class="check"><input id="ignore-timestamps" type="checkbox" /> Ignore the timestamps (process as plain text)</label>
+        </div>
+        <div class="fields">
+          <label for="first-start">First Sentence Start Time</label>
+          <input id="first-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="HH:MM:SS" aria-describedby="times-hint first-start-error" />
+          <p id="first-start-error" class="error"></p>
+          <label for="last-start">Last Sentence Start Time</label>
+          <input id="last-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="HH:MM:SS" aria-describedby="times-hint last-start-error" />
+          <p id="last-start-error" class="error"></p>
+          <p id="times-hint" class="hint">Type the digits only; the colons are added (000130 becomes 00:01:30). Use the start times from the transcript.</p>
+          <label for="target-language">Translate to</label>
+          <select id="target-language" disabled></select>
+          <p id="target-language-error" class="error"></p>
+          <label for="voice">Voice</label>
+          <select id="voice" disabled></select>
+          <p id="voice-error" class="error"></p>
+          <label for="speed">Audio speed</label>
+          <select id="speed"></select>
+          <p id="speed-error" class="error"></p>
+        </div>
+        <p id="length-summary" class="status" aria-live="polite"></p>
+        <p id="transcript-error" class="error"></p>
+        <p id="disclosure" class="hint"></p>
+        <p id="form-error" class="error" role="alert"></p>
+        <div class="row">
+          <button id="generate" type="button" class="primary" disabled>Generate audio</button>
+        </div>
+      </section>
+
+      <section id="result-section" aria-labelledby="result-heading" hidden>
+        <h2 id="result-heading">MyDubb audio</h2>
+        <p id="job-status" class="status" role="status" aria-live="polite"></p>
+        <p id="job-error" class="error" role="alert"></p>
+        <button id="check-again" type="button" hidden>Check again</button>
+        <dl id="job-choices" class="link"></dl>
+        <div id="result" hidden>
+          <p class="hint">This player plays the MyDubb result only; it does not control the Udemy video.</p>
+          <audio id="result-audio" controls preload="metadata" controlslist="noplaybackrate nodownload" aria-label="MyDubb dubbed audio"></audio>
+          <p id="audio-status" class="status" role="status" aria-live="polite"></p>
+          <dl id="result-durations" class="link"></dl>
+          <h3>Translation</h3>
+          <div id="translation" class="translation"></div>
+          <ul id="notices" class="hint"></ul>
+        </div>
       </section>
     </main>
     <script src="sidepanel.js"></script>

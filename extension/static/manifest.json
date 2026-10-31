@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "MyDubb Prototype",
-  "version": "0.1.0",
-  "description": "Local prototype: send selected Udemy transcript text to a side panel and control the lecture video.",
+  "version": "0.2.0",
+  "description": "Prototype: send selected Udemy transcript text to a side panel, dub it with your MyDubb account and listen there.",
   "minimum_chrome_version": "116",
-  "permissions": ["contextMenus", "sidePanel", "storage"],
+  "permissions": ["contextMenus", "sidePanel", "storage", "identity"],
   "background": {
     "service_worker": "background.js"
   },

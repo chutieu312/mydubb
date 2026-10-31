@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, pool
 from app.access.models import AccessSession  # noqa: F401  (register models)
 from app.auth.models import (  # noqa: F401
     AuthChallenge,
+    ExtensionAuthCode,
     PasswordResetAttempt,
     PasswordResetEvent,
     User,

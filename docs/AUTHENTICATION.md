@@ -370,3 +370,11 @@ merged, the AWS setup above done, the live check passed.
 - Rate-limit counters are per process and reset on restart; the single-instance design applies.
 - `password_rejected` does not repeat Cognito's policy text; the UI should state the rule.
 - Not run against a real user pool yet.
+
+## Chrome extension
+
+The extension gets its own MyDubb session (a `user_sessions` row with `client='extension'`, bearer
+token) from a signed-in website session, through MyDubb's Authorization Code + PKCE flow: no Cognito
+change, no password in the extension, and every revocation above also ends it. Like website sessions,
+it is not re-checked against Cognito. Details and configuration (`EXTENSION_IDS`):
+[EXTENSION_AUTH.md](EXTENSION_AUTH.md).

@@ -67,9 +67,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # The test-only hook must never ship in the unpacked build.
+      # The test-only hooks and test server must never ship in the unpacked build, and the
+      # permissions must stay the documented ones.
       - name: Build has no test hook
-        run: "! grep -q mydubbE2E dist/background.js"
+        run: npm run check:dist
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       # Real extension in Chromium against local fixture pages; udemy.com is never contacted.

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     BigInteger,
@@ -18,6 +19,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+
+
+class SessionClient(StrEnum):
+    WEB = "web"
+    EXTENSION = "extension"
 
 
 class User(Base):
@@ -57,8 +63,14 @@ class UserSession(Base):
     """
 
     __tablename__ = "user_sessions"
+    __table_args__ = (CheckConstraint("client IN ('web','extension')", name="client_valid"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    # 'web': the `mydubb_auth` cookie (with CSRF). 'extension': a bearer token held by the Chrome
+    # extension (app/extension). Each is accepted only where it was issued for, never the other.
+    client: Mapped[str] = mapped_column(
+        String(10), server_default=text("'web'"), default=SessionClient.WEB.value
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
@@ -142,3 +154,30 @@ class PasswordResetEvent(Base):
     # SHA-256 of the lowercased email (no address stored).
     email_hash: Mapped[str] = mapped_column(String(64))
     reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ExtensionAuthCode(Base):
+    """A one-time authorization code that lets the Chrome extension get a token for the user who
+    approved it on the website (Authorization Code + PKCE, docs/EXTENSION_AUTH.md).
+
+    Only a SHA-256 of the code is stored. It is bound to one extension ID and its redirect URI and
+    to the PKCE S256 challenge, lives two minutes and is consumed by the first exchange attempt,
+    whether that attempt succeeds or not. `auth_started_at` is copied from the website session
+    that approved it, so the revocations that end that session also refuse the code and the
+    extension session made from it.
+    """
+
+    __tablename__ = "extension_auth_codes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    client_id: Mapped[str] = mapped_column(String(32))
+    redirect_uri: Mapped[str] = mapped_column(String(100))
+    code_challenge: Mapped[str] = mapped_column(String(43))
+    auth_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
