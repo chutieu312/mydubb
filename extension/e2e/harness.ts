@@ -13,8 +13,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const extensionDir = join(here, "..", "dist-test");
 const fixtureHtml = readFileSync(join(here, "fixtures", "lecture.html"), "utf8");
 const fixtureJs = readFileSync(join(here, "fixtures", "fixture.js"), "utf8");
-// A real MP3 (the backend's mock-provider fixture), so the player really decodes MP3.
-const fixtureMp3 = readFileSync(join(here, "..", "..", "backend", "app", "audio", "fixtures", "mock_audio.mp3"));
+// A real MP3: the backend's 3 s mock-provider fixture (CBR, no header frame) ten times over, so
+// the player really decodes a 30 s MP3 and seeking has room.
+const fixtureMp3 = Buffer.concat(
+  Array.from({ length: 10 }, () => readFileSync(join(here, "..", "..", "backend", "app", "audio", "fixtures", "mock_audio.mp3"))),
+);
 export const ORIGIN = "https://www.udemy.com";
 export const MYDUBB = "https://mydubb.test";
 export const lectureUrl = (id: number, query = "") => `${ORIGIN}/course/demo-course/learn/lecture/${id}${query}`;
@@ -73,6 +76,8 @@ export class FakeMyDubb {
   progression = ["queued", "processing", "completed"];
   /** When false, jobs stay at their current status (the test moves them on). */
   advance = true;
+  /** Answers for the MP3 download, consumed in order: "ok" (default) or an HTTP status. */
+  audioAnswers: ("ok" | number)[] = [];
   private nextJob = 1;
 
   /** Stands in for the website: the signed-in user approves the extension. */
@@ -147,7 +152,12 @@ export class FakeMyDubb {
     const match = /^\/api\/jobs\/([\w-]+)(\/result(\/audio)?)?$/.exec(path);
     const job = match ? this.jobs.get(match[1]!) : undefined;
     if (!match || !job || job.owner !== owner) return apiError(route, 404, "job_not_found", "Job not found.");
-    if (match[3]) return route.fulfill({ status: 200, contentType: "audio/mpeg", body: fixtureMp3 });
+    if (match[3]) {
+      const answer = this.audioAnswers.shift() ?? "ok";
+      if (answer === 410) return apiError(route, 410, "result_expired", "This result has expired. Generate it again.");
+      if (typeof answer === "number") return apiError(route, answer, "server_error", "Failed.");
+      return route.fulfill({ status: 200, contentType: "audio/mpeg", body: fixtureMp3 });
+    }
     if (match[2]) {
       return json(route, 200, {
         job_id: job.id,
@@ -291,6 +301,35 @@ export async function sendTranscriptSelection(page: Page, worker: Worker, tabId:
   return expected;
 }
 
+export interface PlayingSession {
+  tabId: number;
+  paused: boolean;
+  currentTime: number;
+  duration: number;
+  rate: number;
+  blobSrc: boolean;
+  floating: boolean;
+  lessonKey: string;
+  audioElements: number;
+}
+
+/**
+ * The offscreen document's sessions, read from its real media elements (test build only), asked
+ * from the service worker or from an extension page (e.g. the panel, once the worker is stopped).
+ */
+export async function playerSessions(from: Worker | Page): Promise<PlayingSession[]> {
+  return (from as Worker).evaluate(async () => {
+    if (!(await chrome.offscreen.hasDocument())) return [];
+    try {
+      return ((await chrome.runtime.sendMessage({ type: "mydubbE2E:inspect" })) ?? []) as PlayingSession[];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export const hasPlayerDocument = (worker: Worker) => worker.evaluate(() => chrome.offscreen.hasDocument());
+
 export const sessionGet = (worker: Worker, key: string) =>
   worker.evaluate(async (k) => (await chrome.storage.session.get(k))[k] ?? null, key);
 
@@ -309,4 +348,15 @@ export async function allowConnect(panel: Page, mydubb: FakeMyDubb, extensionId:
     (globalThis as unknown as { mydubbE2EAuthFlow: (url: string) => Promise<string> }).mydubbE2EAuthFlow = (url) =>
       (globalThis as unknown as { mydubbE2EApprove: (url: string) => Promise<string> }).mydubbE2EApprove(url);
   });
+}
+
+export async function connectAccount(panel: Page, mydubb: FakeMyDubb, extensionId: string) {
+  await allowConnect(panel, mydubb, extensionId);
+  await panel.getByRole("button", { name: "Connect MyDubb" }).click();
+  await expect(panel.getByText("Connected as Lan (lan@example.com).")).toBeVisible();
+}
+
+export async function fillTimes(panel: Page) {
+  await panel.getByLabel("First Sentence Start Time").fill("000010");
+  await panel.getByLabel("Last Sentence Start Time").fill("000610");
 }

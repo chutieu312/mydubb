@@ -1,6 +1,7 @@
 // Service-worker logic, kept free of top-level state: anything that must survive the worker being
 // stopped lives in chrome.storage.session (memory only, cleared when the browser closes).
 
+import { isLive, isStoredAuth } from "../panel/auth";
 import { UDEMY_ORIGIN } from "../shared/lesson";
 import {
   isSelectionReply,
@@ -10,6 +11,7 @@ import {
   type PendingSelection,
   type SelectionReply,
 } from "../shared/messages";
+import type { WorkerToPlayer } from "../shared/playback";
 
 export const MENU_ID = "mydubb-send-selection";
 export const PANEL_PAGE = "sidepanel.html";
@@ -22,6 +24,8 @@ export interface WorkerApi {
   action: Pick<typeof chrome.action, "setBadgeText" | "setTitle">;
   randomId(): string;
   now(): number;
+  /** chrome.runtime.sendMessage to the offscreen document (which may not exist). */
+  notifyPlayer(message: WorkerToPlayer): Promise<unknown>;
 }
 
 export function panelPath(tabId: number): string {
@@ -106,5 +110,20 @@ export async function handleMenuClick(
 }
 
 export async function handleTabRemoved(api: WorkerApi, tabId: number): Promise<void> {
+  notify(api, { type: "mydubb:player-tab-closed", tabId });
   await api.session.remove(tabKeys(tabId));
+}
+
+/**
+ * The stored MyDubb connection changed (connect, disconnect, refused token): the offscreen document
+ * ends every playback session of another connection, also in tabs whose panel is closed.
+ */
+export function handleAuthChanged(api: WorkerApi, value: unknown): void {
+  const connectionId = isStoredAuth(value) && isLive(value, api.now()) ? value.connectionId : null;
+  notify(api, { type: "mydubb:player-identity", connectionId });
+}
+
+function notify(api: WorkerApi, message: WorkerToPlayer): void {
+  // No offscreen document means no session to end.
+  api.notifyPlayer(message).catch(() => undefined);
 }

@@ -125,6 +125,7 @@ button:disabled {
 }
 
 #playpause,
+#player-play,
 #confirm-replace,
 #generate {
   background: var(--accent);
@@ -198,8 +199,11 @@ input[type="checkbox"] {
   margin: 0 0 6px;
 }
 
-audio {
-  width: 100%;
+input.seek {
+  padding: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--accent);
   margin-top: 4px;
 }
 

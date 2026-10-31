@@ -1,8 +1,9 @@
-// Builds the unpacked extension into dist/: three IIFE bundles plus the static files.
+// Builds the unpacked extension into dist/: four IIFE bundles plus the static files.
 // `node build.mjs --e2e` builds dist-test/ for the browser tests: identical, plus a hook in the
 // service worker that lets a test trigger the "Send to MyDubb" handler (a native context menu
-// cannot be clicked by Playwright) and a hook in the panel that stands in for Chrome's sign-in
-// window. The hooks are compiled out of dist/.
+// cannot be clicked by Playwright), a hook in the panel that stands in for Chrome's sign-in
+// window, an inspection message in the offscreen document (what is playing) and an open (instead
+// of closed) shadow root for the floating player. The hooks are compiled out of dist/.
 //
 // The MyDubb server the extension talks to is fixed at build time: MYDUBB_ORIGIN (default
 // https://mydubb.com; the test build uses https://mydubb.test, which never resolves). It becomes
@@ -40,6 +41,7 @@ await build({
     background: join(root, "src/background/index.ts"),
     content: join(root, "src/content/index.ts"),
     sidepanel: join(root, "src/panel/index.ts"),
+    offscreen: join(root, "src/offscreen/index.ts"),
   },
   outdir,
   bundle: true,

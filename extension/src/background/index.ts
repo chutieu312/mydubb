@@ -1,7 +1,8 @@
 // Service worker entry. Listeners are registered synchronously at top level so Chrome can wake
 // the worker for them; no state is kept in worker globals.
 
-import { MENU_ID, handleMenuClick, handleTabRemoved, openPanel, type WorkerApi } from "./handlers";
+import { AUTH_KEY } from "../panel/auth";
+import { MENU_ID, handleAuthChanged, handleMenuClick, handleTabRemoved, openPanel, type WorkerApi } from "./handlers";
 
 const api: WorkerApi = {
   sidePanel: chrome.sidePanel,
@@ -10,6 +11,7 @@ const api: WorkerApi = {
   action: chrome.action,
   randomId: () => crypto.randomUUID(),
   now: () => Date.now(),
+  notifyPlayer: (message) => chrome.runtime.sendMessage(message),
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -36,6 +38,11 @@ chrome.action.onClicked.addListener((tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void handleTabRemoved(api, tabId);
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  const change = changes[AUTH_KEY];
+  if (area === "session" && change) handleAuthChanged(api, change.newValue);
 });
 
 // Browser tests only (dist-test/); `__MYDUBB_E2E__` is false in dist/ and this block is removed.
