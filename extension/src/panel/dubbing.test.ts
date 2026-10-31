@@ -302,7 +302,7 @@ describe("job and result", () => {
     });
     // The form changing later does not change what the player says the file was made with.
     choose("speed", "2");
-    expect($("player-info").textContent).toBe("Loaded: Arabic · Andrew Multilingual · 1x");
+    expect($("player-info").textContent).toBe("LanguageArabicVoiceAndrew MultilingualSpeed1xSourceNot recorded for this audioMP3 length180.000 s");
     expect(player.commands).toEqual([]);
     expect($("audio-status").textContent).toBe("Ready. Press play when you want to listen.");
     // The page is asked to link itself to the session (for the lecture watch and floating player).
@@ -347,35 +347,148 @@ describe("job and result", () => {
     expect($("player-floating").textContent).toBe("Hide floating player");
   });
 
-  it("a new Generate keeps the audio being listened to until the user switches", async () => {
-    const api = fakeApi({
-      createJob: vi
-        .fn()
-        .mockResolvedValueOnce({ id: "job-1", status: "queued" })
-        .mockResolvedValueOnce({ id: "job-2", status: "queued" }),
-      getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
-      getResult: vi.fn(async (_token: string, id: string) => ({ ...RESULT, job_id: id, audio: { ...RESULT.audio, url: `/api/jobs/${id}/result/audio` } })),
+  describe("a new result while the player holds an earlier one", () => {
+    const text = (id: string) => $(id).textContent;
+    const twoJobs = (extra: Partial<Record<keyof MyDubbApi, unknown>> = {}) =>
+      fakeApi({
+        createJob: vi
+          .fn()
+          .mockResolvedValueOnce({ id: "job-1", status: "queued" })
+          .mockResolvedValueOnce({ id: "job-2", status: "queued" }),
+        getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
+        getResult: vi.fn(async (_token: string, id: string) => ({
+          ...RESULT,
+          job_id: id,
+          audio: {
+            ...RESULT.audio,
+            url: `/api/jobs/${id}/result/audio`,
+            duration: { mp3_decoded_seconds: id === "job-2" ? 15.333 : 10 },
+          },
+        })),
+        ...extra,
+      });
+
+    /** Job 1 loaded at 1x over 00:00:00 → 00:00:10, then job 2 generated over 00:00:00 → 00:00:23 at 1.5x. */
+    async function earlierAndNew(api = twoJobs()) {
+      await started(undefined, api);
+      typeTime("first-start", "000000");
+      typeTime("last-start", "000010");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      player.set({ ...player.view!, paused: false, currentTime: 42, duration: 10 });
+      typeTime("last-start", "000023");
+      choose("speed", "1.5");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      return api;
+    }
+
+    it("keeps the earlier audio and shows the new result with its Use new audio button beside it", async () => {
+      const api = await earlierAndNew();
+      expect(player.opened).toHaveLength(1);
+      expect(player.ended).toEqual([]);
+      expect(api.getAudio).toHaveBeenCalledTimes(1);
+      const callout = $("result-switch");
+      expect(callout.hidden).toBe(false);
+      expect(callout.textContent).toContain("New audio is ready. The player is still using an earlier result.");
+      expect(text("result-switch-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1.5xSource00:00:00 → 00:00:23MP3 length15.333 s");
+      // The button is inside the callout, which is inside the new result.
+      expect(callout.contains($("player-switch"))).toBe(true);
+      expect($("result").contains(callout)).toBe(true);
+      expect($("player-switch").textContent).toBe("Use new audio");
+      // The loaded audio keeps its own snapshot: other speed, span and length.
+      expect(text("player-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1xSource00:00:00 → 00:00:10MP3 length10.000 s");
+      expect($("player-badge").hidden).toBe(false);
+      expect($("result-using").hidden).toBe(true);
     });
-    await started(undefined, api);
-    $<HTMLButtonElement>("generate").click();
-    await settle(12);
-    player.set({ ...player.view!, paused: false, currentTime: 42 });
-    choose("speed", "2");
-    $<HTMLButtonElement>("generate").click();
-    await settle(12);
-    // Nothing replaced or stopped the first audio, and the second was not downloaded yet.
-    expect(player.opened).toHaveLength(1);
-    expect(player.ended).toEqual([]);
-    expect(api.getAudio).toHaveBeenCalledTimes(1);
-    expect($("player-other").hidden).toBe(false);
-    expect($("player-other-text").textContent).toContain("1x");
-    $<HTMLButtonElement>("player-switch").click();
-    await settle(12);
-    expect(player.ended).toEqual(["session-1"]);
-    expect(player.opened[1]?.request.owner.jobId).toBe("job-2");
-    expect(player.opened[1]?.request.choices.speed).toBe(2);
-    expect($("player-other").hidden).toBe(true);
-    expect(api.createJob).toHaveBeenCalledTimes(2);
+
+    it("tells two jobs with the same language, voice and speed apart by span and length", async () => {
+      const api = twoJobs();
+      await started(undefined, api);
+      choose("speed", "1.5");
+      typeTime("first-start", "000000");
+      typeTime("last-start", "000015");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      player.set({ ...player.view!, duration: 10 });
+      typeTime("last-start", "000023");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(text("player-info")).toContain("1.5x");
+      expect(text("result-switch-info")).toContain("1.5x");
+      expect(text("player-info")).toContain("00:00:00 → 00:00:15");
+      expect(text("result-switch-info")).toContain("00:00:00 → 00:00:23");
+      expect(text("player-info")).toContain("10.000 s");
+      expect(text("result-switch-info")).toContain("15.333 s");
+    });
+
+    it("Use new audio only downloads and switches: no new job, paused, Sync off, new data", async () => {
+      const api = await earlierAndNew();
+      $<HTMLButtonElement>("player-switch").click();
+      expect($<HTMLButtonElement>("player-switch").disabled).toBe(true);
+      expect($<HTMLButtonElement>("player-switch").textContent).toBe("Switching…");
+      $<HTMLButtonElement>("player-switch").click(); // double click: ignored
+      await settle(12);
+      expect(player.ended).toEqual(["session-1"]);
+      expect(player.opened).toHaveLength(2);
+      expect(api.getAudio).toHaveBeenCalledTimes(2);
+      expect(api.createJob).toHaveBeenCalledTimes(2);
+      expect(player.opened[1]?.request.owner.jobId).toBe("job-2");
+      expect(player.opened[1]?.request.choices).toMatchObject({ speed: 1.5, sourceRange: "00:00:00 → 00:00:23" });
+      expect(player.commands).toEqual([]);
+      expect(player.syncs).toEqual([]);
+      expect(player.view?.paused).toBe(true);
+      expect(text("player-info")).toContain("00:00:00 → 00:00:23");
+      expect($("result-switch").hidden).toBe(true);
+      expect($("player-badge").hidden).toBe(true);
+      expect($("result-using").hidden).toBe(false);
+      expect(text("result-using")).toBe("The player is using this result.");
+    });
+
+    it("a failed switch does not claim the new audio is in use, and Load audio retries without a job", async () => {
+      const api = twoJobs({
+        getAudio: vi
+          .fn()
+          .mockResolvedValueOnce(new Blob(["mp3"], { type: "audio/mpeg" }))
+          .mockRejectedValueOnce(new MyDubbError(0, "timeout", "MyDubb did not answer in time."))
+          .mockResolvedValueOnce(new Blob(["mp3"], { type: "audio/mpeg" })),
+      });
+      await earlierAndNew(api);
+      $<HTMLButtonElement>("player-switch").click();
+      await settle(12);
+      expect(text("audio-status")).toMatch(/could not be loaded/);
+      expect($("result-using").hidden).toBe(true);
+      expect($("result-switch").hidden).toBe(true);
+      expect($<HTMLButtonElement>("player-load").hidden).toBe(false);
+      $<HTMLButtonElement>("player-load").click();
+      await settle(12);
+      expect(player.opened).toHaveLength(2);
+      expect(player.opened[1]?.request.owner.jobId).toBe("job-2");
+      expect(api.createJob).toHaveBeenCalledTimes(2);
+      expect($("result-using").hidden).toBe(false);
+    });
+
+    it("an audio without a recorded span says so instead of borrowing the form's", async () => {
+      await started();
+      typeTime("first-start", "000500");
+      typeTime("last-start", "000900");
+      player.set({
+        sessionId: "session-old",
+        lessonKey: LESSON,
+        status: "ready",
+        paused: true,
+        ended: false,
+        currentTime: 0,
+        duration: 12,
+        problem: null,
+        choices: { languageLabel: "Hindi", voiceLabel: "Old voice", speed: 0.75 },
+        floating: false,
+        sync: NO_SYNC,
+        owner: { userId: "u1", connectionId: "conn-a", jobId: "job-9", operationId: "op-9" },
+        linked: true,
+      });
+      expect(text("player-info")).toBe("LanguageHindiVoiceOld voiceSpeed0.75xSourceNot recorded for this audioMP3 length12.000 s");
+    });
   });
 
   it("does not download again when the tab's session already has this job (panel reopened)", async () => {

@@ -65,7 +65,14 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
    The panel and the floating player control **one** audio: switching between them keeps the
    position and Play/Pause. Playing in another Udemy tab pauses this one (each keeps its position).
    A new **Generate audio** does not replace or stop what you are listening to: when its result is
-   ready, **Use this result** stops the old audio and loads the new one.
+   ready, the result shows a callout next to it ("New audio is ready. The player is still using an
+   earlier result.") with the new audio's language, voice, speed, source span and real MP3 length
+   and a **Use new audio** button; it stops the old audio and loads the new one (paused, Sync OFF,
+   no new job). The player's **Loaded audio** block shows the same facts for the audio it actually
+   holds (taken from that audio's own session, never from the form), with an **Earlier result**
+   badge while it differs from the new result; audio without a recorded span says so. Sync
+   applies to the loaded audio. If the switch fails, nothing claims the new audio is in use and
+   **Load audio** retries without a new job.
 8. **Sync with video** (panel and floating player, OFF by default): the first time it shows the
    video span V0 → V1, the MP3 length and the video speed it will use, and that the video is muted
    because the MyDubb audio replaces the spoken part (timing is an estimate); **Turn on sync**. Both
@@ -187,7 +194,7 @@ does not download video, does not intercept network requests and does not use Ud
     lecture or none ends the session, and so does the page port going away (reload, navigation,
     closed tab), a closed tab reported by the worker, or the end of the account connection (the
     worker forwards `storage.onChanged`; an ended connection can open nothing again). A new
-    Generate keeps the current session until **Use this result**. Ending stops the audio, revokes
+    Generate keeps the current session until **Use new audio**. Ending stops the audio, revokes
     the object URL and removes the listeners; with no session left the document closes itself.
     Playing a tab pauses every other tab's session.
   - *Floating UI*: a `mydubb-player` element with a closed Shadow DOM (styles isolated, placement

@@ -70,6 +70,16 @@ describe("helpers", () => {
 
   it("labels the file's choices", () => {
     expect(choicesLabel(CHOICES)).toBe("Vietnamese · Andrew · 1.5x");
+    expect(choicesLabel({ ...CHOICES, sourceRange: "00:00:00 → 00:00:23" })).toBe("Vietnamese · Andrew · 1.5x · 00:00:00 → 00:00:23");
+  });
+
+  it("the source span is optional in a session's choices (older audio) but bounded text when present", () => {
+    const open = (choices: unknown) =>
+      isPanelToPlayer({ type: "open", tabId: 3, transferId: "t", lessonKey: "c/1", owner: OWNER, choices, sync: null });
+    expect(open({ ...CHOICES, sourceRange: "00:00:00 → 00:00:23" })).toBe(true);
+    expect(open(CHOICES)).toBe(true);
+    expect(open({ ...CHOICES, sourceRange: "" })).toBe(false);
+    expect(open({ ...CHOICES, sourceRange: 5 })).toBe(false);
   });
 
   it("Sync with video: bounded video operations, replies and events; a span only as numbers", () => {

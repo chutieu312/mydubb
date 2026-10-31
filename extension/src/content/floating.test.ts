@@ -63,6 +63,9 @@ describe("FloatingPlayer", () => {
     const root = document.querySelector("mydubb-player")!.shadowRoot!;
     expect(root.querySelector(".info")!.textContent).toBe("Vietnamese · <b>Andrew</b> · 1.5x");
     expect(root.querySelector(".info b")).toBeNull();
+    // The loaded audio's own span is part of the line (older audio has none).
+    player.render({ ...VIEW, choices: { ...VIEW.choices, sourceRange: "00:00:00 → 00:00:23" } });
+    expect(root.querySelector(".info")!.textContent).toBe("Vietnamese · <b>Andrew</b> · 1.5x · 00:00:00 → 00:00:23");
     expect(root.querySelector(".time")!.textContent).toBe("0:12 / 3:00");
     expect(root.querySelector("[role=region]")!.getAttribute("aria-label")).toBe("MyDubb audio player");
     player.render({ ...VIEW, floating: false });
