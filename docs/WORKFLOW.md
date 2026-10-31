@@ -41,11 +41,12 @@ workflow file also holds the deploy and smoke jobs, described in
 | Job (check name) | Runs | Local equivalent |
 |---|---|---|
 | Frontend (lint, typecheck, build) | ESLint, `tsc`, Vitest, Vite build | `cd frontend && npm ci && npm run lint && npm run typecheck && npm test && npm run build` |
+| Chrome extension (lint, typecheck, tests, browser) | ESLint, `tsc`, Vitest, esbuild build of `extension/dist` (checked to contain no test hook), Playwright tests of the unpacked extension in Chromium against local fixture pages (udemy.com is never contacted) | `cd extension && npm ci && npm run lint && npm run typecheck && npm test && npm run build && npm run test:browser` (see [extension/README.md](../extension/README.md)) |
 | Backend (lint, migrations, tests) | Ruff lint + format, Alembic up/down/up on empty PostgreSQL, pytest | see README "Tests and checks" (needs `TEST_DATABASE_URL` pointing at a disposable DB) |
 | Docker image build and container startup | `docker build`, container start, `docker/smoke-test.sh`, production-config container + `docker/production-config-check.sh` | `docker build -t mydubb:local .` then README "Docker" smoke test |
 | Browser E2E (Playwright, mock providers) | `e2e/run-e2e.sh` on an isolated throwaway stack | `cd e2e && npm ci && npx playwright install chromium && bash run-e2e.sh` |
 | CD scripts (shellcheck, fake Render tests) | ShellCheck on `.github/scripts/`, then `.github/scripts/tests/run-tests.sh`: the deploy and smoke scripts against a fake Render/GitHub/MyDubb server on 127.0.0.1 (nothing is deployed, no secret) | `bash .github/scripts/tests/run-tests.sh` (needs bash, curl, jq, python3) |
-| **CI success** | Aggregate: passes only if all five jobs above concluded `success`; failed, skipped, cancelled or missing jobs fail it. It summarizes CI only and does not depend on deployment | — |
+| **CI success** | Aggregate: passes only if all six jobs above concluded `success`; failed, skipped, cancelled or missing jobs fail it. It summarizes CI only and does not depend on deployment | — |
 
 **CI success** is the single check to look at before merging.
 

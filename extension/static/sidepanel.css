@@ -1,0 +1,156 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1d1d1f;
+  --muted: #5f6368;
+  --border: #c7c7cc;
+  --accent: #2f5bd3;
+  --accent-fg: #ffffff;
+  --error: #b3261e;
+  --panel: #f5f6f8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1c1f;
+    --fg: #ececf1;
+    --muted: #a5a9b1;
+    --border: #4a4d55;
+    --accent: #8fb0ff;
+    --accent-fg: #10131a;
+    --error: #ffb4ab;
+    --panel: #25272c;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main {
+  padding: 12px 16px 24px;
+  display: grid;
+  gap: 16px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+
+section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.hint {
+  color: var(--muted);
+  margin: 4px 0 8px;
+}
+
+.status {
+  margin: 6px 0;
+  min-height: 1.45em;
+}
+
+.error {
+  color: var(--error);
+  margin: 6px 0 0;
+}
+
+.error:empty,
+.status:empty {
+  display: none;
+}
+
+.link {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+}
+
+.link dt {
+  color: var(--muted);
+}
+
+.link dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#playpause,
+#confirm-replace {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+  min-width: 5.5em;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.confirm {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.confirm p {
+  margin: 0 0 4px;
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  margin: 4px 0;
+}

@@ -1,0 +1,29 @@
+{
+  "name": "mydubb-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:browser": "node build.mjs --e2e && playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@playwright/test": "1.64.1",
+    "@types/chrome": "0.3.5",
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
+    "globals": "17.13.0",
+    "jsdom": "30.1.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  }
+}

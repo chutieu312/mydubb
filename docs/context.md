@@ -17,7 +17,7 @@ Bản rút gọn để nạp mặc định (2026-10-30). Bản đầy đủ trư
 MyDubb giúp người Việt học nội dung tiếng Anh kỹ thuật: người dùng paste English transcript (hoặc import caption YouTube có sẵn vào form), hệ thống dịch phần diễn giải, giữ thuật ngữ English, tạo giọng đọc, nghe và tải MP3. Mỗi job chọn một trong tám ngôn ngữ đích: `vietnamese` (**mặc định**, sản phẩm chính), `mandarin_simplified`, `hindi`, `spanish`, `arabic`, `french`, `russian`, `japanese`. Nguồn luôn là English.
 
 - Website responsive, truy cập invite-only (email/password qua Amazon Cognito, admin mời) cộng "Try as guest" có quota. Studio: transcript + hai timestamps, voice, speed, ngôn ngữ đích, xem bản dịch, nghe, tải MP3.
-- Ngoài scope: video upload/player, tự lấy transcript Udemy, Speech-to-Text, đồng bộ từng câu, extension/native app, public sign-up, subscription, voice cloning, lưu audio vĩnh viễn, glossary UI, dịch giao diện, tự nhận diện ngôn ngữ nguồn.
+- Ngoài scope: video upload/player, tự lấy transcript Udemy, Speech-to-Text, đồng bộ từng câu, native app, Chrome extension ngoài prototype local (mục 4 "Chrome extension prototype"), public sign-up, subscription, voice cloning, lưu audio vĩnh viễn, glossary UI, dịch giao diện, tự nhận diện ngôn ngữ nguồn.
 - Giữ module boundaries và provider interfaces; không xây microservices/Kafka/Kubernetes/agent runtime cho tương lai giả định.
 - Product Owner (người dùng) quyết scope, chi phí, acceptance và **tự merge PR thủ công**. Claude là coding agent chính; Codex hỗ trợ planning/review. Giao tiếp bằng tiếng Việt, giữ technical terms tiếng Anh. Không tự làm feature ngoài task, không nâng paid tier, không đổi quyết định sản phẩm.
 
@@ -31,6 +31,7 @@ MyDubb giúp người Việt học nội dung tiếng Anh kỹ thuật: người
 | Execution | Một instance, một uvicorn process, worker threads + queue trong RAM, chưa có durable queue |
 | Database | PostgreSQL 17, SQLAlchemy/Alembic (Neon Free, Oregon) |
 | Hosting | Docker multi-stage, FastAPI phục vụ React build cùng origin; Render Free Oregon; https://mydubb.com |
+| Chrome extension | Prototype local `extension/` (MV3, TypeScript + esbuild, side panel), Load unpacked; không gọi backend, không publish |
 | CI/CD | GitHub Actions, Render auto-deploy sau checks pass |
 
 Provider (mặc định cấu hình đều là mock/off; production khác mặc định):
@@ -75,6 +76,13 @@ Vận hành cần giữ:
 - Chỉ English captions video **đã có**, Supadata `mode=native`; không `auto`/`generate`, không tải audio/video, không STT, không dịch. Việc auto-generated captions có thuộc `native` hay không **chưa kiểm chứng**.
 - Format bàn giao ([API.md](API.md#timestamped-transcript-format)): dòng start time `M:SS.mmm` rồi dòng text; không gộp/sort/dedupe; đọc lại qua `clean_transcript`, không biểu diễn được thì từ chối `youtube_import_not_representable`. Hai ô First/Last gợi ý = start caption đầu/cuối **cắt xuống giây**; cùng giây thì để trống.
 - Bảo mật/tài nguyên: session + CSRF + Origin; URL canonicalize, endpoint Supadata cố định; request khởi tạo **không bao giờ retry** (tốn credit); `YOUTUBE_IMPORT_MAX_CONCURRENT` (503 khi đầy, không queue); `SUPADATA_API_KEY` chỉ ở backend; Supadata 401/403 không thành 401 của MyDubb. UI hỏi trước khi ghi đè form, bỏ response đến muộn.
+
+### Chrome extension prototype (local, story 1)
+- Udemy lecture → bôi chọn → context menu **Send to MyDubb** → side panel **riêng của tab đó** hiện đúng text (giữ xuống dòng, không diễn giải HTML), textarea sửa được, Clear, hỏi trước khi thay draft đã sửa. Panel điều khiển video thật: Play/Pause, ±5 s (clamp trong seekable range), time/duration theo media events; không đổi mute/volume/playbackRate. Chi tiết, permissions và lý do: [extension/README.md](../extension/README.md).
+- Giữ cho story sau: quyền chỉ `contextMenus`, `sidePanel`, `storage` + content script `https://www.udemy.com/*` top frame (không `<all_urls>`/`tabs`/cookies/history/`scripting`). Draft chỉ ở `chrome.storage.session` (TRUSTED_CONTEXTS), xoá khi đóng tab/đổi bài; không gửi mạng. Content script im lặng tới khi panel kết nối, dừng mọi observer/timer khi panel cuối ngắt. Nhiều video → không lấy cái đầu tiên (chọn video người dùng vừa play/đang gắn/duy nhất đang phát, nếu không thì báo và tắt controls). Lệnh mang lecture key + video id; khác thì từ chối (`stale`). Service worker không giữ state trong biến global.
+- Đã kiểm chứng **chỉ local**: unit tests (Vitest) và Playwright nạp extension thật vào Chromium với fixture tổng hợp được route cho URL `www.udemy.com` (không truy cập Udemy thật); job CI **Chrome extension** nằm trong **CI success**. Không click được context menu native và `sidePanel.open()` cần user gesture nên test gọi handler qua hook chỉ có trong `dist-test/`.
+- **Chưa kiểm chứng trên Udemy thật** (cần Product Owner cài Load unpacked và thử trên bài học có quyền truy cập): DOM thật (video ở top frame hay iframe, transcript selection), autoplay policy khi `play()` từ panel, context menu + mở panel bằng gesture thật.
+- Để story sau: login/guest MyDubb và gọi API, Generate/dubbing, đồng bộ audio–video, floating player, lấy caption tự động, publish Web Store.
 
 ## 5. Contract và giới hạn cho story tiếp theo
 
@@ -121,5 +129,6 @@ Vận hành cần giữ:
 | Auth HTTP contract / Sign-in UI | [AUTH_API.md](AUTH_API.md), [AUTH_UI.md](AUTH_UI.md) |
 | Guest access: quota, cookie, IP, cách bật | [GUEST_ACCESS.md](GUEST_ACCESS.md) |
 | Isolated browser tests | [E2E README](../e2e/README.md) |
+| Chrome extension prototype: build, Load unpacked, permissions | [extension/README.md](../extension/README.md) |
 | Planning handoff ban đầu (lịch sử) | [mydubb-context.md](../mydubb-context.md) |
 | **Lịch sử đầy đủ: milestone, bằng chứng, PR/SHA, test reports** | [history/context-before-compaction-2026-10-30.md](history/context-before-compaction-2026-10-30.md) |
