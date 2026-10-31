@@ -14,6 +14,7 @@ import {
   type PlayerCommand,
   type PlayerToPanel,
 } from "../shared/playback";
+import type { SyncSource } from "../shared/sync";
 
 export interface PanelPort {
   postMessage(message: PanelToPlayer): void;
@@ -41,6 +42,8 @@ export interface OpenRequest {
   lessonKey: string;
   owner: PlaybackOwner;
   choices: PlaybackChoices;
+  /** The job's source span, from its Generate click; null: no Sync with video for it. */
+  sync: SyncSource | null;
 }
 
 export type OpenOutcome = { ok: true; sessionId: string } | { ok: false; reason: OpenFailure | "unavailable" };
@@ -54,6 +57,8 @@ export interface PanelPlayer {
   open(request: OpenRequest, blob: Blob): Promise<OpenOutcome>;
   command(command: PlayerCommand): void;
   setFloating(visible: boolean): void;
+  /** Sync with video on or off. */
+  setSync(on: boolean): void;
   /** Ends this tab's session (any, when no id is given). */
   end(sessionId?: string): void;
   dispose(): void;
@@ -217,6 +222,11 @@ export class PlayerLink implements PanelPlayer {
   setFloating(visible: boolean): void {
     const view = this.view;
     if (view) this.post({ type: "floating", tabId: this.deps.tabId, sessionId: view.sessionId, visible });
+  }
+
+  setSync(on: boolean): void {
+    const view = this.view;
+    if (view) this.post({ type: "sync", tabId: this.deps.tabId, sessionId: view.sessionId, on });
   }
 
   end(sessionId?: string): void {

@@ -7,10 +7,13 @@
 
 import { formatTime } from "../panel/draft";
 import { PLAYER_SEEK_SECONDS, choicesLabel, type PlayerCommand, type PlayerView } from "../shared/playback";
+import { syncNoticeText, syncPreviewText, syncStatusText } from "../shared/sync";
 
 export interface FloatingActions {
   command(command: PlayerCommand): void;
   close(): void;
+  /** Sync with video on or off (the offscreen document decides whether it can). */
+  sync(on: boolean): void;
 }
 
 const MARGIN = 8;
@@ -57,6 +60,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .status { margin: 4px 0 0; color: var(--muted); }
 .status.problem { color: var(--error); }
 .status:empty { display: none; }
+.sync { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid var(--border); }
+.sync-state { margin: 0 0 4px; font-weight: 600; }
+.sync-confirm[hidden], .sync-toggle[hidden] { display: none; }
+.sync-confirm p { margin: 4px 0; color: var(--muted); }
 `;
 
 const PROBLEM_TEXT: Record<string, string> = {
@@ -72,6 +79,8 @@ export class FloatingPlayer {
   private view: PlayerView | null = null;
   private collapsed = false;
   private seeking = false;
+  // The explanation shown before Sync is turned on the first time.
+  private confirmingSync = false;
   // null: the default place (top right); otherwise where the user moved it.
   private position: { x: number; y: number } | null = null;
   private drag: { pointerId: number; dx: number; dy: number } | null = null;
@@ -187,7 +196,28 @@ export class FloatingPlayer {
     const status = el("p", "status");
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
-    body.append(info, seek, row, status);
+    const sync = el("div", "sync");
+    sync.setAttribute("role", "group");
+    sync.setAttribute("aria-label", "Sync with video");
+    const syncState = el("p", "sync-state");
+    syncState.setAttribute("role", "status");
+    syncState.setAttribute("aria-live", "polite");
+    const syncToggle = el("button", "sync-toggle", "Sync with video");
+    syncToggle.type = "button";
+    const syncConfirm = el("div", "sync-confirm");
+    syncConfirm.hidden = true;
+    const syncPreview = el("p");
+    const syncOn = el("button", "primary", "Turn on sync");
+    syncOn.type = "button";
+    const syncCancel = el("button", "", "Cancel");
+    syncCancel.type = "button";
+    const syncRow = el("div", "row");
+    syncRow.append(syncOn, syncCancel);
+    syncConfirm.append(syncPreview, syncRow);
+    const syncNotice = el("p", "status problem");
+    syncNotice.setAttribute("role", "alert");
+    sync.append(syncState, syncToggle, syncConfirm, syncNotice);
+    body.append(info, seek, row, status, sync);
     box.append(bar, body);
 
     on(play, "click", () => {
@@ -196,6 +226,25 @@ export class FloatingPlayer {
     });
     on(back, "click", () => this.actions.command({ command: "seek-by", value: -PLAYER_SEEK_SECONDS }));
     on(forward, "click", () => this.actions.command({ command: "seek-by", value: PLAYER_SEEK_SECONDS }));
+    on(syncToggle, "click", () => {
+      const view = this.view;
+      if (!view) return;
+      const s = view.sync;
+      if (s.status === "off" && !s.confirmed) {
+        this.confirmingSync = true;
+        this.update();
+      } else if (s.status === "off") this.actions.sync(true);
+      else if (s.status !== "unavailable") this.actions.sync(false);
+    });
+    on(syncOn, "click", () => {
+      this.confirmingSync = false;
+      this.actions.sync(true);
+      this.update();
+    });
+    on(syncCancel, "click", () => {
+      this.confirmingSync = false;
+      this.update();
+    });
     on(collapse, "click", () => {
       this.collapsed = !this.collapsed;
       this.update();
@@ -246,7 +295,23 @@ export class FloatingPlayer {
       const rect = box.getBoundingClientRect();
       this.moveTo(rect.left + move[0], rect.top + move[1]);
     });
-    return { box, play, collapse, body, info, seek, back, forward, time, status };
+    return {
+      box,
+      play,
+      collapse,
+      body,
+      info,
+      seek,
+      back,
+      forward,
+      time,
+      status,
+      syncState,
+      syncToggle,
+      syncConfirm,
+      syncPreview,
+      syncNotice,
+    };
   }
 
   private update(): void {
@@ -275,6 +340,17 @@ export class FloatingPlayer {
     const problem = view.problem ? PROBLEM_TEXT[view.problem] : null;
     ui.status.className = problem ? "status problem" : "status";
     ui.status.textContent = problem ?? (view.status === "loading" ? "Loading the audio…" : view.ended ? "Ended." : "");
+    const sync = view.sync;
+    if (sync.status !== "off") this.confirmingSync = false;
+    ui.syncState.textContent = syncStatusText(sync);
+    const on = sync.status !== "off" && sync.status !== "unavailable";
+    ui.syncToggle.textContent = on ? "Turn off sync" : "Sync with video";
+    ui.syncToggle.setAttribute("aria-pressed", String(on));
+    ui.syncToggle.disabled = sync.status === "unavailable";
+    ui.syncToggle.hidden = this.confirmingSync;
+    ui.syncConfirm.hidden = !this.confirmingSync;
+    ui.syncPreview.textContent = syncPreviewText(sync);
+    ui.syncNotice.textContent = syncNoticeText(sync);
   }
 
   private moveTo(x: number, y: number): void {

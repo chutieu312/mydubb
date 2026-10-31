@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PlayerView } from "../shared/playback";
 import { FloatingPlayer, clampBox, type FloatingActions } from "./floating";
+import { NO_SYNC } from "../shared/testSync";
 
 const VIEW: PlayerView = {
   sessionId: "s1",
@@ -14,9 +15,14 @@ const VIEW: PlayerView = {
   problem: null,
   choices: { languageLabel: "Vietnamese", voiceLabel: "<b>Andrew</b>", speed: 1.5 },
   floating: true,
+  sync: NO_SYNC,
 };
 
-let actions: { command: ReturnType<typeof vi.fn<FloatingActions["command"]>>; close: ReturnType<typeof vi.fn<FloatingActions["close"]>> };
+let actions: {
+  command: ReturnType<typeof vi.fn<FloatingActions["command"]>>;
+  close: ReturnType<typeof vi.fn<FloatingActions["close"]>>;
+  sync: ReturnType<typeof vi.fn<FloatingActions["sync"]>>;
+};
 
 /** jsdom cannot make a trusted event; the real check (event.isTrusted) is the default. */
 function make(trust: (event: Event) => boolean = () => true) {
@@ -31,7 +37,7 @@ function make(trust: (event: Event) => boolean = () => true) {
 const trusted = <T extends Event>(event: T): T => event;
 
 beforeEach(() => {
-  actions = { command: vi.fn<FloatingActions["command"]>(), close: vi.fn<FloatingActions["close"]>() };
+  actions = { command: vi.fn<FloatingActions["command"]>(), close: vi.fn<FloatingActions["close"]>(), sync: vi.fn<FloatingActions["sync"]>() };
 });
 
 afterEach(() => {
@@ -129,5 +135,36 @@ describe("FloatingPlayer", () => {
     const host = document.querySelector<HTMLElement>("mydubb-player")!;
     expect(host.style.getPropertyValue("position")).toBe("fixed");
     expect(host.style.getPropertyPriority("position")).toBe("important");
+  });
+
+  it("Sync with video: explained before the first time, on/off through the actions, trusted clicks only", () => {
+    const sync = { ...VIEW.sync, status: "off" as const, unavailable: null, start: 10, end: 56, duration: 30.563, rate: 46 / 30.563 };
+    const isTrusted = vi.fn(() => true);
+    const player = new FloatingPlayer(document, window, actions, "open", isTrusted);
+    player.render({ ...VIEW, sync });
+    const root = document.querySelector("mydubb-player")!.shadowRoot!;
+    const toggle = root.querySelector<HTMLButtonElement>(".sync-toggle")!;
+    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync with video: OFF");
+    isTrusted.mockReturnValueOnce(false);
+    toggle.click();
+    expect((root.querySelector(".sync-confirm") as HTMLElement).hidden).toBe(true);
+    toggle.click();
+    expect((root.querySelector(".sync-confirm") as HTMLElement).hidden).toBe(false);
+    expect(root.querySelector(".sync-confirm p")!.textContent).toContain("Video 0:10 → 0:56 (46 s), MP3 30.563 s, video speed 1.505x.");
+    expect(actions.sync).not.toHaveBeenCalled();
+    const [on] = [...root.querySelectorAll<HTMLButtonElement>(".sync-confirm button")];
+    on!.click();
+    expect(actions.sync).toHaveBeenLastCalledWith(true);
+    player.render({ ...VIEW, sync: { ...sync, status: "playing", confirmed: true } });
+    expect(root.querySelector(".sync-state")!.textContent).toBe("Sync with video: ON · Playing");
+    expect(toggle.textContent).toBe("Turn off sync");
+    toggle.click();
+    expect(actions.sync).toHaveBeenLastCalledWith(false);
+    player.render({ ...VIEW, sync: { ...sync, status: "off", confirmed: true, notice: "other-tab" } });
+    expect(root.querySelector(".sync .problem")!.textContent).toBe("Paused: MyDubb audio started in another tab.");
+    toggle.click();
+    expect(actions.sync).toHaveBeenLastCalledWith(true);
+    player.render({ ...VIEW });
+    expect(toggle.disabled).toBe(true);
   });
 });

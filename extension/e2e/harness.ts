@@ -59,6 +59,19 @@ const json = (route: Route, status: number, body: unknown) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 const apiError = (route: Route, status: number, code: string, message: string) =>
   json(route, status, { error: { code, message } });
+const hms = (value: unknown) => {
+  const m = /^(\d{2}):(\d{2}):(\d{2})$/.exec(String(value));
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0;
+};
+/** The first and last caption start of a timed transcript (M:SS or M:SS.mmm lines), as the server reads them. */
+function captionSpan(transcript: unknown): [number, number] {
+  const starts = String(transcript)
+    .split("\n")
+    .map((line) => /^(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?$/.exec(line.trim()))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .map((m) => Number(m[1]) * 60 + Number(m[2]) + Number((m[3] ?? "0").padEnd(3, "0")) / 1000);
+  return [starts[0] ?? 0, starts.at(-1) ?? 0];
+}
 
 /**
  * A fake of the MyDubb API endpoints the extension uses, with the contract's shapes. It checks the
@@ -159,13 +172,37 @@ export class FakeMyDubb {
       return route.fulfill({ status: 200, contentType: "audio/mpeg", body: fixtureMp3 });
     }
     if (match[2]) {
+      // Like the server: the baseline of the two start times; a timed job also reports the caption span.
+      const baseline = hms(job.body.last_sentence_start) - hms(job.body.first_sentence_start);
+      const [first, last] = captionSpan(job.body.transcript);
+      const timing =
+        job.body.timing_mode === "timed"
+          ? {
+              mode: "timed",
+              captions: 2,
+              blocks: 1,
+              source_first_seconds: first,
+              source_last_seconds: last,
+              source_baseline_seconds: last - first,
+              selected_baseline_seconds: baseline,
+              speech_requests: 1,
+              frames: null,
+              removed_boundaries: null,
+              tempo_warning_level: null,
+              max_tempo_factor: null,
+              frames_over_warning_level: null,
+              estimated_max_displacement_seconds: null,
+              frame_details: null,
+            }
+          : null;
       return json(route, 200, {
         job_id: job.id,
         target_language: job.body.target_language ?? "vietnamese",
         target_language_label: job.body.target_language === "arabic" ? "Arabic" : "Vietnamese",
-        baseline_duration_seconds: 360,
+        baseline_duration_seconds: baseline,
         speed: job.body.speed,
-        output_duration_seconds: 360 / Number(job.body.speed),
+        output_duration_seconds: baseline / Number(job.body.speed),
+        timing,
         translation: { text: `Bản dịch <b>${job.id}</b>`, is_illustrative: true, provider: "mock" },
         audio: {
           url: `/api/jobs/${job.id}/result/audio`,
@@ -311,6 +348,9 @@ export interface PlayingSession {
   floating: boolean;
   lessonKey: string;
   audioElements: number;
+  sync: { status: string; notice: string | null; start: number | null; end: number | null; duration: number | null; rate: number | null };
+  /** Drift the coordinator measured (MP3 seconds) and the corrections it made. */
+  drift: { samples: number; corrections: number; maxAbsDrift: number; lastDrift: number | null };
 }
 
 /**

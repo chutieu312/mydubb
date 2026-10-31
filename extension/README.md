@@ -4,7 +4,8 @@ On a Udemy lecture: select transcript text → right-click → **Send to MyDubb*
 a side panel. There you can edit it, control the lecture video (Play/Pause, −5 s/+5 s, time),
 connect your **MyDubb invitation account**, choose the output language, voice and speed, **Generate
 audio**, follow the job, read the translation and listen to the MP3, in the panel or in a small
-**floating player** on the lecture page that keeps playing when the panel is closed.
+**floating player** on the lecture page that keeps playing when the panel is closed. With **Sync
+with video** on, the MyDubb audio and the Udemy video play, pause and seek together.
 
 This is a **prototype**, installed only with Developer mode → Load unpacked; it is not on the Chrome
 Web Store. Nothing is sent to MyDubb until you choose **Generate audio** (apart from loading the
@@ -65,14 +66,24 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
    position and Play/Pause. Playing in another Udemy tab pauses this one (each keeps its position).
    A new **Generate audio** does not replace or stop what you are listening to: when its result is
    ready, **Use this result** stops the old audio and loads the new one.
-8. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
+8. **Sync with video** (panel and floating player, OFF by default): the first time it shows the
+   video span V0 → V1, the MP3 length and the video speed it will use, and that the video is muted
+   because the MyDubb audio replaces the spoken part (timing is an estimate); **Turn on sync**. Both
+   pause, the video moves to the audio's position at that speed, muted; nothing plays until you
+   press Play. Then Play/Pause/seek bar/±5 s of MyDubb drive both (the bar stays in MP3 time), and
+   Play/Pause/seek on the Udemy video drive the audio. **Turn off sync** pauses both and gives the
+   video its sound and speed back. It never turns itself on (Generate, reload, another lecture or
+   result, account change).
+9. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
    an account change stops the audio and removes the player. After a reload, **Load audio** in the
    panel downloads the same result again (it never creates a job).
 
 The toolbar button **Open MyDubb Prototype** opens the panel for the current tab without a selection.
 If the panel could not be opened from the menu, the button shows a **!** badge; click it.
 
-Note: Play/Seek act on the real Udemy video and may update your watch progress.
+Note: Play/Seek act on the real Udemy video and may update your watch progress. With Sync on, the
+video also runs faster or slower than 1x and is moved by MyDubb's seeks, which Udemy may count as
+watching (or skipping) that part of the lecture.
 
 ## Permissions and why
 
@@ -84,7 +95,7 @@ Note: Play/Seek act on the real Udemy video and may update your watch progress.
 | `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect MyDubb**. |
 | `offscreen` | One hidden extension page (`offscreen.html`) that plays the MyDubb audio, so it keeps playing when the side panel closes. Created when a result's audio is loaded; it closes itself when no tab has audio left. Reasons `AUDIO_PLAYBACK` and `BLOBS` (it holds the MP3 Blob and its object URL while paused; with `AUDIO_PLAYBACK` alone Chrome would close it after 30 s of silence). |
 | Host `https://mydubb.com/*` (the build's `MYDUBB_ORIGIN`) | Calls to the MyDubb API from the side panel. No other host. |
-| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected, and draws the floating player (display and playback commands only). Top frame only. |
+| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected, draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
 
 No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`, no
 `externally_connectable` and no `web_accessible_resources`. The extension does not read cookies,
@@ -112,7 +123,8 @@ does not download video, does not intercept network requests and does not use Ud
     controller id.
   - Commands carry the lecture key and video id the panel showed; the content script refuses any
     command for a different lecture or video (`stale`). Seeks are clamped to the seekable range.
-    `muted`, `volume` and `playbackRate` are never changed.
+    `muted`, `volume` and `playbackRate` are never changed, except `muted` and `playbackRate` while
+    Sync with video is on (below); `volume` never.
 - **Side panel** (`src/panel`): bound to one tab id. It connects a port to that tab's top-frame
   content script, reconnects after reload/navigation, and reports a closed tab. Every page state is
   checked against the lecture the draft (and any waiting selection) belongs to: when the tab shows
@@ -182,6 +194,58 @@ does not download video, does not intercept network requests and does not use Ud
     pinned with inline `!important`), built with `textContent` only; only trusted events act, so a
     page script can neither click it nor reach the extension (`window.postMessage` is not used).
     Labelled buttons, a labelled range input with a value text, keyboard-movable handle.
+- **Sync with video** (`src/shared/sync.ts`, `src/offscreen/sync.ts`, `src/content/sync.ts`):
+  - *Mapping*: the MP3 already has the speed in it, so the audio plays at 1x and is the clock. With
+    V0/V1 the start and end of the source span on the video, D the real MP3 duration (the audio
+    element's) and A the MP3 position: `R = (V1 − V0) / D`, `V = V0 + A × R`, `A = (V − V0) / R`.
+    Example: V0 10 s, V1 30 s, D 13.333 s → the video runs at 1.5x and A = 4 s is V = 16 s.
+  - *The span is the job's own*: copied at the Generate click into the tab's job record (never read
+    from the form later). Plain: the two start times sent. Timed: the first and last caption
+    (milliseconds kept) with the baseline of the two fields; if you changed the fields, the MP3 is
+    `baseline / speed` long and R differs from the speed you chose. V1 is the start of the last
+    sentence/caption, as in the job contract; no tail is added. The span is kept only if the result
+    agrees (baseline, speed, and the caption span the server reports for timed jobs). Sync is
+    **unavailable** (the audio still plays on its own) for a job without a span (older records),
+    an MP3 that does not fit `baseline / speed` (more than 0.25 s or 1 % off, e.g. mock audio), or
+    an R outside Chrome's 0.0625–16. The page checks that V0..V1 lies inside the video's seekable
+    range and reads the rate back after setting it; anything refused stops Sync with a message,
+    nothing is clamped.
+  - *Coordinator*: the offscreen document (it owns the audio and outlives the panel). The content
+    script binds the video it identified and runs a few operations on it (`attach`, `seek`, `play`,
+    `pause`, `position`, `release`), reporting what the video does that MyDubb did not ask for.
+    Numbers only on the page port: no token, job, account or audio address.
+  - *No event loops*: every activation has a `syncId`, every operation a command id; replies for
+    another activation or an abandoned command are dropped, and each new user action supersedes
+    older async steps. The content script records what it expects before each operation (a pause,
+    a play, a seek target, its rate) and treats matching events as echoes; anything else is the
+    user's or the site's (`event.isTrusted` is not relied on). A seek on the video moves only the
+    audio, so it never comes back as another video seek.
+  - *Controls*: Play aligns the video to the audio, starts it, then starts the audio where the video
+    is. A seek on the video inside V0..V1 moves the audio; outside it pauses both and turns Sync off
+    (the video is not pulled back). Reaching V1 or the end of the MP3 pauses both; Play then starts
+    both from the beginning. A rate change in the Udemy player pauses both and turns Sync off (the
+    rate is not forced back; another audio speed needs a new Generate). An unmute is respected
+    (shown, never muted again).
+  - *Buffering and errors*: intent (paused/playing) is kept apart from buffering. While one side
+    waits for data the other is held; only an intent to play still in force resumes it (a Pause
+    during buffering stays paused). A play refused by Chrome or a failing side pauses the other and
+    says so. Operations time out (attach 5 s, seek/play 10 s, position 3 s); a late answer changes
+    nothing.
+  - *Drift*: `d = (V − V0) / R − A` in MP3 seconds, V read by the page when it answers, A when the
+    answer arrives. Checked once per second only while both play (no timer otherwise, never per
+    frame). |d| ≤ 0.3 s is left alone (seeking the video is a visible jump and may rebuffer, and
+    the timing itself is an estimate to a few tenths); a larger d seen twice in a row is corrected
+    by seeking the video, never by changing the audio's rate, at most once per 3 s and 3 times per
+    30 s; the next one pauses both ("kept drifting apart"). A background tab is not counted against
+    that limit (Chrome may throttle it), and coming back to the tab realigns at once; a video the
+    browser paused in a background tab is restarted aligned on return.
+  - *Ownership*: at attach the page notes the element's `muted` and `playbackRate`; it mutes only an
+    unmuted video, never touches `volume`, and on release gives back only what still holds MyDubb's
+    value, only on the same element still showing the same media (not on a reused element showing
+    another lecture). Turning Sync off, closing the floating player (×) and another tab starting
+    MyDubb audio pause the video too. A replaced video element ends Sync (the new one is never
+    driven by an old command; turn it on again). A lecture change, reload, closed tab, Disconnect,
+    account change or another result ends the session and with it Sync.
 - **Validation**: every message is shape-checked; the content script accepts ports only from this
   extension's `sidepanel.html` and selection requests only from the extension itself (not from a
   tab); the offscreen document checks the sender of every port and message as above. The manifest
@@ -209,7 +273,15 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   (handshake, no document created to look, retry), the floating UI (trusted events only, text only,
   seek, collapse/close, viewport clamp), the content-script link and lecture watch with the panel
   closed, and the panel's player (choices from the job, keep-until-switch, reopened panel does not
-  download again, sessions of another connection ended, Load audio after a release).
+  download again, sessions of another connection ended, Load audio after a release). Story 4: the
+  mapping (`shared/sync.test.ts`: V0 with milliseconds, all seven speeds, timed with and without
+  changed start times, refusals), the panel's span (plain/timed, kept from the click, dropped when
+  the result disagrees, older records without it, the explanation and toggle), the coordinator
+  (`offscreen/sync.test.ts`: on/off, Play/Pause/seek both ways, outside the span, end and restart,
+  echoes and late answers, buffering on each side, Pause during buffering, blocked play, timeouts,
+  small and large drift, limited corrections, background tab), the page side (`content/sync.test.ts`:
+  ownership of mute and rate, user unmute and rate change, reused element, replaced element,
+  echoes vs user actions, end of span) and the hub (two tabs, Close, ending sessions).
 - `npm run check:dist`: `dist/` has no test hook or test server and exactly the documented
   permissions.
 - `npm run test:browser`: the real extension in Playwright's Chromium against **synthetic fixture
@@ -226,8 +298,16 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   reload (no replay, Load audio without a job), tab close and the document closing itself; two tabs
   (B pauses A); disconnect from another tab's panel; stopped service worker (and one woken by a
   disconnect); expired result and retries without a job; synthetic clicks ignored; a paused session
-  surviving 36 s (past Chrome's 30 s silent-audio limit). Autoplay is allowed by a browser flag in
-  these tests, so Chrome's autoplay blocking is only unit-tested. These are not evidence of
+  surviving 36 s (past Chrome's 30 s silent-audio limit). Story 4 (`e2e/sync.spec.ts`, the real
+  MP3 in the offscreen document and a real 60 s WAV played by the fixture's `<video>`): Sync off by
+  default, the explanation, on/off restoring mute and rate, Play/Pause/±5 s from the panel, drift
+  measured over 24 s of playback at R ≈ 1.5 (both by the test and by the coordinator), play, pause
+  and seek on the video inside and outside the span, a timed job with changed start times
+  (R ≈ 0.98 at 1.5x), an MP3 that does not fit, the floating player with the panel closed, a rate
+  change in the video, an unmute, the end of the span and Play again, Close, two tabs, a replaced
+  video, a stopped service worker, Disconnect, reload and an SPA lecture change. Autoplay is allowed
+  by a browser flag in these tests, so Chrome's autoplay blocking is only unit-tested, and
+  background-tab throttling is not reproduced (unit-tested only). These are not evidence of
   behaviour on the real Udemy site or the real MyDubb.
 - `dist-test/` is the same build plus test hooks: one in the service worker lets the tests run the
   menu handler (Playwright cannot click a native context menu), one in the panel stands in for
@@ -261,6 +341,21 @@ use the Azure free allowance.
    **×** pauses it, the panel shows it again. Play in a second lecture tab (the first pauses). Then
    move to another lecture, reload, and **Disconnect** with the panel closed: each stops the audio
    and removes the player.
+7. Sync with video (Play and seeks move the real lecture video, run it faster or slower than 1x
+   and may change your watch progress; use a lecture where that does not matter). Generate with the
+   two start times of the selected transcript (and the speed you want), then **Sync with video**:
+   check that V0 → V1 and the speed match the transcript, **Turn on sync**: the video moves to V0
+   (or the audio's position), muted, paused. Play from the panel and from the floating player
+   (panel closed): voice and picture stay together within the stated estimate for the whole span;
+   Pause, ±5 s and the seek bar move both. On the Udemy player: Play/Pause and seeking inside the
+   span move the audio; seeking before V0 or after V1 turns Sync off with both paused. Change the
+   speed in the Udemy player: Sync turns off, both paused. Unmute the video: it stays unmuted.
+   Let it reach the end: both pause; Play starts again from V0. Switch to another tab for a while
+   and come back: the video catches up. Turn Sync off: the video's sound and speed are back.
+   Also: × on the floating player, playing another lecture tab, moving to another lecture,
+   reload and **Disconnect** while synced (each pauses or ends both, and the video gets its sound
+   and speed back). Note anything Udemy's player does that the fixture does not (its own seeks on
+   load, speed menu, buffering).
 
 ## Limits (prototype)
 
@@ -268,8 +363,15 @@ use the Azure free allowance.
 - When the content script cannot be reached (e.g. inside an iframe) the selection falls back to
   Chrome's `selectionText`, which may collapse whitespace.
 - Invitation accounts only (no guest), no YouTube import, no automatic transcript extraction, no
-  audio/video synchronization (the MyDubb audio and the Udemy video are played and seeked
-  separately), no playback speed control (the speed is chosen at Generate), no MP3 download button.
+  playback speed control (the speed is chosen at Generate), no MP3 download button.
+- Sync with video follows the job's span as a whole: plain mode maps the whole MP3 linearly onto
+  V0..V1, timed mode has the known grouping and alignment limits of timed dubbing; neither is word
+  or sentence exact. Drift is kept within about 0.3 s in the local tests, which is no promise for a
+  throttled background tab or for Udemy's own player (not checked on udemy.com). The video runs at
+  R, which may differ from the chosen speed (changed start times). Only one Udemy video that the
+  content script identifies; a job without a confirmed span, or an MP3 not fitted to its times,
+  cannot be synced (Generate it again). The end of the span is detected on `timeupdate` (about 4
+  per second), so the muted video may run up to about 0.25 s × R past V1 before it pauses.
 - The audio continues only once it has been loaded in the player; a panel closed before the result
   arrives stops following the job (reopen it to continue). A reload, lecture change or tab close
   ends the player; reopening it downloads the result again while MyDubb still has it (1 hour).

@@ -28,7 +28,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Browser tests only (dist-test/): what is playing, read from the real media elements.
   if (__MYDUBB_E2E__ && (message as { type?: unknown } | null)?.type === "mydubbE2E:inspect") {
     sendResponse(
-      [...hub.tabs].map(([tabId, { audio, view }]) => ({
+      [...hub.tabs].map(([tabId, { audio, view, drift }]) => ({
         tabId,
         paused: audio.paused,
         currentTime: audio.currentTime,
@@ -38,6 +38,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         floating: view.floating,
         lessonKey: view.lessonKey,
         audioElements: document.querySelectorAll("audio").length,
+        sync: view.sync,
+        drift,
       })),
     );
     return false;

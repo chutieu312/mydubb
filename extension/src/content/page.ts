@@ -81,7 +81,12 @@ export class PageSession {
   private readonly link: PlaybackLink | null;
 
   constructor(private readonly env: PageEnv) {
-    this.link = env.playback ? new PlaybackLink(env.playback, () => this.stopIfUnused()) : null;
+    this.link = env.playback
+      ? new PlaybackLink(env.playback, () => this.stopIfUnused(), {
+          doc: env.doc,
+          current: () => this.attached?.video ?? null,
+        })
+      : null;
   }
 
   get connectedPanels(): number {
@@ -197,6 +202,8 @@ export class PageSession {
       this.attached?.detach();
       this.attached = next ? new AttachedVideo(next, this.nextVideoId++, () => this.broadcast()) : null;
     }
+    // A synced video that is no longer the identified one: the sync ends, nothing follows the new one.
+    this.link?.videoChanged();
     this.ambiguousCount = pick.kind === "ambiguous" ? pick.candidates : 0;
     this.broadcast();
   }

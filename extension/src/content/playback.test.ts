@@ -5,6 +5,7 @@ import type { PageToPlayer, PlayerView } from "../shared/playback";
 import type { FloatingActions } from "./floating";
 import { PageSession, type PortLike } from "./page";
 import { PlaybackLink, type FloatingView, type PlayerPort } from "./playback";
+import { NO_SYNC } from "../shared/testSync";
 
 const VIEW: PlayerView = {
   sessionId: "s1",
@@ -17,6 +18,7 @@ const VIEW: PlayerView = {
   problem: null,
   choices: { languageLabel: "Vietnamese", voiceLabel: "Andrew", speed: 1 },
   floating: true,
+  sync: NO_SYNC,
 };
 
 class FakePlayerPort implements PlayerPort {

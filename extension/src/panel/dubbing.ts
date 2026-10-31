@@ -21,10 +21,11 @@ import {
   speedLabel,
 } from "../../../frontend/src/lib/speed";
 import { editTimestamp } from "../../../frontend/src/lib/timestampInput";
-import { formatSeconds, previewTargetDuration } from "../../../frontend/src/lib/timestamps";
+import { formatSeconds, parseTimestamp, previewTargetDuration } from "../../../frontend/src/lib/timestamps";
 import { analyzeTranscriptTiming, captionClock, type TranscriptTiming } from "../../../frontend/src/lib/transcriptTiming";
 import { formKey, jobKey } from "../shared/messages";
 import { PLAYER_SEEK_SECONDS, choicesLabel, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
+import { isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
 import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
 import { AUTH_KEY, connect, connectErrorMessage, isLive, isStoredAuth, type StoredAuth } from "./auth";
 import { formatTime, type CurrentLesson } from "./draft";
@@ -108,6 +109,49 @@ const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
 
 type Storage = Pick<chrome.storage.StorageArea, "get" | "set" | "remove">;
 
+/**
+ * The source span of one Generate click, for Sync with video: plain mode, the two start times of
+ * the request; timed mode, the first and last caption (milliseconds kept), with the baseline of the
+ * two fields, which the user may have changed (then the video rate differs from the speed).
+ * Undefined when the click's input gives none.
+ */
+export function syncSourceFor(
+  timing: TranscriptTiming,
+  timed: boolean,
+  firstStart: string,
+  lastStart: string,
+  speed: number,
+): SyncSource | undefined {
+  const first = parseTimestamp(firstStart);
+  const last = parseTimestamp(lastStart);
+  if (first === null || last === null || last <= first) return undefined;
+  const baseline = last - first;
+  let source: SyncSource | null = null;
+  if (!timed) source = { mode: "plain", start: first, end: last, baseline, speed };
+  else if (timing.kind === "timed") source = { mode: "timed", start: timing.first, end: timing.last, baseline, speed };
+  return source && isSyncSource(source) ? source : undefined;
+}
+
+/**
+ * The click's span, kept only when the server's result agrees with it (baseline, speed and, for
+ * timed jobs, the caption span it used); otherwise null, and Sync stays unavailable.
+ */
+export function confirmedSync(source: SyncSource | undefined, result: JobResult): SyncSource | null {
+  if (!source) return null;
+  if (Math.abs(result.baseline_duration_seconds - source.baseline) > 0.001 || Math.abs(result.speed - source.speed) > 1e-9) {
+    return null;
+  }
+  const timing = result.timing ?? null;
+  if (source.mode === "plain") return timing === null ? source : null;
+  if (
+    timing &&
+    (Math.abs(timing.source_first_seconds - source.start) > 0.0015 || Math.abs(timing.source_last_seconds - source.end) > 0.0015)
+  ) {
+    return null;
+  }
+  return source;
+}
+
 export interface DubbingDeps {
   tabId: number;
   origin: string;
@@ -180,6 +224,13 @@ function dubbingUi() {
     playerOtherText: byId("player-other-text"),
     playerSwitch: byId<HTMLButtonElement>("player-switch"),
     playerLoad: byId<HTMLButtonElement>("player-load"),
+    syncStatus: byId("sync-status"),
+    syncToggle: byId<HTMLButtonElement>("sync-toggle"),
+    syncConfirm: byId("sync-confirm"),
+    syncPreview: byId("sync-preview"),
+    syncOn: byId<HTMLButtonElement>("sync-on"),
+    syncCancel: byId<HTMLButtonElement>("sync-cancel"),
+    syncNotice: byId("sync-notice"),
     durations: byId("result-durations"),
     translation: byId("translation"),
     notices: byId("notices"),
@@ -224,13 +275,15 @@ export class Dubbing {
   private sendingOp: string | null = null;
   private poll: AbortController | null = null;
   // The audio of the job this panel shows (once its result arrived), and a load started by hand.
-  private resultAudio: { path: string; record: JobRecord } | null = null;
+  private resultAudio: { path: string; record: JobRecord; sync: SyncSource | null } | null = null;
   private audioLoad: AbortController | null = null;
   private loadingAudio = false;
   // The session the content script was last asked to link, and whether one was shown.
   private linkedFor: string | null = null;
   private hadSession = false;
   private seeking = false;
+  // The explanation shown before Sync is turned on the first time.
+  private confirmingSync = false;
   private saveTimer: number | null = null;
   private disposed = false;
   // Until the stored form, account and job are read (restore()), page states and transcript
@@ -711,13 +764,16 @@ export class Dubbing {
       },
       timing,
     );
+    const timed = usesTimestamps(timing, this.form.ignoreTimestamps);
+    const sync = syncSourceFor(timing, timed, body.first_sentence_start, body.last_sentence_start, body.speed);
     const choices: JobChoices = {
       languageLabel: (this.languages.find((l) => l.id === targetLanguage) ?? VIETNAMESE).label,
       voiceLabel: this.voices.find((v) => v.id === voice)?.label ?? voice,
       speed: body.speed,
-      timed: usesTimestamps(timing, this.form.ignoreTimestamps),
+      timed,
       firstStart: body.first_sentence_start,
       lastStart: body.last_sentence_start,
+      ...(sync ? { sync } : {}),
     };
     const record: JobRecord = {
       operationId: this.deps.randomId(),
@@ -868,7 +924,7 @@ export class Dubbing {
     }
     if (!current()) return;
     this.renderResult(result);
-    this.resultAudio = { path: result.audio.url, record };
+    this.resultAudio = { path: result.audio.url, record, sync: confirmedSync(record.choices.sync, result) };
     // The tab may already have a session: this job's (panel reopened) or an earlier result's.
     await this.deps.player.ready();
     if (!current()) return;
@@ -932,6 +988,7 @@ export class Dubbing {
   private async loadAudio(auth: StoredAuth, signal: AbortSignal, current: () => boolean): Promise<void> {
     const target = this.resultAudio;
     const lessonKey = target?.record.lessonKey ?? this.host.currentLesson();
+    const sync = target?.sync ?? null;
     const jobId = target?.record.jobId;
     if (!target || !jobId || typeof lessonKey !== "string") return;
     const ui = this.ui;
@@ -957,6 +1014,7 @@ export class Dubbing {
           owner: { userId: auth.user.id, connectionId: auth.connectionId, jobId, operationId },
           // What the job was made with (copied at Generate), never the form as it is now.
           choices: { languageLabel: choices.languageLabel, voiceLabel: choices.voiceLabel, speed: choices.speed },
+          sync,
         },
         blob,
       );
@@ -1029,6 +1087,27 @@ export class Dubbing {
     on(ui.playerFloating, "click", () => {
       const view = this.sessionView();
       if (view) player.setFloating(!view.floating);
+    });
+    on(ui.syncToggle, "click", () => {
+      const sync = this.sessionView()?.sync;
+      if (!sync) return;
+      if (sync.status === "off" && !sync.confirmed) {
+        this.confirmingSync = true;
+        this.renderPlayer();
+        ui.syncOn.focus();
+      } else if (sync.status === "off") player.setSync(true);
+      else if (sync.status !== "unavailable") player.setSync(false);
+    });
+    on(ui.syncOn, "click", () => {
+      this.confirmingSync = false;
+      player.setSync(true);
+      this.renderPlayer();
+      ui.syncToggle.focus();
+    });
+    on(ui.syncCancel, "click", () => {
+      this.confirmingSync = false;
+      this.renderPlayer();
+      ui.syncToggle.focus();
     });
     on(ui.playerSwitch, "click", () => this.switchToResult());
     on(ui.playerLoad, "click", () => this.loadByHand());
@@ -1104,6 +1183,9 @@ export class Dubbing {
         : view.status === "loading"
           ? "Loading the audio…"
           : "";
+      this.renderSync(view);
+    } else {
+      this.confirmingSync = false;
     }
     const other = !!view && !!result && result.record.jobId !== view.owner.jobId;
     ui.playerOther.hidden = !other;
@@ -1113,6 +1195,21 @@ export class Dubbing {
     const busy = this.loadingAudio || this.audioLoad !== null;
     ui.playerSwitch.disabled = busy;
     ui.playerLoad.hidden = !result || busy || (!!view && (other || view.status !== "error"));
+  }
+
+  private renderSync(view: PanelPlayerView): void {
+    const ui = this.ui;
+    const sync = view.sync;
+    if (sync.status !== "off") this.confirmingSync = false;
+    const on = sync.status !== "off" && sync.status !== "unavailable";
+    ui.syncStatus.textContent = syncStatusText(sync);
+    ui.syncToggle.textContent = on ? "Turn off sync" : "Sync with video";
+    ui.syncToggle.setAttribute("aria-pressed", String(on));
+    ui.syncToggle.disabled = sync.status === "unavailable";
+    ui.syncToggle.hidden = this.confirmingSync;
+    ui.syncConfirm.hidden = !this.confirmingSync;
+    ui.syncPreview.textContent = syncPreviewText(sync);
+    ui.syncNotice.textContent = syncNoticeText(sync);
   }
 
   // ---- Dropping ------------------------------------------------------------------------------

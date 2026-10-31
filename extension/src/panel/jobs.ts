@@ -3,6 +3,7 @@
 // lecture and the operation that created it; polling with backoff and a time limit.
 
 import type { Job } from "../../../frontend/src/api/types";
+import { isSyncSource, type SyncSource } from "../shared/sync";
 import { MyDubbError, NO_ANSWER } from "./api";
 
 /** What the user chose for this job, as shown with its result (not re-read from the form). */
@@ -13,6 +14,8 @@ export interface JobChoices {
   timed: boolean;
   firstStart: string;
   lastStart: string;
+  /** The source span for Sync with video, fixed at the click (absent in older records: no Sync). */
+  sync?: SyncSource;
 }
 
 export interface JobRecord {
@@ -53,7 +56,8 @@ export function isJobRecord(value: unknown): value is JobRecord {
     typeof c.speed === "number" &&
     typeof c.timed === "boolean" &&
     isString(c.firstStart, 50) &&
-    isString(c.lastStart, 50)
+    isString(c.lastStart, 50) &&
+    (c.sync === undefined || isSyncSource(c.sync))
   );
 }
 

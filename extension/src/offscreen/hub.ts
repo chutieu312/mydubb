@@ -8,6 +8,11 @@
 // asks, when its page reports another lecture or goes away (reload, navigation, closed tab: the
 // page port disconnects), when the tab closes, when the account connection it belongs to ends, or
 // when a newer result replaces it. With no session left, the document closes itself.
+//
+// Sync with video (story 4): each session has a SyncController (sync.ts), off until the user turns
+// it on. While it is on, Play/Pause/Seek of the session go through it, so both remote controls
+// drive the audio and the video together; ending the session turns it off first, which gives the
+// video back what MyDubb changed.
 
 import { UDEMY_ORIGIN } from "../shared/lesson";
 import { isOwnExtensionPage } from "../shared/messages";
@@ -28,7 +33,10 @@ import {
   type PlayerToPage,
   type PlayerToPanel,
   type PlayerView,
+  type VideoCommand,
 } from "../shared/playback";
+import type { SyncSource } from "../shared/sync";
+import { SyncController, type DriftStats } from "./sync";
 
 export const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 const TRANSFER_TIMEOUT_MS = 30_000;
@@ -89,12 +97,14 @@ const MEDIA_EVENTS = [
   "durationchange",
   "loadedmetadata",
   "canplay",
+  "waiting",
   "emptied",
   "error",
 ] as const;
 
 class Session {
   problem: PlaybackProblem | null = null;
+  readonly sync: SyncController;
   private readonly events = new AbortController();
   private lastTick = 0;
 
@@ -107,9 +117,19 @@ class Session {
     readonly audio: AudioLike,
     private readonly url: string,
     public floating: boolean,
-    private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now">,
+    syncSource: SyncSource | null,
+    private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now" | "randomId" | "setTimeout" | "clearTimeout">,
     private readonly onChange: (session: Session) => void,
+    page: { post(message: VideoCommand): boolean; linked(): boolean },
   ) {
+    this.sync = new SyncController(syncSource, audio, {
+      ...page,
+      randomId: () => deps.randomId(),
+      now: () => deps.now(),
+      setTimeout: (fn, ms) => deps.setTimeout(fn, ms),
+      clearTimeout: (id) => deps.clearTimeout(id),
+      changed: () => onChange(this),
+    });
     const options = { signal: this.events.signal };
     for (const name of MEDIA_EVENTS) audio.addEventListener(name, () => this.changed(name), options);
     audio.addEventListener("timeupdate", () => this.tick(), options);
@@ -129,6 +149,7 @@ class Session {
   private changed(name: string): void {
     if (name === "error") this.problem = "media-error";
     else if (name === "playing" && this.problem !== "media-error") this.problem = null;
+    this.sync.onAudioEvent(name);
     this.onChange(this);
   }
 
@@ -153,10 +174,12 @@ class Session {
       problem: this.problem,
       choices: this.choices,
       floating: this.floating,
+      sync: this.sync.view(),
     };
   }
 
   dispose(): void {
+    this.sync.dispose();
     this.events.abort();
     this.audio.pause();
     this.audio.removeAttribute("src");
@@ -171,6 +194,7 @@ interface PendingOpen {
   lessonKey: string;
   owner: PlaybackOwner;
   choices: PlaybackChoices;
+  sync: SyncSource | null;
   timer: number;
 }
 
@@ -190,8 +214,8 @@ export class PlaybackHub {
   }
 
   /** Sessions by tab, for tests and the browser-test inspection hook. */
-  get tabs(): ReadonlyMap<number, { audio: AudioLike; view: PlayerView }> {
-    return new Map([...this.sessions].map(([tab, s]) => [tab, { audio: s.audio, view: s.view() }]));
+  get tabs(): ReadonlyMap<number, { audio: AudioLike; view: PlayerView; drift: DriftStats }> {
+    return new Map([...this.sessions].map(([tab, s]) => [tab, { audio: s.audio, view: s.view(), drift: { ...s.sync.stats } }]));
   }
 
   // ---- Side panel ----------------------------------------------------------------------------
@@ -245,6 +269,9 @@ export class PlaybackHub {
         this.publish(bound);
         return;
       }
+      case "sync":
+        this.setSync(bound, message.sessionId, message.on);
+        return;
       case "end": {
         const session = this.sessions.get(bound);
         if (session && (message.sessionId === null || session.id === message.sessionId)) this.endSession(bound);
@@ -271,7 +298,15 @@ export class PlaybackHub {
     for (const [id, open] of this.pending) if (open.tabId === tabId) this.dropPending(id, "busy");
     this.cancelIdle();
     const timer = this.deps.setTimeout(() => this.dropPending(transferId, "timeout"), TRANSFER_TIMEOUT_MS);
-    this.pending.set(transferId, { tabId, port, lessonKey: message.lessonKey, owner: message.owner, choices: message.choices, timer });
+    this.pending.set(transferId, {
+      tabId,
+      port,
+      lessonKey: message.lessonKey,
+      owner: message.owner,
+      choices: message.choices,
+      sync: message.sync,
+      timer,
+    });
     this.post(port, { type: "send-audio", tabId, transferId });
   }
 
@@ -314,8 +349,10 @@ export class PlaybackHub {
       this.deps.createAudio(),
       this.deps.createObjectURL(data.blob),
       floating,
+      open.sync,
       this.deps,
       (s) => this.sessions.get(s.tabId) === s && this.publish(s.tabId),
+      { post: (message) => this.postVideo(open.tabId, message), linked: () => this.pages.has(open.tabId) },
     );
     this.sessions.set(open.tabId, session);
     this.post(open.port, { type: "opened", tabId: open.tabId, transferId, sessionId: session.id });
@@ -370,6 +407,8 @@ export class PlaybackHub {
       return false;
     }
     const older = this.pages.get(tabId);
+    // A second page of the tab: the video the first one bound is not this page's.
+    if (older && session.sync.active) session.sync.disable("video-replaced");
     this.pages.set(tabId, port);
     if (older) {
       this.safePost(older, { type: "ended" });
@@ -393,11 +432,49 @@ export class PlaybackHub {
         this.runCommand(tabId, message.sessionId, message);
         return;
       case "close":
-        // Close: pause and hide; the session (and the panel's way back to it) stays.
+        // Close: pause and hide; the session (and the panel's way back to it) stays. With Sync on,
+        // the video pauses too: it never runs on alone.
         if (message.sessionId !== session.id || message.lessonKey !== session.lessonKey) return this.publish(tabId);
-        session.audio.pause();
+        if (session.sync.active) session.sync.pause();
+        else session.audio.pause();
         session.floating = false;
         this.publish(tabId);
+        return;
+      case "sync":
+        if (message.lessonKey !== session.lessonKey) return this.endSession(tabId);
+        this.setSync(tabId, message.sessionId, message.on);
+        return;
+      case "video-reply":
+        session.sync.onVideoReply(message);
+        return;
+      case "video-event":
+        session.sync.onVideoEvent(message.syncId, message.event, message.video);
+    }
+  }
+
+  /** Sync with video on or off, from either remote control of that session. */
+  private setSync(tabId: number, sessionId: string, on: boolean): void {
+    const session = this.sessions.get(tabId);
+    if (!session || session.id !== sessionId) return this.publish(tabId);
+    if (!on) return session.sync.disable();
+    for (const other of this.sessions.values()) if (other !== session) this.pauseSession(other, "other-tab");
+    void session.sync.enable();
+  }
+
+  private pauseSession(session: Session, notice: "other-tab" | null = null): void {
+    if (session.sync.active) session.sync.pause(notice);
+    else if (!session.audio.paused) session.audio.pause();
+  }
+
+  /** A video operation for the tab's page; false when no page is linked. */
+  private postVideo(tabId: number, message: VideoCommand): boolean {
+    const page = this.pages.get(tabId);
+    if (!page) return false;
+    try {
+      page.postMessage(message);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -453,6 +530,7 @@ export class PlaybackHub {
     // A command for an older session (or another tab) changes nothing.
     if (!session || session.id !== sessionId) return this.publish(tabId);
     const audio = session.audio;
+    if (session.sync.active) return this.runSynced(session, command);
     switch (command.command) {
       case "play":
         void this.play(session);
@@ -472,6 +550,31 @@ export class PlaybackHub {
     this.publish(tabId);
   }
 
+  /** Sync on: both timelines move; the seek values stay in MP3 seconds. */
+  private runSynced(session: Session, command: PlayerCommand): void {
+    switch (command.command) {
+      case "play":
+        if (!this.pages.has(session.tabId)) {
+          session.problem = "not-linked";
+          break;
+        }
+        for (const other of this.sessions.values()) if (other !== session) this.pauseSession(other, "other-tab");
+        session.problem = null;
+        void session.sync.play();
+        break;
+      case "pause":
+        session.sync.pause();
+        break;
+      case "seek-by":
+      case "seek-to":
+        if (session.audio.readyState < 1) break;
+        void session.sync.seek(
+          command.command === "seek-by" ? session.audio.currentTime + (command.value ?? 0) : (command.value ?? 0),
+        );
+    }
+    this.publish(session.tabId);
+  }
+
   private async play(session: Session): Promise<void> {
     if (!this.pages.has(session.tabId)) {
       // Without the page's content script nobody would notice the lecture changing.
@@ -479,10 +582,9 @@ export class PlaybackHub {
       this.publish(session.tabId);
       return;
     }
-    // One MyDubb audio at a time: any other tab's session is paused first (keeping its position).
-    for (const other of this.sessions.values()) {
-      if (other !== session && !other.audio.paused) other.audio.pause();
-    }
+    // One MyDubb audio at a time: any other tab's session is paused first (keeping its position),
+    // and with it that tab's synced video.
+    for (const other of this.sessions.values()) if (other !== session) this.pauseSession(other, "other-tab");
     session.keepNormalRate();
     session.problem = null;
     try {

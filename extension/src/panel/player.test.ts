@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { PanelPlayerView, PanelToPlayer } from "../shared/playback";
 import { PlayerLink, type PanelPort, type PlayerDeps } from "./player";
+import { NO_SYNC } from "../shared/testSync";
 
 const VIEW: PanelPlayerView = {
   sessionId: "s1",
@@ -14,10 +15,11 @@ const VIEW: PanelPlayerView = {
   problem: null,
   choices: { languageLabel: "Vietnamese", voiceLabel: "Andrew", speed: 1 },
   floating: false,
+  sync: NO_SYNC,
   owner: { userId: "u1", connectionId: "c1", jobId: "job-1", operationId: "op-1" },
   linked: false,
 };
-const REQUEST = { lessonKey: "demo-course/1", owner: VIEW.owner, choices: VIEW.choices };
+const REQUEST = { lessonKey: "demo-course/1", owner: VIEW.owner, choices: VIEW.choices, sync: null };
 
 class FakePort implements PanelPort {
   readonly sent: PanelToPlayer[] = [];

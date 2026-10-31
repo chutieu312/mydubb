@@ -57,5 +57,8 @@ window.fixture = {
   },
 };
 
-const count = Number(new URLSearchParams(location.search).get("videos") ?? "1");
-for (let i = 0; i < count; i += 1) player.append(makeVideo());
+const params = new URLSearchParams(location.search);
+const count = Number(params.get("videos") ?? "1");
+// ?seconds=N: a longer lecture video (the sync tests need room for the job's span).
+const seconds = Number(params.get("seconds") ?? "30");
+for (let i = 0; i < count; i += 1) player.append(makeVideo(seconds));
