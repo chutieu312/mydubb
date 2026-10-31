@@ -11,8 +11,13 @@ const D = 30.563;
 const R = 46 / D;
 const V = (a: number) => 10 + a * R;
 
-/** A media element whose events fire synchronously; play() can be made to fail. */
+/**
+ * A media element; play() can be made to fail. Its events fire at once, or (`deferred`) only when
+ * the test delivers them, like a browser's queued media events.
+ */
 class FakeAudio extends EventTarget {
+  deferred = false;
+  private readonly queue: string[] = [];
   paused = true;
   ended = false;
   currentTime = 0;
@@ -24,15 +29,23 @@ class FakeAudio extends EventTarget {
     if (this.playError) throw this.playError;
     if (!this.paused) return;
     this.paused = false;
-    this.dispatchEvent(new Event("play"));
+    this.emit("play");
   }
   pause() {
     if (this.paused) return;
     this.paused = true;
-    this.dispatchEvent(new Event("pause"));
+    this.emit("pause");
   }
   fire(name: string) {
     this.dispatchEvent(new Event(name));
+  }
+  private emit(name: string) {
+    if (this.deferred) this.queue.push(name);
+    else this.dispatchEvent(new Event(name));
+  }
+  /** Delivers the queued events, in order. */
+  deliver() {
+    for (const name of this.queue.splice(0)) this.dispatchEvent(new Event(name));
   }
 }
 
@@ -42,6 +55,7 @@ let audio: FakeAudio;
 let posted: VideoCommand[];
 let linked: boolean;
 let changes: number;
+let claims: number;
 let c: SyncController;
 
 const flush = async (times = 6) => {
@@ -85,6 +99,7 @@ function make(source: SyncSource | null = SOURCE) {
       timers = timers.filter((x) => x.id !== t);
     },
     changed: () => void (changes += 1),
+    claim: () => void (claims += 1),
   });
   for (const name of ["play", "pause", "waiting", "playing", "ended", "error"]) {
     audio.addEventListener(name, () => c.onAudioEvent(name));
@@ -138,6 +153,7 @@ beforeEach(() => {
   posted = [];
   linked = true;
   changes = 0;
+  claims = 0;
   make();
 });
 
@@ -559,5 +575,107 @@ describe("drift", () => {
     await play();
     for (let i = 0; i < 3; i += 1) await advance(4000);
     expect(c.view()).toMatchObject({ status: "paused", notice: "no-response" });
+  });
+});
+
+describe("audio events across the lifecycle (no stale expectation)", () => {
+  /** Sync on, Play, then a pause from outside MyDubb (Chrome's media controls). */
+  async function outsidePauseStopsBoth() {
+    audio.pause();
+    audio.deliver();
+    expect(audio.paused).toBe(true);
+    expect(c.view().status).toBe("paused");
+    expect(last().op).toBe("pause");
+    await reply(last(), true, sample(20, { paused: true }));
+    // No drift check left running.
+    expect(timers).toEqual([]);
+  }
+
+  it("Sync turned on while the audio played on its own: a later outside pause still stops both", async () => {
+    await audio.play();
+    await on(4);
+    await play();
+    expect(c.view().status).toBe("playing");
+    await outsidePauseStopsBoth();
+  });
+
+  it("the same with the media events arriving late, after the synced Play", async () => {
+    audio.deferred = true;
+    await audio.play();
+    audio.deliver();
+    await on(4);
+    await play();
+    // The pause of turning Sync on and the play of the synced Play arrive only now.
+    audio.deliver();
+    expect(audio.paused).toBe(false);
+    expect(c.view().status).toBe("playing");
+    expect(last().op).toBe("play");
+    await outsidePauseStopsBoth();
+  });
+
+  it("turning Sync off and on again, with late events in between, leaves nothing behind", async () => {
+    audio.deferred = true;
+    await on();
+    await play();
+    c.disable();
+    await on();
+    await play();
+    audio.deliver();
+    expect(c.view().status).toBe("playing");
+    await outsidePauseStopsBoth();
+  });
+
+  it("after a refused audio Play, an outside play is aligned and an outside pause stops both", async () => {
+    await on();
+    audio.playError = { name: "NotAllowedError" };
+    void c.play();
+    await flush();
+    await reply(last(), true, sample(10, { paused: true }));
+    await reply(last(), true, sample(10));
+    expect(c.view().notice).toBe("audio-play-blocked");
+    expect(last().op).toBe("pause");
+    await reply(last(), true, sample(10, { paused: true }));
+    audio.playError = null;
+    // Play from the media controls: the video is aligned first, then both play.
+    await audio.play();
+    await flush();
+    expect(last().op).toBe("seek");
+    await reply(last(), true, sample(10, { paused: true }));
+    await reply(last(), true, sample(10));
+    expect(c.view().status).toBe("playing");
+    await outsidePauseStopsBoth();
+  });
+
+  it("an outside play while Sync is being turned on is held until it is ready", async () => {
+    audio.deferred = true;
+    audio.currentTime = 2;
+    void c.enable();
+    await flush();
+    await audio.play();
+    audio.deliver();
+    expect(audio.paused).toBe(true);
+    await reply(last(), true, sample(V(2), { paused: true }));
+    expect(c.view().status).toBe("paused");
+  });
+
+  it("asks the hub for the single playback right before any audio start, never on a stale one", async () => {
+    await on();
+    await play();
+    expect(claims).toBe(1);
+    // Started from the video and after video buffering: claimed each time.
+    c.pause();
+    event("user-play", sample(20));
+    await flush();
+    expect(claims).toBe(2);
+    event("waiting", sample(21, { waiting: true }));
+    event("playing", sample(21.1));
+    await flush();
+    expect(claims).toBe(3);
+    // Paused by another tab: a late "playing" of this video does not take the playback back.
+    c.pause("other-tab");
+    event("playing", sample(22));
+    await flush();
+    expect(claims).toBe(3);
+    expect(audio.paused).toBe(true);
   });
 });

@@ -2,10 +2,12 @@
 // (offscreen/sync.ts) on the one <video> the content script identified, and reports what the video
 // does that MyDubb did not ask for. It never sees the token, the job or the audio.
 //
-// Telling MyDubb's own operations apart from the user's (or the site's): before each operation it
-// records what it expects (a pause, a play, a seek to a target, the rate it set), and an event that
-// matches is that operation's echo; anything else is reported as "user-*". event.isTrusted is not
-// used: media events are never trusted-only, whoever caused them.
+// Telling MyDubb's own operations apart from the user's (or the site's): it keeps what the video is
+// wanted to do (paused or playing: MyDubb's last operation, or the user's last reported action),
+// a pending seek target and the rate it set. A play/pause event that agrees with that, or that the
+// element has already overtaken (a late "pause" of a video playing again), is no news; anything
+// else is reported as "user-*" and becomes the wanted state. This does not depend on the order or
+// timing of media events. event.isTrusted is not used: media events are never trusted-only.
 //
 // Ownership: at attach it notes the element's muted state and rate. It mutes only an unmuted video
 // and gives back only what still holds MyDubb's value when it lets go (a user's later unmute or
@@ -39,8 +41,7 @@ interface Bound {
   rateBefore: number;
   rateOwned: boolean;
   mutedByUs: boolean;
-  expectPause: number;
-  expectPlay: number;
+  wanted: "paused" | "playing";
   seek: { cmdId: number; target: number } | null;
   events: AbortController;
 }
@@ -120,8 +121,7 @@ export class VideoSync {
       rateBefore: v.playbackRate,
       rateOwned: false,
       mutedByUs: false,
-      expectPause: 0,
-      expectPlay: 0,
+      wanted: v.paused ? "paused" : "playing",
       seek: null,
       events: new AbortController(),
     };
@@ -155,13 +155,15 @@ export class VideoSync {
     const options = { signal: b.events.signal };
     const on = (name: string, handler: () => void) => v.addEventListener(name, handler, options);
     on("play", () => {
-      if (b.expectPlay > 0) b.expectPlay -= 1;
-      else this.emit(b, "user-play");
+      if (v.paused || b.wanted === "playing") return;
+      b.wanted = "playing";
+      this.emit(b, "user-play");
     });
     on("pause", () => {
-      if (b.expectPause > 0) b.expectPause -= 1;
+      if (!v.paused || b.wanted === "paused") return;
+      b.wanted = "paused";
       // The pause before "ended" is reported as the end.
-      else if (!v.ended) this.emit(b, "user-pause");
+      if (!v.ended) this.emit(b, "user-pause");
     });
     on("seeked", () => {
       const pending = b.seek;
@@ -215,9 +217,8 @@ export class VideoSync {
   }
 
   private pauseOwn(b: Bound): void {
-    if (b.video.paused) return;
-    b.expectPause += 1;
-    b.video.pause();
+    b.wanted = "paused";
+    if (!b.video.paused) b.video.pause();
   }
 
   private seek(b: Bound, cmdId: number, time: number, syncId = b.syncId): void {
@@ -238,13 +239,13 @@ export class VideoSync {
 
   private async play(b: Bound, message: VideoCommand): Promise<void> {
     const v = b.video;
+    b.wanted = "playing";
     if (!v.paused) return this.reply(message, true);
-    b.expectPlay += 1;
     try {
       await v.play();
       if (this.bound === b) this.reply(message, true);
     } catch (error) {
-      b.expectPlay = 0;
+      if (v.paused) b.wanted = "paused";
       const name = typeof error === "object" && error !== null ? String((error as { name?: unknown }).name) : "";
       if (this.bound === b) this.reply(message, false, name === "NotAllowedError" ? "play-blocked" : "play-failed");
     }

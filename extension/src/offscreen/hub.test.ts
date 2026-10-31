@@ -574,3 +574,81 @@ describe("Sync with video", () => {
     expect(lastView(panel)?.sync.status).toBe("playing");
   });
 });
+
+describe("one MyDubb audio at a time, however playback starts", () => {
+  const SOURCE: SyncSource = { mode: "plain", start: 10, end: 56, baseline: 46, speed: 1.5 };
+  const settle = async () => {
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  };
+  const videoOps = (page: FakePort<PlayerToPage>) =>
+    page.sent.filter((m): m is Extract<PlayerToPage, { type: "video" }> => m.type === "video");
+  const answer = (page: FakePort<PlayerToPage>, currentTime = 10) => {
+    const op = videoOps(page).at(-1)!;
+    page.receive({ type: "video-reply", syncId: op.syncId, cmdId: op.cmdId, ok: true, error: null, video: { currentTime, paused: true, waiting: false, hidden: false } });
+  };
+  async function synced(hub: PlaybackHub, tabId: number) {
+    const s = opened(hub, tabId, { ...OWNER, jobId: `job-${tabId}` }, LESSON, SOURCE, 30.6);
+    const page = linkPage(hub, tabId);
+    s.panel.receive({ type: "sync", tabId, sessionId: s.sessionId, on: true });
+    await settle();
+    answer(page);
+    await settle();
+    return { ...s, page, syncId: videoOps(page)[0]!.syncId };
+  }
+  async function playFromPanel(s: Awaited<ReturnType<typeof synced>>, tabId: number) {
+    s.panel.receive({ type: "command", tabId, sessionId: s.sessionId, command: "play" });
+    await settle();
+    answer(s.page);
+    await settle();
+    answer(s.page);
+    await settle();
+    expect(s.audio.paused).toBe(false);
+  }
+  const userPlay = (s: Awaited<ReturnType<typeof synced>>, at = 20) =>
+    s.page.receive({ type: "video-event", syncId: s.syncId, event: "user-play", video: { currentTime: at, paused: false, waiting: false, hidden: false } });
+
+  it("Play directly on video B pauses tab A's audio and synced video; each keeps its position", async () => {
+    const hub = makeHub();
+    const a = await synced(hub, 4);
+    const b = await synced(hub, 6);
+    await playFromPanel(a, 4);
+    a.audio.currentTime = 7;
+    userPlay(b, 25);
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    expect(a.audio.paused).toBe(true);
+    expect(videoOps(a.page).at(-1)?.op).toBe("pause");
+    expect(lastView(a.panel)?.sync).toMatchObject({ status: "paused", notice: "other-tab" });
+    expect(a.audio.currentTime).toBe(7);
+    expect(b.audio.currentTime).toBeCloseTo(15 / (46 / 30.6), 6);
+    expect(audios.filter((x) => !x.paused)).toHaveLength(1);
+  });
+
+  it("tab A with Sync off is paused as well", async () => {
+    const hub = makeHub();
+    const b = await synced(hub, 6);
+    const a = opened(hub, 4);
+    linkPage(hub, 4);
+    a.panel.receive({ type: "command", tabId: 4, sessionId: a.sessionId, command: "play" });
+    await settle();
+    expect(a.audio.paused).toBe(false);
+    userPlay(b);
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    expect(a.audio.paused).toBe(true);
+  });
+
+  it("a play from outside MyDubb's controls (media keys) in A pauses B, synced or not", async () => {
+    const hub = makeHub();
+    const b = await synced(hub, 6);
+    userPlay(b);
+    await settle();
+    expect(b.audio.paused).toBe(false);
+    const a = opened(hub, 4);
+    linkPage(hub, 4);
+    await a.audio.play();
+    await settle();
+    expect(b.audio.paused).toBe(true);
+    expect(videoOps(b.page).at(-1)?.op).toBe("pause");
+  });
+});

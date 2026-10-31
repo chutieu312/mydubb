@@ -105,6 +105,7 @@ const MEDIA_EVENTS = [
 class Session {
   problem: PlaybackProblem | null = null;
   readonly sync: SyncController;
+  private readonly claim: () => void;
   private readonly events = new AbortController();
   private lastTick = 0;
 
@@ -120,8 +121,9 @@ class Session {
     syncSource: SyncSource | null,
     private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now" | "randomId" | "setTimeout" | "clearTimeout">,
     private readonly onChange: (session: Session) => void,
-    page: { post(message: VideoCommand): boolean; linked(): boolean },
+    page: { post(message: VideoCommand): boolean; linked(): boolean; claim(): void },
   ) {
+    this.claim = page.claim;
     this.sync = new SyncController(syncSource, audio, {
       ...page,
       randomId: () => deps.randomId(),
@@ -149,6 +151,9 @@ class Session {
   private changed(name: string): void {
     if (name === "error") this.problem = "media-error";
     else if (name === "playing" && this.problem !== "media-error") this.problem = null;
+    // However it started (MyDubb, media controls, a resume), this audio now plays: no other tab's.
+    // A late "play" of an element paused since then claims nothing.
+    if (name === "play" && !this.audio.paused) this.claim();
     this.sync.onAudioEvent(name);
     this.onChange(this);
   }
@@ -352,7 +357,11 @@ export class PlaybackHub {
       open.sync,
       this.deps,
       (s) => this.sessions.get(s.tabId) === s && this.publish(s.tabId),
-      { post: (message) => this.postVideo(open.tabId, message), linked: () => this.pages.has(open.tabId) },
+      {
+        post: (message) => this.postVideo(open.tabId, message),
+        linked: () => this.pages.has(open.tabId),
+        claim: () => this.claim(open.tabId),
+      },
     );
     this.sessions.set(open.tabId, session);
     this.post(open.port, { type: "opened", tabId: open.tabId, transferId, sessionId: session.id });
@@ -457,8 +466,16 @@ export class PlaybackHub {
     const session = this.sessions.get(tabId);
     if (!session || session.id !== sessionId) return this.publish(tabId);
     if (!on) return session.sync.disable();
-    for (const other of this.sessions.values()) if (other !== session) this.pauseSession(other, "other-tab");
     void session.sync.enable();
+  }
+
+  /**
+   * One MyDubb audio at a time: before (and whenever) the audio of `tabId` starts, every other tab's
+   * session is paused, keeping its position, and with Sync on its video too. Every start goes
+   * through here: MyDubb's Play, Play on a synced video, a resume after buffering, media controls.
+   */
+  private claim(tabId: number): void {
+    for (const other of this.sessions.values()) if (other.tabId !== tabId) this.pauseSession(other, "other-tab");
   }
 
   private pauseSession(session: Session, notice: "other-tab" | null = null): void {
@@ -558,7 +575,7 @@ export class PlaybackHub {
           session.problem = "not-linked";
           break;
         }
-        for (const other of this.sessions.values()) if (other !== session) this.pauseSession(other, "other-tab");
+        this.claim(session.tabId);
         session.problem = null;
         void session.sync.play();
         break;
@@ -582,9 +599,7 @@ export class PlaybackHub {
       this.publish(session.tabId);
       return;
     }
-    // One MyDubb audio at a time: any other tab's session is paused first (keeping its position),
-    // and with it that tab's synced video.
-    for (const other of this.sessions.values()) if (other !== session) this.pauseSession(other, "other-tab");
+    this.claim(session.tabId);
     session.keepNormalRate();
     session.problem = null;
     try {

@@ -344,3 +344,45 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
   await expect.poll(async () => sessionOf(worker, second.tabId)).toBeNull();
   expect(await video(second.page)).toMatchObject({ paused: true, muted: false, rate: 1 });
 });
+
+test("Play directly on the Udemy video of tab B pauses tab A (synced or not); one audio, own positions", async ({ context, worker, extensionId, mydubb }) => {
+  test.setTimeout(90_000);
+  const a = await plainResult(context, worker, extensionId, mydubb, 611);
+  const b = await plainResult(context, worker, extensionId, mydubb, 612);
+  await turnOnSync(a.panel);
+  await turnOnSync(b.panel);
+  const playingTabs = async () => (await playerSessions(worker)).filter((s) => !s.paused).map((s) => s.tabId);
+
+  // A plays (synced); then the user presses Play on B's own video, not on a MyDubb button.
+  await a.panel.getByRole("button", { name: "Play MyDubb audio" }).click();
+  await expect.poll(async () => (await video(a.page)).paused).toBe(false);
+  await a.page.waitForTimeout(1500);
+  await b.page.evaluate(() => (window.fixture.videos()[0]!.currentTime = 25));
+  await b.page.evaluate(() => window.fixture.videos()[0]!.play());
+  await expect.poll(playingTabs).toEqual([b.tabId]);
+  await expect.poll(async () => (await video(a.page)).paused).toBe(true);
+  await expect(a.panel.getByText("Paused: MyDubb audio started in another tab.")).toBeVisible();
+  const aAt = (await sessionOf(worker, a.tabId))!.currentTime;
+  const aVideoAt = (await video(a.page)).currentTime;
+  expect(aAt).toBeGreaterThan(1);
+  // B's audio started where B's video is: (V - V0) / R.
+  const rate = (await sessionOf(worker, b.tabId))!.sync.rate!;
+  expect(Math.abs(await measuredDrift(b.page, worker, b.tabId, 10, rate))).toBeLessThan(0.3);
+  await b.page.waitForTimeout(1000);
+  expect(await playingTabs()).toEqual([b.tabId]);
+  // A kept its own place.
+  expect((await sessionOf(worker, a.tabId))!.currentTime).toBeCloseTo(aAt, 1);
+  expect((await video(a.page)).currentTime).toBeCloseTo(aVideoAt, 1);
+
+  // A with Sync off, playing on its own; Play on B's video again: A pauses.
+  await a.panel.getByRole("button", { name: "Turn off sync" }).click();
+  await expect(a.panel.getByText("Sync with video: OFF")).toBeVisible();
+  await a.panel.getByRole("button", { name: "Play MyDubb audio" }).click();
+  await expect.poll(playingTabs).toEqual([a.tabId]);
+  await expect.poll(async () => (await video(b.page)).paused).toBe(true);
+  await b.page.evaluate(() => window.fixture.videos()[0]!.play());
+  await expect.poll(playingTabs).toEqual([b.tabId]);
+  await b.page.waitForTimeout(1000);
+  expect(await playingTabs()).toEqual([b.tabId]);
+  expect((await video(a.page)).paused).toBe(true);
+});

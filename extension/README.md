@@ -216,9 +216,12 @@ does not download video, does not intercept network requests and does not use Ud
     Numbers only on the page port: no token, job, account or audio address.
   - *No event loops*: every activation has a `syncId`, every operation a command id; replies for
     another activation or an abandoned command are dropped, and each new user action supersedes
-    older async steps. The content script records what it expects before each operation (a pause,
-    a play, a seek target, its rate) and treats matching events as echoes; anything else is the
-    user's or the site's (`event.isTrusted` is not relied on). A seek on the video moves only the
+    older async steps. Both sides keep what the media is *wanted* to do (paused/playing, MyDubb's
+    last operation or the user's last reported action), plus the pending seek target and the rate
+    set: an event that agrees with it, or that the element's state has already overtaken (a late
+    "pause" of something playing again), is no news; anything else is the user's or the site's.
+    This holds whatever the order and timing of media events, across turning Sync off and on
+    (`event.isTrusted` is not relied on). A seek on the video moves only the
     audio, so it never comes back as another video seek.
   - *Controls*: Play aligns the video to the audio, starts it, then starts the audio where the video
     is. A seek on the video inside V0..V1 moves the audio; outside it pauses both and turns Sync off
@@ -243,7 +246,10 @@ does not download video, does not intercept network requests and does not use Ud
     unmuted video, never touches `volume`, and on release gives back only what still holds MyDubb's
     value, only on the same element still showing the same media (not on a reused element showing
     another lecture). Turning Sync off, closing the floating player (×) and another tab starting
-    MyDubb audio pause the video too. A replaced video element ends Sync (the new one is never
+    MyDubb audio pause the video too. *One audio*: every start of a session's audio (MyDubb's
+    Play, Play on the synced video, a resume after buffering, Chrome's media controls) first pauses
+    every other tab's session and its synced video, each keeping its position; a late event of an
+    audio paused since then takes nothing back. A replaced video element ends Sync (the new one is never
     driven by an old command; turn it on again). A lecture change, reload, closed tab, Disconnect,
     account change or another result ends the session and with it Sync.
 - **Validation**: every message is shape-checked; the content script accepts ports only from this

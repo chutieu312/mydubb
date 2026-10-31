@@ -69,6 +69,8 @@ export interface SyncDeps {
   clearTimeout(id: number): void;
   /** The view changed. */
   changed(): void;
+  /** The audio is about to start: every other tab's session is paused first (one MyDubb audio). */
+  claim(): void;
 }
 
 type Reply = Pick<VideoReply, "ok" | "error" | "video"> | { ok: false; error: "timeout" | "no-page"; video: null };
@@ -111,8 +113,10 @@ export class SyncController {
   private buffering: "audio" | "video" | null = null;
   // Bumped by every user action and by turning off: an older async step stops where it is.
   private action = 0;
-  private expectAudioPause = 0;
-  private expectAudioPlay = 0;
+  // What MyDubb last asked of the audio. A media event that agrees with it, or that the element's
+  // state has already overtaken (a late "pause" after a newer play), is not an outside action; this
+  // holds whatever the order and timing of the events, across turning Sync off and on.
+  private audioWanted: "paused" | "playing" = "paused";
   private atEnd = false;
   private notice: SyncNotice | null = null;
   private confirmed = false;
@@ -329,22 +333,23 @@ export class SyncController {
   }
 
   private pauseAudio(): void {
-    if (this.audio.paused) return;
-    this.expectAudioPause += 1;
-    this.audio.pause();
+    this.audioWanted = "paused";
+    if (!this.audio.paused) this.audio.pause();
   }
 
   private async playAudio(): Promise<SyncNotice | null> {
+    this.audioWanted = "playing";
     if (!this.audio.paused) return null;
-    this.expectAudioPlay += 1;
+    // One MyDubb audio at a time: the hub pauses every other tab's session (and synced video) first.
+    this.deps.claim();
     try {
       await this.audio.play();
       return null;
     } catch (error) {
-      this.expectAudioPlay = 0;
       const name = typeof error === "object" && error !== null ? String((error as { name?: unknown }).name) : "";
       // AbortError: a newer action paused it first; that action decides.
       if (name === "AbortError") return null;
+      this.audioWanted = "paused";
       return name === "NotAllowedError" ? "audio-play-blocked" : "audio-play-failed";
     }
   }
@@ -353,26 +358,25 @@ export class SyncController {
 
   /** An event of the session's <audio> element. */
   onAudioEvent(name: string): void {
-    if (this.state !== "on") return;
+    if (this.state === "off") return;
     switch (name) {
       case "pause":
-        if (this.expectAudioPause > 0) {
-          this.expectAudioPause -= 1;
-          return;
-        }
+        // Asked for by MyDubb, or already overtaken by a newer play: nothing happened from outside.
+        if (this.audioWanted === "paused" || !this.audio.paused || this.state !== "on") return;
         // Paused from outside MyDubb's controls (e.g. Chrome's media controls): the video too.
-        if (this.intent === "playing") {
-          this.action += 1;
-          this.holdBoth(null);
-        }
+        this.action += 1;
+        this.holdBoth(null);
         return;
       case "play":
-        if (this.expectAudioPlay > 0) {
-          this.expectAudioPlay -= 1;
-          return;
-        }
-        if (this.intent === "paused") void this.play();
+        if (this.audioWanted === "playing" || this.audio.paused) return;
+        // Started from outside while Sync is being set up: both stay paused until it is ready.
+        if (this.state === "starting") return this.pauseAudio();
+        // From outside (media controls): the same aligned start as MyDubb's Play.
+        void this.play();
         return;
+    }
+    if (this.state !== "on") return;
+    switch (name) {
       case "waiting":
         if (this.intent === "playing" && this.phase === "playing") {
           this.phase = "buffering";

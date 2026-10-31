@@ -186,6 +186,26 @@ describe("own operations and the user's", () => {
     expect(events()).toEqual(["user-play", "user-pause", "user-seek"]);
   });
 
+  it("late play/pause events of its own operations are no news; the user's next action still is", async () => {
+    // Bound while playing (the attach paused it); MyDubb plays it again before the events arrive.
+    sync.handle(command({ op: "play" }));
+    await Promise.resolve();
+    await Promise.resolve();
+    sent = [];
+    // The late "pause" of the attach, and a repeated "play": the element is playing, as wanted.
+    v.dispatchEvent(new Event("pause"));
+    v.dispatchEvent(new Event("play"));
+    expect(events()).toEqual([]);
+    // The user pauses now: reported once, however many pause events follow.
+    v.pause();
+    v.dispatchEvent(new Event("pause"));
+    expect(events()).toEqual(["user-pause"]);
+    // MyDubb pauses it again (already paused): nothing; the user plays: reported.
+    sync.handle(command({ op: "pause" }));
+    await v.play();
+    expect(events()).toEqual(["user-pause", "user-play"]);
+  });
+
   it("a user seek while its own seek is pending: its seek is superseded and the user's reported", () => {
     sync.handle(command({ op: "seek", time: 30 }));
     v.currentTime = 50;
