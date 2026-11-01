@@ -47,6 +47,7 @@ export type CommandError =
   | "not-ready"
   | "not-seekable"
   | "out-of-range"
+  | "seek-failed"
   | "play-blocked"
   | "play-interrupted"
   | "play-failed"

@@ -35,8 +35,8 @@ const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
 const SAVE_DEBOUNCE_MS = 250;
 const SEEK_SECONDS = 5;
-// How long a "place" command may wait for the tab's answer.
-const PLACE_TIMEOUT_MS = 5000;
+// How long a "place" command may wait for the tab's answer (the page itself waits up to 10 s).
+const PLACE_TIMEOUT_MS = 12_000;
 
 const COMMAND_ERRORS: Record<CommandError, string> = {
   "no-video": "No lecture video is attached.",
@@ -44,6 +44,7 @@ const COMMAND_ERRORS: Record<CommandError, string> = {
   "not-ready": "The video is not ready yet. Wait for it to load.",
   "not-seekable": "The video cannot be seeked yet.",
   "out-of-range": "That time is outside the video.",
+  "seek-failed": "The video did not reach that time.",
   "play-blocked": "Chrome blocked playback. Click play once in the Udemy player, then use the panel again.",
   "play-interrupted": "Playback was interrupted (the video was paused or changed).",
   "play-failed": "The video could not start playing.",

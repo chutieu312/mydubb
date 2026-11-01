@@ -72,7 +72,7 @@ player on the lecture page alike.
    plays by itself), and the lecture video is **paused at the result's First Sentence Start**: the
    start time of that Generate (for a timed job, its first caption), never the form as it is now,
    with no need to turn Sync on. A line says "Video paused at 1:13, where this audio starts", or why
-   the video was not moved (not ready, outside the video, tab not connected): it is never shown as
+   the video was not moved (not ready, outside the video, the seek did not finish there within 10 s, tab not connected): it is never shown as
    done otherwise. Then what the loaded audio was made with
    (language · voice · speed, video source span, MP3 length), its **Translation** (always shown,
    before Play; it can be selected and copied, in its language and direction, Arabic right to
@@ -342,7 +342,8 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   account change neither loading nor placing, a reopened panel neither loading nor placing, an
   audio without a known translation, the empty state and the account change. The `place` command
   (`content/video.test.ts`, `shared/messages.test.ts`): pause at an exact time, refused (never
-  clamped) outside the video or before metadata. Story 3: the offscreen
+  clamped) outside the video or before metadata, failed when the seek lands elsewhere, the page plays
+  the video again or the seek does not finish in 10 s. Story 3: the offscreen
   sessions (`offscreen/hub.test.ts`: Blob only for an announced transfer and only audio, senders of
   panel/page/worker, play only when linked, seek limits, 1x, autoplay blocked and failed start,
   media error, one tab at a time, Close, lecture change, page gone, closed tab, ended connection,

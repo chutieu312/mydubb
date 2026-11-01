@@ -3,6 +3,11 @@
 
 import type { CommandError, VideoState } from "../shared/messages";
 
+// How long "place" waits for the seek to finish (a seek may have to buffer first).
+const PLACE_TIMEOUT_MS = 10_000;
+// How far from the asked position a finished seek may land (the player's own rounding).
+const PLACE_TOLERANCE_SECONDS = 0.5;
+
 export type VisibilityCheck = (video: HTMLVideoElement) => boolean;
 
 export function isRenderedVideo(video: HTMLVideoElement): boolean {
@@ -159,16 +164,29 @@ export class AttachedVideo {
     return null;
   }
 
-  /** Pauses the video at `at` seconds; refused, never clamped, outside the playable range. */
-  place(at: number): CommandError | null {
+  /**
+   * Pauses the video at `at` seconds; refused, never clamped, outside the playable range. Done
+   * only once the seek finished and the video is really there and paused.
+   */
+  place(at: number): Promise<CommandError | null> {
     const v = this.video;
-    if (v.readyState < HTMLMediaElement.HAVE_METADATA) return "not-ready";
+    if (v.readyState < HTMLMediaElement.HAVE_METADATA) return Promise.resolve("not-ready");
     const bounds = seekBounds(v);
-    if (!bounds) return "not-seekable";
-    if (at < bounds[0] || at > bounds[1]) return "out-of-range";
+    if (!bounds) return Promise.resolve("not-seekable");
+    if (at < bounds[0] || at > bounds[1]) return Promise.resolve("out-of-range");
     v.pause();
-    v.currentTime = at;
-    return null;
+    return new Promise((resolve) => {
+      const finish = (error: CommandError | null) => {
+        window.clearTimeout(timer);
+        v.removeEventListener("seeked", seeked);
+        resolve(error);
+      };
+      const seeked = () => finish(v.paused && Math.abs(v.currentTime - at) <= PLACE_TOLERANCE_SECONDS ? null : "seek-failed");
+      // Not by the position: currentTime already says `at` while the seek is still under way.
+      const timer = window.setTimeout(() => finish("seek-failed"), PLACE_TIMEOUT_MS);
+      v.addEventListener("seeked", seeked);
+      v.currentTime = at;
+    });
   }
 
   seekBy(delta: number): CommandError | null {
