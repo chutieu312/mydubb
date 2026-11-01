@@ -238,6 +238,8 @@ npm ci && npx playwright install chromium
 bash run-e2e.sh
 ```
 
+Usage report (read-only, see [USAGE_COSTS.md](USAGE_COSTS.md)): `cd backend && uv run python -m scripts.usage_report --synthetic`.
+
 Audio tests use the real `ffmpeg`/`ffprobe`; on a machine without them (e.g. plain Windows) run
 the suite in a Linux container with FFmpeg, as CI does.
 

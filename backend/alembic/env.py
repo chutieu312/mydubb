@@ -19,6 +19,7 @@ from app.db import Base
 from app.glossary_candidates.models import GlossaryCandidate  # noqa: F401
 from app.guest.models import GuestImportQuota, GuestJobQuota, GuestSession  # noqa: F401
 from app.jobs.models import Job  # noqa: F401
+from app.usage.models import JobUsage, UsageAttempt  # noqa: F401
 
 target_metadata = Base.metadata
 

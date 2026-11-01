@@ -257,6 +257,7 @@ def build_services(
         result_store=result_store,
         result_ttl_seconds=settings.result_ttl_seconds,
         glossary=default_glossary(),
+        usage_enabled=settings.usage_recording_enabled,
     )
 
     import_engine = create_import_engine(settings.sqlalchemy_url)

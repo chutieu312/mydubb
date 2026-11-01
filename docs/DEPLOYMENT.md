@@ -677,6 +677,15 @@ every deploy built before it is no longer a supported Render rollback target; ch
 `docker/rollback-target-check.sh <commit> 0011`. Turning the extension off is a configuration
 change (remove `EXTENSION_IDS`), not a code rollback ([EXTENSION_AUTH.md](EXTENSION_AUTH.md)).
 
+The usage-records pull request adds migration `0020` (tables `job_usage` and `job_usage_attempts`;
+expand-only, no foreign key, the previous version never reads or writes them). Its revision id sits
+outside 0012-0019 on purpose; a database with two heads cannot `upgrade head`, so the migration
+merged second must re-point its `down_revision` at the head merged first (`alembic heads` must
+list one revision; a test checks it). Once it is deployed, every deploy built before it is no
+longer a supported Render rollback target; check with `docker/rollback-target-check.sh <commit>
+0020`. Recording can be turned off with `USAGE_RECORDING_ENABLED=false` (no code rollback needed);
+the report is a local command, never an API ([USAGE_COSTS.md](USAGE_COSTS.md)).
+
 **Before rolling back** (read-only checks):
 
 1. Read the production revision: Neon SQL Editor → `SELECT version_num FROM alembic_version;`

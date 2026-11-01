@@ -28,8 +28,10 @@ import shutil
 import tempfile
 import threading
 import uuid
+from contextvars import Token
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -51,6 +53,8 @@ from app.storage.result_store import ResultContent, ResultStore
 from app.transcript.timed import TimedTranscript
 from app.translation.base import TranslationProvider, TranslationResult
 from app.translation.glossary import Glossary, default_glossary
+from app.usage import recording as usage
+from app.usage.recording import UsageCollector, UsageContext
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,8 @@ class JobInput:
     # Output language stored with the job. Every stage uses this one value: a failure is a failed
     # job, never a retry or fallback in another language.
     target_language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
+    # Fixed labels for the usage record (who asked: client and kind of access); no identity.
+    usage_context: UsageContext | None = None
 
 
 def timing_summary(
@@ -106,8 +112,10 @@ class JobPipeline:
         result_store: ResultStore,
         result_ttl_seconds: int,
         glossary: Glossary | None = None,
+        usage_enabled: bool = True,
     ) -> None:
         self._session_factory = session_factory
+        self._usage_enabled = usage_enabled
         self._glossary = glossary if glossary is not None else default_glossary()
         self._translator = translator
         self._speech = speech
@@ -161,19 +169,26 @@ class JobPipeline:
         with self._lock:
             self._running.add(job.job_id)
         work_dir: Path | None = None
+        collector, token = self._begin_usage(job)
+        outcome, error_code = "failed", None
         try:
             work_dir = Path(tempfile.mkdtemp(prefix=f"mydubb-job-{job.job_id}-"))
             self._run_stages(job, work_dir)
+            outcome = "completed"
         except _Superseded:
+            outcome = "superseded"
             logger.info("Job %s no longer active; stopping", job.job_id)
         except ProcessingError as exc:
+            error_code = exc.code
             logger.warning("Job %s failed: %s", job.job_id, exc.code)
             self._fail(job.job_id, exc.code, exc.user_message)
         except Exception:
+            error_code = "internal_error"
             # Details go to server logs only (never transcript content); users get a safe message.
             logger.exception("Job %s failed unexpectedly", job.job_id)
             self._fail(job.job_id, "internal_error", "Processing failed due to an internal error.")
         finally:
+            self._end_usage(collector, token, outcome, error_code)
             try:
                 if work_dir is not None:
                     shutil.rmtree(work_dir, ignore_errors=True)
@@ -204,7 +219,8 @@ class JobPipeline:
             )
             self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
             target = DurationTarget(job.baseline_seconds, job.speed)
-            processed = self._audio.fit_to_duration(speech, target, work_dir)
+            with usage.audio_stage():
+                processed = self._audio.fit_to_duration(speech, target, work_dir)
             timing = None
         else:
             # Timed mode: one clip per block, each placed in its frame of the timeline. Any
@@ -214,10 +230,12 @@ class JobPipeline:
             )
             self._advance(job.job_id, JobStatus.SYNTHESIZING, JobStatus.PROCESSING)
             plan = job.timed.plan(job.baseline_seconds, job.speed)
-            processed = self._audio.fit_timeline(blocks, plan, work_dir)
+            with usage.audio_stage():
+                processed = self._audio.fit_timeline(blocks, plan, work_dir)
             speech = blocks
             timing = timing_summary(job.timed, job.baseline_seconds, blocks.requests, processed)
 
+        usage.note_audio_result(processed)
         completed_at = datetime.now(UTC)
         expires_at = completed_at + self._result_ttl
         self._result_store.save(
@@ -245,6 +263,55 @@ class JobPipeline:
             raise _Superseded
         if detection is not None and detection.candidates:
             self._record_candidates(job.job_id, detection)
+
+    def _begin_usage(self, job: JobInput) -> tuple[UsageCollector | None, Token | None]:
+        """Start the job's usage record. Never raises: the job runs the same without it."""
+        if not self._usage_enabled:
+            return None, None
+        try:
+            context = job.usage_context or UsageContext()
+            target = DurationTarget(job.baseline_seconds, job.speed).output_seconds
+            collector = UsageCollector(
+                self._session_factory,
+                job.job_id,
+                {
+                    "client": context.client,
+                    "access": context.access,
+                    "target_language": job.target_language.value,
+                    "voice": job.voice.value,
+                    "speed_percent": job.speed.value,
+                    "timing_mode": "plain" if job.timed is None else "timed",
+                    **self.provider_names(),
+                    "baseline_seconds": job.baseline_seconds,
+                    "target_audio_seconds": (
+                        Decimal(target.numerator) / Decimal(target.denominator)
+                    ).quantize(Decimal("0.001")),
+                    "source_chars": len(job.transcript),
+                    "blocks": None if job.timed is None else len(job.timed.blocks),
+                },
+            )
+            collector.begin()
+            return collector, usage.activate(collector)
+        except Exception as exc:
+            logger.warning(
+                "Job %s: usage recording was not started (%s)", job.job_id, type(exc).__name__
+            )
+            return None, None
+
+    def _end_usage(
+        self,
+        collector: UsageCollector | None,
+        token: Token | None,
+        outcome: str,
+        error_code: str | None,
+    ) -> None:
+        try:
+            if token is not None:
+                usage.deactivate(token)
+            if collector is not None:
+                collector.finish(outcome, error_code)
+        except Exception as exc:
+            logger.warning("Usage recording did not finish (%s)", type(exc).__name__)
 
     def _detect(self, job: JobInput, translation: TranslationResult) -> Detection | None:
         """English kept by a real translation; None for mock text (it is the source itself)."""
