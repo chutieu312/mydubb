@@ -1025,7 +1025,7 @@ export class Dubbing {
             languageLabel: choices.languageLabel,
             voiceLabel: choices.voiceLabel,
             speed: choices.speed,
-            sourceRange: sourceRangeOf(choices.firstStart, choices.lastStart),
+            sourceRange: sourceRangeOf(choices.sync),
           },
           sync,
         },
@@ -1185,7 +1185,7 @@ export class Dubbing {
       addPair(ui.playerInfo, "Language", view.choices.languageLabel);
       addPair(ui.playerInfo, "Voice", view.choices.voiceLabel);
       addPair(ui.playerInfo, "Speed", speedLabel(view.choices.speed));
-      addPair(ui.playerInfo, "Source", view.choices.sourceRange ?? "Not recorded for this audio");
+      addPair(ui.playerInfo, "Video source", view.choices.sourceRange ?? "Not recorded for this audio");
       addPair(ui.playerInfo, "MP3 length", view.duration === null ? "Loading…" : `${view.duration.toFixed(3)} s`);
       ui.playerPlay.textContent = playing ? "Pause" : "Play";
       ui.playerPlay.setAttribute("aria-label", playing ? "Pause MyDubb audio" : "Play MyDubb audio");
@@ -1224,7 +1224,7 @@ export class Dubbing {
       addPair(ui.resultSwitchInfo, "Language", c.languageLabel);
       addPair(ui.resultSwitchInfo, "Voice", c.voiceLabel);
       addPair(ui.resultSwitchInfo, "Speed", speedLabel(c.speed));
-      addPair(ui.resultSwitchInfo, "Source", sourceRangeOf(c.firstStart, c.lastStart) ?? "Not recorded for this audio");
+      addPair(ui.resultSwitchInfo, "Video source", sourceRangeOf(c.sync) ?? "Not recorded for this audio");
       addPair(ui.resultSwitchInfo, "MP3 length", result.mp3Seconds === null ? "Not reported" : `${result.mp3Seconds.toFixed(3)} s`);
     }
     ui.playerLoad.hidden = !result || busy || (!!view && (other || view.status !== "error"));

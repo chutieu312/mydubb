@@ -302,7 +302,7 @@ describe("job and result", () => {
     });
     // The form changing later does not change what the player says the file was made with.
     choose("speed", "2");
-    expect($("player-info").textContent).toBe("LanguageArabicVoiceAndrew MultilingualSpeed1xSourceNot recorded for this audioMP3 length180.000 s");
+    expect($("player-info").textContent).toBe("LanguageArabicVoiceAndrew MultilingualSpeed1xVideo sourceNot recorded for this audioMP3 length180.000 s");
     expect(player.commands).toEqual([]);
     expect($("audio-status").textContent).toBe("Ready. Press play when you want to listen.");
     // The page is asked to link itself to the session (for the lecture watch and floating player).
@@ -391,13 +391,13 @@ describe("job and result", () => {
       const callout = $("result-switch");
       expect(callout.hidden).toBe(false);
       expect(callout.textContent).toContain("New audio is ready. The player is still using an earlier result.");
-      expect(text("result-switch-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1.5xSource00:00:00 → 00:00:23MP3 length15.333 s");
+      expect(text("result-switch-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1.5xVideo source00:00:00 → 00:00:23MP3 length15.333 s");
       // The button is inside the callout, which is inside the new result.
       expect(callout.contains($("player-switch"))).toBe(true);
       expect($("result").contains(callout)).toBe(true);
       expect($("player-switch").textContent).toBe("Use new audio");
       // The loaded audio keeps its own snapshot: other speed, span and length.
-      expect(text("player-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1xSource00:00:00 → 00:00:10MP3 length10.000 s");
+      expect(text("player-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1xVideo source00:00:00 → 00:00:10MP3 length10.000 s");
       expect($("player-badge").hidden).toBe(false);
       expect($("result-using").hidden).toBe(true);
     });
@@ -468,6 +468,41 @@ describe("job and result", () => {
       expect($("result-using").hidden).toBe(false);
     });
 
+    it("a timed job with overridden start times shows the captions' span (milliseconds kept), not the override", async () => {
+      transcript = "0:05.480\nFirst caption.\n0:34.250\nSecond caption.";
+      const api = twoJobs();
+      await started(undefined, api);
+      typeTime("first-start", "000010");
+      typeTime("last-start", "000056");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(player.opened[0]?.request.choices.sourceRange).toBe("00:00:05.480 → 00:00:34.250");
+      expect(text("player-info")).toContain("Video source00:00:05.480 → 00:00:34.250");
+      expect(text("player-info")).not.toContain("00:00:56");
+      // The form changing later changes nothing about the loaded audio or the next result's label.
+      typeTime("first-start", "000100");
+      typeTime("last-start", "000200");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(text("result-switch-info")).toContain("Video source00:00:05.480 → 00:00:34.250");
+      expect(text("result-switch-info")).not.toContain("00:01:00");
+      expect(text("player-info")).toContain("Video source00:00:05.480 → 00:00:34.250");
+    });
+
+    it("a job without a Sync snapshot does not borrow its start-time fields for the source", async () => {
+      transcript = "0:05.480\nFirst caption.\n0:34.250\nSecond caption.";
+      await started();
+      typeTime("first-start", "000010");
+      typeTime("last-start", "000056");
+      $<HTMLButtonElement>("ignore-timestamps").click();
+      typeTime("first-start", "000010");
+      typeTime("last-start", "000056");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      // Plain here (timestamps ignored): the two fields are the source.
+      expect(player.opened[0]?.request.choices.sourceRange).toBe("00:00:10 → 00:00:56");
+    });
+
     it("an audio without a recorded span says so instead of borrowing the form's", async () => {
       await started();
       typeTime("first-start", "000500");
@@ -487,7 +522,7 @@ describe("job and result", () => {
         owner: { userId: "u1", connectionId: "conn-a", jobId: "job-9", operationId: "op-9" },
         linked: true,
       });
-      expect(text("player-info")).toBe("LanguageHindiVoiceOld voiceSpeed0.75xSourceNot recorded for this audioMP3 length12.000 s");
+      expect(text("player-info")).toBe("LanguageHindiVoiceOld voiceSpeed0.75xVideo sourceNot recorded for this audioMP3 length12.000 s");
     });
   });
 

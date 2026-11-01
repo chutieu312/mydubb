@@ -66,11 +66,11 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
    position and Play/Pause. Playing in another Udemy tab pauses this one (each keeps its position).
    A new **Generate audio** does not replace or stop what you are listening to: when its result is
    ready, the result shows a callout next to it ("New audio is ready. The player is still using an
-   earlier result.") with the new audio's language, voice, speed, source span and real MP3 length
+   earlier result.") with the new audio's language, voice, speed, **video source** span and real MP3 length
    and a **Use new audio** button; it stops the old audio and loads the new one (paused, Sync OFF,
    no new job). The player's **Loaded audio** block shows the same facts for the audio it actually
    holds (taken from that audio's own session, never from the form), with an **Earlier result**
-   badge while it differs from the new result; audio without a recorded span says so. Sync
+   badge while it differs from the new result. The video source is the job's Sync snapshot (plain: its two start times; timed: the first/last caption, milliseconds kept), never the form and never the start-time fields of a timed job (those only set the requested baseline); audio without a snapshot says "Not recorded". Sync
    applies to the loaded audio. If the switch fails, nothing claims the new audio is in use and
    **Load audio** retries without a new job.
 8. **Sync with video** (panel and floating player, OFF by default): the first time it shows the

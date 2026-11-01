@@ -467,7 +467,19 @@ export function choicesLabel(choices: PlaybackChoices): string {
   return choices.sourceRange ? `${label} · ${choices.sourceRange}` : label;
 }
 
-/** The source span as the Generate click fixed it (copied from the job record, never the form later). */
-export function sourceRangeOf(firstStart: string, lastStart: string): string | undefined {
-  return firstStart && lastStart ? `${firstStart} → ${lastStart}` : undefined;
+/**
+ * The video source span of a job, "00:00:05.480 → 00:00:34": taken from the job's Sync snapshot
+ * (plain: its two start-time fields; timed: the transcript's first and last caption, milliseconds
+ * kept), never from the form and never from the start-time fields of a timed job, which only say
+ * what baseline was requested. Undefined when the job has no snapshot.
+ */
+export function sourceRangeOf(source: { start: number; end: number } | undefined): string | undefined {
+  return source ? `${clockWithMs(source.start)} → ${clockWithMs(source.end)}` : undefined;
+}
+
+function clockWithMs(seconds: number): string {
+  const ms = Math.round(seconds * 1000);
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  const clock = `${pad(Math.floor(ms / 3_600_000))}:${pad(Math.floor(ms / 60_000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}`;
+  return ms % 1000 === 0 ? clock : `${clock}.${pad(ms % 1000, 3)}`;
 }
