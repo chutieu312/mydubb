@@ -8,6 +8,7 @@ import type { BrowserContext, Page, Worker } from "@playwright/test";
 
 import {
   connectAccount,
+  disconnect,
   expect,
   openLecture,
   openPanel,
@@ -37,9 +38,9 @@ async function plainResult(context: BrowserContext, worker: Worker, extensionId:
   await sendTranscriptSelection(page, worker, tabId);
   await expect(panel.getByText(/^(Connected as|Not connected)/)).toBeVisible();
   if (await panel.getByRole("button", { name: "Connect MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
-  await panel.getByLabel("First Sentence Start Time").fill("000010");
-  await panel.getByLabel("Last Sentence Start Time").fill("000056");
-  await panel.getByLabel("Audio speed").selectOption("1.5");
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000056");
+  await panel.getByRole("radio", { name: "1.5x", exact: true }).check();
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.getByText(READY)).toBeVisible();
   await expect.poll(async () => (await sessionOf(worker, tabId))?.duration ?? 0).toBeGreaterThan(25);
@@ -49,7 +50,7 @@ async function plainResult(context: BrowserContext, worker: Worker, extensionId:
 async function turnOnSync(panel: Page) {
   await panel.getByRole("button", { name: "Sync with video" }).click();
   await panel.getByRole("button", { name: "Turn on sync" }).click();
-  await expect(panel.getByText("Sync with video: ON · Paused")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
 }
 
 /** Drift in MP3 seconds measured by the test itself: video and audio read back to back. */
@@ -62,9 +63,9 @@ async function measuredDrift(page: Page, worker: Worker, tabId: number, start: n
 test("plain job: turn Sync on, play both from the panel, measure drift, ±5 s, pause, turn off restores the video", async ({ context, worker, extensionId, mydubb }) => {
   test.setTimeout(90_000);
   const { page, tabId, panel } = await plainResult(context, worker, extensionId, mydubb, 601);
-  // Off by default; nothing moved.
-  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
-  expect(await video(page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 0 });
+  // Off by default; the loaded audio only paused the video at its start (0:10), sound and speed untouched.
+  await expect(panel.locator("#sync-status")).toHaveText("OFF");
+  expect(await video(page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 10 });
 
   // The first time: what will happen, then a confirmation.
   await panel.getByRole("button", { name: "Sync with video" }).click();
@@ -72,7 +73,7 @@ test("plain job: turn Sync on, play both from the panel, measure drift, ±5 s, p
   await expect(preview).toContainText(/Video 0:10 → 0:56 \(46 s\), MP3 30\.56\d? s, video speed 1\.50\dx\./);
   await expect(preview).toContainText("The video is muted: the MyDubb audio replaces the spoken part. The timing is an estimate");
   await panel.getByRole("button", { name: "Cancel" }).click();
-  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("OFF");
   expect((await video(page)).muted).toBe(false);
   await turnOnSync(panel);
 
@@ -91,7 +92,7 @@ test("plain job: turn Sync on, play both from the panel, measure drift, ±5 s, p
 
   // Play from the panel: both run; the audio stays at 1x.
   await panel.getByRole("button", { name: "Play MyDubb audio" }).click();
-  await expect(panel.getByText("Sync with video: ON · Playing")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Playing");
   await expect.poll(async () => (await video(page)).paused).toBe(false);
   // Drift over 24 s of real playback (most of the MP3), measured by the test and by the coordinator.
   const drifts: number[] = [];
@@ -110,7 +111,7 @@ test("plain job: turn Sync on, play both from the panel, measure drift, ±5 s, p
 
   // Pause from the panel pauses both.
   await panel.getByRole("button", { name: "Pause MyDubb audio" }).click();
-  await expect(panel.getByText("Sync with video: ON · Paused")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
   await expect.poll(async () => (await video(page)).paused).toBe(true);
   const a0 = (await sessionOf(worker, tabId))!.currentTime;
   // +5 s of MP3 moves the video by 5 x R.
@@ -123,13 +124,13 @@ test("plain job: turn Sync on, play both from the panel, measure drift, ±5 s, p
   expect((await sessionOf(worker, tabId))!.paused).toBe(true);
 
   // Off: both paused, mute and rate given back; the audio keeps its position.
-  await panel.getByRole("button", { name: "Turn off sync" }).click();
-  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
+  await panel.getByRole("button", { name: "Sync with video", pressed: true }).click();
+  await expect(panel.locator("#sync-status")).toHaveText("OFF");
   v = await video(page);
   expect(v).toMatchObject({ paused: true, muted: false, rate: 1, volume: 1 });
   // Turning it on again needs no explanation any more.
   await panel.getByRole("button", { name: "Sync with video" }).click();
-  await expect(panel.getByText("Sync with video: ON · Paused")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
   expect(mydubb.posts("/api/jobs")).toHaveLength(1);
 });
 
@@ -148,7 +149,7 @@ test("controls on the Udemy video: play, pause and seek inside the span move the
   // Play on the video: the audio joins; pause on the video: the audio stops.
   await page.evaluate(() => window.fixture.videos()[0]!.play());
   await expect.poll(async () => (await sessionOf(worker, tabId))!.paused).toBe(false);
-  await expect(panel.getByText("Sync with video: ON · Playing")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Playing");
   await page.waitForTimeout(1500);
   expect(Math.abs(await measuredDrift(page, worker, tabId, 10, rate))).toBeLessThan(0.3);
   // Seek on the video while playing: the audio jumps with it, and keeps playing.
@@ -162,11 +163,11 @@ test("controls on the Udemy video: play, pause and seek inside the span move the
   expect(s.drift.corrections).toBe(0);
   await page.evaluate(() => window.fixture.videos()[0]!.pause());
   await expect.poll(async () => (await sessionOf(worker, tabId))!.paused).toBe(true);
-  await expect(panel.getByText("Sync with video: ON · Paused")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
 
   // Outside V0..V1: both paused, Sync off with a notice, the video stays where the user put it.
   await page.evaluate(() => (window.fixture.videos()[0]!.currentTime = 5));
-  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("OFF");
   await expect(panel.locator("#sync-notice")).toContainText("the video was moved outside 0:10–0:56");
   const v = await video(page);
   expect(v).toMatchObject({ paused: true, muted: false, rate: 1 });
@@ -179,21 +180,21 @@ test("timed job with changed start times: V0/V1 from the captions, R differs fro
   const panel = await openPanel(context, extensionId, tabId);
   await connectAccount(panel, mydubb, extensionId);
   // Captions 0:10.250 -> 0:40.250 (30 s of source); the fields fill as 00:00:10 -> 00:00:40.
-  await panel.getByRole("textbox", { name: "Transcript selection" }).fill("0:10.250\nHello there.\n0:25.000\nThe middle part.\n0:40.250\nThe last line.");
-  await expect(panel.getByLabel("Last Sentence Start Time")).toHaveValue("00:00:40");
+  await panel.getByRole("textbox", { name: "English transcript" }).fill("0:10.250\nHello there.\n0:25.000\nThe middle part.\n0:40.250\nThe last line.");
+  await expect(panel.getByLabel("Last sentence starts")).toHaveValue("00:00:40");
   // The user changes the span to 46 s and picks 1.5x: the MP3 is about 46 / 1.5 s, and the video
   // covers its 30 s of captions in it, so R = 30 / 30.563 ≈ 0.98 (not 1.5).
-  await panel.getByLabel("Last Sentence Start Time").fill("000056");
-  await panel.getByLabel("Audio speed").selectOption("1.5");
+  await panel.getByLabel("Last sentence starts").fill("000056");
+  await panel.getByRole("radio", { name: "1.5x", exact: true }).check();
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.getByText(READY)).toBeVisible();
   expect(mydubb.posts("/api/jobs")[0]!.body).toMatchObject({ timing_mode: "timed", speed: 1.5, last_sentence_start: "00:00:56" });
   // Edited after Generate: the job's own span is used, never the form.
-  await panel.getByLabel("First Sentence Start Time").fill("000001");
+  await panel.getByLabel("First sentence starts").fill("000001");
   await panel.getByRole("button", { name: "Sync with video" }).click();
   await expect(panel.locator("#sync-preview")).toContainText(/Video 0:10\.250 → 0:40\.250 \(30 s\), MP3 30\.56\d? s, video speed 0\.98\dx\./);
   await panel.getByRole("button", { name: "Turn on sync" }).click();
-  await expect(panel.getByText("Sync with video: ON · Paused")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
   const session = (await sessionOf(worker, tabId))!;
   expect(session.sync).toMatchObject({ start: 10.25, end: 40.25 });
   expect(session.sync.rate).toBeCloseTo(30 / session.duration, 6);
@@ -208,8 +209,8 @@ test("a result whose MP3 does not fit its start times cannot be synced; it still
   await sendTranscriptSelection(page, worker, tabId);
   await connectAccount(panel, mydubb, extensionId);
   // 360 s at 1x, but the fake's MP3 is 30 s (like mock audio, not fitted).
-  await panel.getByLabel("First Sentence Start Time").fill("000010");
-  await panel.getByLabel("Last Sentence Start Time").fill("000610");
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000610");
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.getByText(READY)).toBeVisible();
   await expect(panel.locator("#sync-status")).toHaveText(/^Sync unavailable: the MP3 length does not match/);
@@ -291,8 +292,8 @@ test("two tabs: playing B pauses A's audio and A's synced video; only own tab's 
   await expect.poll(async () => (await sessionOf(worker, a.tabId))!.paused).toBe(true);
   await expect.poll(async () => (await video(a.page)).paused).toBe(true);
   await expect(a.panel.getByText("Paused: MyDubb audio started in another tab.")).toBeVisible();
-  // B is not synced: its video was never touched.
-  expect(await video(b.page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 0 });
+  // B is not synced: its video was only paused at its start when its audio loaded, never driven.
+  expect(await video(b.page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 10 });
 });
 
 test("video replaced, lecture change, reload and disconnect end Sync and give the old video back", async ({ context, worker, extensionId, mydubb }) => {
@@ -305,7 +306,7 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
   const oldVideo = await page.evaluateHandle(() => window.fixture.videos()[0]!);
   await page.evaluate(() => window.fixture.replaceVideo(60));
   await expect(panel.locator("#sync-notice")).toContainText("the Udemy video player was replaced");
-  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("OFF");
   expect((await sessionOf(worker, tabId))!.paused).toBe(true);
   expect(await oldVideo.evaluate((v) => ({ paused: v.paused, muted: v.muted, rate: v.playbackRate }))).toEqual({ paused: true, muted: false, rate: 1 });
   await expect.poll(async () => (await video(page)).duration).toBeGreaterThan(50);
@@ -313,7 +314,7 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
 
   // On again with the new video, then a stopped service worker changes nothing.
   await panel.getByRole("button", { name: "Sync with video" }).click();
-  await expect(panel.getByText("Sync with video: ON · Paused")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
   const cdp = await context.newCDPSession(panel);
   await cdp.send("ServiceWorker.enable");
   await cdp.send("ServiceWorker.stopAllWorkers");
@@ -323,7 +324,7 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
   await expect.poll(async () => (await video(page)).paused).toBe(true);
 
   // Disconnect: the session ends and the video gets its sound and rate back.
-  await panel.getByRole("button", { name: "Disconnect" }).click();
+  await disconnect(panel);
   await expect.poll(async () => (await video(page)).muted).toBe(false);
   expect(await video(page)).toMatchObject({ paused: true, rate: 1 });
   expect(await sessionOf(worker, tabId)).toBeNull();
@@ -336,7 +337,7 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
   await expect.poll(() => second.page.evaluate(() => document.querySelector("video")?.readyState ?? 0).catch(() => 0)).toBeGreaterThan(0);
   expect(await video(second.page)).toMatchObject({ paused: true, muted: false, rate: 1 });
   await second.panel.getByRole("button", { name: "Load audio" }).click();
-  await expect(second.panel.getByText("Sync with video: OFF")).toBeVisible();
+  await expect(second.panel.locator("#sync-status")).toHaveText("OFF");
 
   // SPA lecture change with Sync on (a new session: explained again first): the session ends; the
   // next lecture's video is untouched.
@@ -376,8 +377,8 @@ test("Play directly on the Udemy video of tab B pauses tab A (synced or not); on
   expect((await video(a.page)).currentTime).toBeCloseTo(aVideoAt, 1);
 
   // A with Sync off, playing on its own; Play on B's video again: A pauses.
-  await a.panel.getByRole("button", { name: "Turn off sync" }).click();
-  await expect(a.panel.getByText("Sync with video: OFF")).toBeVisible();
+  await a.panel.getByRole("button", { name: "Sync with video", pressed: true }).click();
+  await expect(a.panel.locator("#sync-status")).toHaveText("OFF");
   await a.panel.getByRole("button", { name: "Play MyDubb audio" }).click();
   await expect.poll(playingTabs).toEqual([a.tabId]);
   await expect.poll(async () => (await video(b.page)).paused).toBe(true);
@@ -401,7 +402,7 @@ test("the video starts at 1x and the site puts its own speed back when playback 
   await page.waitForTimeout(3000);
   const notice = await panel.locator("#sync-notice").textContent();
   console.log(`site reset on play: ${await page.evaluate(() => window.fixture.siteResets())} reset(s); panel notice: "${notice}"`);
-  await expect(panel.getByText("Sync with video: ON · Playing")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("ON · Playing");
   const v = await video(page);
   expect(v.paused).toBe(false);
   expect(v.rate).toBeCloseTo(rate, 6);
@@ -425,7 +426,7 @@ test("a page that keeps setting its own speed: R is set again a bounded number o
   await page.evaluate(() => window.fixture.siteResetsRate("ratechange", 1));
   await panel.getByRole("button", { name: "Sync with video" }).click();
   await panel.getByRole("button", { name: "Turn on sync" }).click();
-  await expect(panel.getByText("Sync with video: OFF")).toBeVisible();
+  await expect(panel.locator("#sync-status")).toHaveText("OFF");
   await expect(panel.locator("#sync-notice")).toHaveText(/^Sync turned off: the video speed did not stay at 1\.50\dx, the speed Sync needs/);
   await page.waitForTimeout(1000);
   // Bounded: three restores (and the site's answers), then MyDubb stops; the page keeps its speed, the sound is given back.
