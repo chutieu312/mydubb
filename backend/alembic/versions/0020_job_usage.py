@@ -5,14 +5,14 @@ version never reads or writes, so it keeps working against this schema. They hav
 to `jobs` on purpose (usage outlives the job row; see app/usage/models.py). Existing jobs have no
 usage rows; the report counts them as "without a usage record".
 
-Revision id `0020` is deliberately outside the 0012-0019 range, which belongs to other work in
-flight. Whichever migration branch is merged second must re-point its `down_revision` at the head
-that merged first (a database with two heads cannot `upgrade head`); check `alembic heads`.
+Chained after `0012_user_roles` (the head of main when the admin role was merged): written on
+`0011` in parallel with that story, re-pointed once it was on main. Check `alembic heads` (one
+head) whenever a migration is added; a database with two heads cannot `upgrade head`.
 
 Downgrade drops both tables, and with them every recorded usage figure.
 
 Revision ID: 0020
-Revises: 0011
+Revises: 0012_user_roles
 Create Date: 2026-11-01
 """
 from collections.abc import Sequence
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = '0020'
-down_revision: str | None = '0011'
+down_revision: str | None = '0012_user_roles'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -92,6 +92,10 @@ and, with `Authorization: Bearer`, `POST /api/jobs` and `POST /api/extension/log
 opened: the extension calls MyDubb through its host permission, which Chrome exempts from CORS, and
 always with `credentials: "omit"`.
 
+An extension token never carries MyDubb's admin role, also when its user is an administrator: any
+`/api/admin*` request with an `Authorization` header gets `401`
+([AUTHENTICATION.md](AUTHENTICATION.md#administrators)).
+
 ## Extension side
 
 - PKCE verifier (32 random bytes), S256 challenge and state are made per attempt and kept in the

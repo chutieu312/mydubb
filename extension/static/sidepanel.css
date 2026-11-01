@@ -1,25 +1,39 @@
+/* The MyDubb website's tokens (frontend/src/styles/tokens.css); the panel follows the system theme. */
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #1d1d1f;
-  --muted: #5f6368;
-  --border: #c7c7cc;
-  --accent: #2f5bd3;
-  --accent-fg: #ffffff;
-  --error: #b3261e;
-  --panel: #f5f6f8;
+  --bg: #fff9ee;
+  --surface: #fffefd;
+  --tint: #e3f5ee;
+  --text: #193e49;
+  --muted: #566b70;
+  --line: #dce7e2;
+  /* Borders of controls: at least 3:1 against the surfaces they sit on. */
+  --border: #6e8884;
+  --brand: #08766e;
+  --on-brand: #ffffff;
+  --coral: #ed9075;
+  --on-coral: #2b1a12;
+  --error: #b42318;
+  --warn-bg: #fff0c7;
+  --warn-text: #4a3500;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1b1c1f;
-    --fg: #ececf1;
-    --muted: #a5a9b1;
-    --border: #4a4d55;
-    --accent: #8fb0ff;
-    --accent-fg: #10131a;
-    --error: #ffb4ab;
-    --panel: #25272c;
+    --bg: #101e27;
+    --surface: #1a2e38;
+    --tint: #213f40;
+    --text: #edf9f5;
+    --muted: #b0c8c8;
+    --line: #38515c;
+    --border: #7f9ea3;
+    --brand: #7be0c5;
+    --on-brand: #102d28;
+    --coral: #f3a087;
+    --on-coral: #2b1a12;
+    --error: #ff9a90;
+    --warn-bg: #3a3017;
+    --warn-text: #fbe9bd;
   }
 }
 
@@ -29,77 +43,193 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
   background: var(--bg);
-  color: var(--fg);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-
-main {
-  padding: 12px 16px 24px;
-  display: grid;
-  gap: 16px;
-}
-
-h1 {
-  font-size: 18px;
-  margin: 0;
-}
-
-h2 {
-  font-size: 14px;
-  margin: 0 0 6px;
-}
-
-section {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-
-.hint {
-  color: var(--muted);
-  margin: 4px 0 8px;
-}
-
-.status {
-  margin: 6px 0;
-  min-height: 1.45em;
-}
-
-.error {
-  color: var(--error);
-  margin: 6px 0 0;
-}
-
-.error:empty,
-.status:empty {
-  display: none;
-}
-
-.link {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 10px;
-  margin: 0;
-}
-
-.link dt {
-  color: var(--muted);
-}
-
-.link dd {
-  margin: 0;
+  color: var(--text);
+  border-top: 3px solid var(--brand);
+  font: 15px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow-wrap: anywhere;
 }
 
-textarea {
-  width: 100%;
-  resize: vertical;
-  font: inherit;
-  color: inherit;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
+/* A side panel can be dragged wide: the page keeps a readable width. */
+main {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 0 12px 24px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- Header and lesson --------------------------------------------------------------------- */
+
+.head {
+  margin: 0 -12px;
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 11px;
+  min-width: 0;
+}
+
+h1 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  flex: none;
+}
+
+.account {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.head .row {
+  margin: 0;
+}
+
+.head .row:not(:has(button:not([hidden]))) {
+  display: none;
+}
+
+.lesson-box {
+  background: var(--surface);
+  padding: 10px 12px;
+  border-radius: 11px;
+  min-width: 0;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.65px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.lesson {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lesson-box .status {
+  margin-top: 6px;
+}
+
+.lesson-box details.more {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+/* ---- Cards --------------------------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.audio-card {
+  border-top: 2px solid var(--coral);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+/* The three block titles stand out; everything else stays compact. */
+h2 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+
+h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.small:empty,
+.hint:empty,
+.status:empty,
+.error:empty {
+  display: none;
+}
+
+.label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.status {
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.error {
+  font-size: 12px;
+  color: var(--error);
+  margin-top: 6px;
+}
+
+/* Errors are told apart by a marker as well as by color. */
+.error:not(:empty)::before {
+  content: "⚠ ";
 }
 
 .row {
@@ -109,14 +239,22 @@ textarea {
   margin-top: 8px;
 }
 
+/* ---- Controls ------------------------------------------------------------------------------ */
+
 button {
   font: inherit;
-  padding: 6px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: inherit;
+  font-size: 13px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 7px;
+  padding: 6px 10px;
   cursor: pointer;
+  max-width: 100%;
+}
+
+button:hover:not(:disabled) {
+  filter: brightness(0.96);
 }
 
 button:disabled {
@@ -124,128 +262,488 @@ button:disabled {
   cursor: not-allowed;
 }
 
-#playpause,
-#player-play,
-#confirm-replace,
-#generate {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border-color: var(--accent);
-  min-width: 5.5em;
+button.primary {
+  background: var(--brand);
+  color: var(--on-brand);
+  border-color: var(--brand);
+  font-weight: 500;
+}
+
+/* Generate audio and Use new audio. */
+button.cta {
+  background: var(--coral);
+  color: var(--on-coral);
+  border-color: var(--coral);
+  font-weight: 500;
+  font-size: 14px;
+  padding: 7px 14px;
+}
+
+button.quiet {
+  background: transparent;
+  font-size: 12px;
+  padding: 5px 9px;
+  margin-top: 6px;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brand);
   outline-offset: 2px;
 }
 
-.confirm {
-  margin-top: 10px;
-  padding: 10px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--panel);
-}
-
-.confirm p {
-  margin: 0 0 4px;
-}
-
-.time {
-  font-variant-numeric: tabular-nums;
-  font-size: 16px;
-  margin: 4px 0;
-}
-
-h3 {
-  font-size: 13px;
-  margin: 12px 0 4px;
-}
-
-.fields {
-  display: grid;
-  gap: 2px;
-}
-
-.fields label,
-section > label {
-  display: block;
-  margin-top: 6px;
-  color: var(--muted);
-}
-
+textarea,
 input,
 select {
   font: inherit;
-  color: inherit;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 8px;
+  color: var(--text);
   width: 100%;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+textarea {
+  display: block;
+  margin-top: 9px;
+  min-height: 140px;
+  resize: vertical;
+  font-size: 14px;
+  padding: 11px 12px;
+  background: var(--bg);
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--muted);
+}
+
+input {
+  font-size: 13px;
+  padding: 8px;
+}
+
+select {
+  font-size: 13px;
+  padding: 9px;
+}
+
+[aria-invalid="true"] {
+  border-color: var(--error);
 }
 
 input[type="checkbox"] {
-  width: auto;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--brand);
+  flex: none;
 }
 
 .check {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
+  font-size: 13px;
+  margin-top: 8px;
 }
 
-.timing p {
-  margin: 0 0 6px;
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 10px;
 }
 
-input.seek {
-  padding: 0;
-  border: none;
-  background: transparent;
-  accent-color: var(--accent);
+.confirm {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--tint);
+  font-size: 13px;
+}
+
+.confirm p + p,
+.confirm p + .check {
   margin-top: 4px;
 }
 
-.translation {
-  white-space: pre-wrap;
+details.more {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+details.more > summary {
+  cursor: pointer;
+  width: fit-content;
+  max-width: 100%;
+}
+
+details.more > summary:hover {
+  color: var(--text);
+}
+
+details.more > p,
+details.more > dl,
+details.more > ul {
+  margin-top: 9px;
+}
+
+.link {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.link dt {
+  color: var(--muted);
+}
+
+.link dd {
+  margin: 0;
+  color: var(--text);
   overflow-wrap: anywhere;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
-  max-height: 40vh;
-  overflow: auto;
 }
 
 #notices {
   padding-left: 18px;
 }
 
-.callout {
-  margin: 8px 0;
-  padding: 10px;
-  border: 2px solid var(--accent);
-  border-radius: 6px;
-  background: var(--panel);
+/* ---- 1. English transcript: the video row ------------------------------------------------- */
+
+.video {
+  margin-top: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 
-.callout-title {
-  margin: 0 0 6px;
+.video h3 {
+  font-size: 12px;
+}
+
+.clock {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.clock strong {
+  font-size: 18px;
   font-weight: 600;
-  overflow-wrap: anywhere;
 }
 
-.loaded-head {
-  margin: 0 0 4px;
+.clock > span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.video-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.video-buttons button {
+  font-size: 12px;
+  padding: 4px 7px;
+}
+
+.video-buttons .primary {
+  min-width: 46px;
+  padding: 4px 9px;
+}
+
+.video .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* ---- 2. Translate to ----------------------------------------------------------------------- */
+
+#speed-label {
+  margin-top: 12px;
+}
+
+.speeds {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+/* Each speed is a radio button drawn as a small button. */
+.speeds label {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-size: 12px;
+  padding: 5px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.speeds input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.speeds label:has(input:checked) {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+  font-weight: 500;
+}
+
+.speeds label:has(input:focus-visible) {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.length {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px;
+  border-radius: 8px;
+  background: var(--tint);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.length strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#generate {
+  margin-top: 12px;
+}
+
+#disclosure {
+  margin-top: 7px;
+  font-size: 11px;
+}
+
+/* ---- 3. Your audio ------------------------------------------------------------------------- */
+
+.empty {
+  margin-top: 8px;
+}
+
+/* The job's progress and the audio's state: short lines under the heading. */
+#result-section .status,
+#video-place {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
 }
 
 .badge {
   display: inline-block;
-  margin-left: 6px;
-  padding: 1px 8px;
-  border: 1px solid var(--accent);
-  border-radius: 10px;
-  font-size: 12px;
+  margin-left: 4px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
   white-space: nowrap;
+  vertical-align: 2px;
+}
+
+.new-result {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.new-title {
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.new-meta {
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.new-result button {
+  margin-top: 7px;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.source {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.new-meta .source {
+  margin-top: 2px;
+  justify-content: flex-start;
+}
+
+.translation-block {
+  margin: 14px 0 12px;
+}
+
+.translation {
+  margin-top: 9px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.translation.missing {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input.seek {
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--brand);
+  margin: 0;
+}
+
+.audio-times {
+  display: flex;
+  justify-content: space-between;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-buttons {
+  display: flex;
+  gap: 7px;
+  margin: 10px 0 14px;
+}
+
+.audio-buttons .primary {
+  min-width: 66px;
+  padding: 6px 13px;
+  font-size: 14px;
+}
+
+.sync {
+  background: var(--bg);
+  border-radius: 11px;
+  padding: 13px 14px;
+}
+
+.sync-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.sync-row .small {
+  margin-left: auto;
+}
+
+/* Sync with video: a toggle button drawn as a check box (aria-pressed holds the state). */
+button.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+}
+
+button.toggle::before {
+  content: "";
+  flex: none;
+  width: 17px;
+  height: 17px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+button.toggle[aria-pressed="true"]::before {
+  content: "✓";
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--on-brand);
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.sync-confirm {
+  border-top: 1px solid var(--line);
+  margin-top: 11px;
+  padding-top: 11px;
+  font-size: 12px;
+}
+
+.floating-toggle {
+  margin-top: 12px;
+}
+
+/* Touch screens: bigger targets. */
+@media (pointer: coarse) {
+  button,
+  .speeds label {
+    min-height: 44px;
+  }
 }

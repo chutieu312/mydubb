@@ -61,6 +61,56 @@ describe("AttachedVideo", () => {
     expect(v.media.currentTime).toBe(15);
   });
 
+  describe("place", () => {
+    const seeked = (video: HTMLVideoElement) => queueMicrotask(() => video.dispatchEvent(new Event("seeked")));
+
+    it("pauses the video at an exact position, done only once the seek finished", async () => {
+      const v = fakeVideo(document, { paused: false, currentTime: 40, seekable: [[0, 100]], seekOutcome: seeked });
+      const attached = new AttachedVideo(v, 1, () => undefined);
+      await expect(attached.place(73)).resolves.toBeNull();
+      expect(v.media.paused).toBe(true);
+      expect(v.media.currentTime).toBe(73);
+      await expect(attached.place(0)).resolves.toBeNull();
+      expect(v.media.currentTime).toBe(0);
+    });
+
+    it("is refused, never clamped, outside the range or before metadata", async () => {
+      const v = fakeVideo(document, { paused: false, currentTime: 12, seekable: [[0, 100]] });
+      await expect(new AttachedVideo(v, 1, () => undefined).place(101)).resolves.toBe("out-of-range");
+      expect(v.media.currentTime).toBe(12);
+      expect(v.media.paused).toBe(false);
+      await expect(new AttachedVideo(fakeVideo(document, { readyState: 0 }), 1, () => undefined).place(5)).resolves.toBe("not-ready");
+      const live = fakeVideo(document, { seekable: [], duration: Infinity });
+      await expect(new AttachedVideo(live, 1, () => undefined).place(5)).resolves.toBe("not-seekable");
+    });
+
+    it("fails when the seek lands elsewhere, the page plays it again, or the seek never finishes", async () => {
+      const elsewhere = fakeVideo(document, {
+        seekOutcome: (video) => {
+          (video as typeof elsewhere).media.currentTime = 2;
+          seeked(video);
+        },
+      });
+      await expect(new AttachedVideo(elsewhere, 1, () => undefined).place(73)).resolves.toBe("seek-failed");
+      const replayed = fakeVideo(document, {
+        seekOutcome: (video) => {
+          (video as typeof replayed).media.paused = false;
+          seeked(video);
+        },
+      });
+      await expect(new AttachedVideo(replayed, 1, () => undefined).place(73)).resolves.toBe("seek-failed");
+      vi.useFakeTimers();
+      try {
+        // currentTime reads 73 at once, as on a real video still seeking; "seeked" never comes.
+        const placing = new AttachedVideo(fakeVideo(document), 1, () => undefined).place(73);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(placing).resolves.toBe("seek-failed");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("refuses to seek before metadata or without a range", () => {
     expect(new AttachedVideo(fakeVideo(document, { readyState: 0 }), 1, () => undefined).seekBy(5)).toBe("not-ready");
     const live = fakeVideo(document, { seekable: [], duration: Infinity });

@@ -31,39 +31,47 @@ export function clampBox(x: number, y: number, w: number, h: number, vw: number,
 const STYLE = `
 :host { all: initial; }
 .box {
-  --bg: #ffffff; --fg: #1d1d1f; --muted: #5f6368; --border: #c7c7cc; --accent: #2f5bd3; --accent-fg: #ffffff; --error: #b3261e;
+  /* The side panel's colors: the MyDubb website's tokens (frontend/src/styles/tokens.css). */
+  --bg: #fff9ee; --surface: #fffefd; --text: #193e49; --muted: #566b70; --line: #dce7e2;
+  --brand: #08766e; --on-brand: #ffffff; --error: #b42318;
   box-sizing: border-box; width: 264px; max-width: calc(100vw - 16px);
-  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 10px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-  padding: 6px 8px 8px;
+  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-top: 3px solid var(--brand);
+  border-radius: 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  font: 12px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 10px 12px 12px;
 }
 @media (prefers-color-scheme: dark) {
-  .box { --bg: #1b1c1f; --fg: #ececf1; --muted: #a5a9b1; --border: #4a4d55; --accent: #8fb0ff; --accent-fg: #10131a; --error: #ffb4ab; }
+  .box {
+    --bg: #101e27; --surface: #1a2e38; --text: #edf9f5; --muted: #b0c8c8; --line: #38515c;
+    --brand: #7be0c5; --on-brand: #102d28; --error: #ff9a90;
+  }
 }
-.bar { display: flex; align-items: center; gap: 4px; }
+.bar { display: flex; align-items: center; gap: 6px; }
 .handle {
-  flex: 1; font-weight: 600; cursor: grab; padding: 4px 2px; user-select: none; touch-action: none; border-radius: 4px;
+  flex: 1; font-size: 14px; font-weight: 600; cursor: grab; padding: 2px; user-select: none; touch-action: none;
+  border-radius: 6px;
 }
 .handle:active { cursor: grabbing; }
 button {
-  font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 6px;
-  padding: 2px 8px; min-height: 26px; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 7px; padding: 4px 9px; min-height: 26px; cursor: pointer;
 }
-button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); min-width: 56px; }
+button:hover:not(:disabled) { filter: brightness(0.96); }
+button.primary { background: var(--brand); color: var(--on-brand); border-color: var(--brand); font-weight: 500; min-width: 52px; }
 button:disabled { opacity: 0.5; cursor: default; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .body[hidden] { display: none; }
-.info { color: var(--muted); margin: 4px 0; overflow-wrap: anywhere; }
-.seek { width: 100%; margin: 4px 0; accent-color: var(--accent); }
+.info { color: var(--muted); margin: 8px 0; overflow-wrap: anywhere; }
+.seek { display: block; width: 100%; margin: 4px 0; accent-color: var(--brand); }
 .row { display: flex; align-items: center; gap: 6px; }
-.time { margin-left: auto; font-variant-numeric: tabular-nums; }
-.status { margin: 4px 0 0; color: var(--muted); }
+.time { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.status { margin: 6px 0 0; color: var(--muted); }
 .status.problem { color: var(--error); }
 .status:empty { display: none; }
-.sync { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid var(--border); }
-.sync-state { flex: 1; font-weight: 600; }
+.sync { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+.sync-state { flex: 1; font-weight: 500; }
 .sync-confirm[hidden], .sync-toggle[hidden] { display: none; }
-.sync-confirm p { margin: 4px 0; color: var(--muted); }
+.sync-confirm p { margin: 6px 0; color: var(--muted); }
 `;
 
 const PROBLEM_TEXT: Record<string, string> = {

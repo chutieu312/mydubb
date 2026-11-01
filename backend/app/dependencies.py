@@ -9,7 +9,7 @@ from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.access.service import find_active_session
-from app.auth.models import SessionClient
+from app.auth.models import SessionClient, UserRole
 from app.auth.principal import Principal, UserProfile
 from app.auth.service import find_active_user_session
 from app.config import AuthMode
@@ -62,6 +62,7 @@ def account_principal(request: Request, db: Session, services: AppServices) -> P
             csrf_token=session.csrf_token,
             expires_at=session.expires_at,
             user=UserProfile(id=user.id, email=user.email, display_name=user.display_name),
+            is_admin=user.role == UserRole.ADMIN.value,
         )
     token = request.cookies.get(SESSION_COOKIE)
     record = find_active_session(db, token) if token else None
@@ -134,6 +135,26 @@ def require_session(
 
 def require_csrf(request: Request, principal: Principal = Depends(require_session)) -> Principal:
     """Synchronizer-token CSRF check for state-changing requests made with a session."""
+    return _check_csrf(request, principal)
+
+
+def require_admin(request: Request, principal: Principal = Depends(require_session)) -> Principal:
+    """Internal administration endpoints: the website session of a user whose role, read from the
+    database by this request, is admin. So an expired or revoked session, a disabled user and a
+    revoked role are all refused from the next request on. A request with an Authorization header
+    is refused whatever its cookies are (an extension token never reaches administration)."""
+    if "authorization" in request.headers:
+        raise not_authenticated()
+    if not principal.is_admin:
+        raise ApiError(
+            status.HTTP_403_FORBIDDEN, "admin_required", "This requires an administrator."
+        )
+    return principal
+
+
+def require_admin_csrf(
+    request: Request, principal: Principal = Depends(require_admin)
+) -> Principal:
     return _check_csrf(request, principal)
 
 

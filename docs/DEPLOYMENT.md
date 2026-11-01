@@ -676,12 +676,19 @@ The Chrome extension pull request adds migration `0011` (column
 every deploy built before it is no longer a supported Render rollback target; check with
 `docker/rollback-target-check.sh <commit> 0011`. Turning the extension off is a configuration
 change (remove `EXTENSION_IDS`), not a code rollback ([EXTENSION_AUTH.md](EXTENSION_AUTH.md)).
+The admin role pull request adds migration `0012_user_roles` (column
+`users.role varchar(10) NOT NULL DEFAULT 'user'` with a CHECK, and the table `user_role_events`;
+expand-only, every account stays `user` and older code ignores both). Once it is deployed, every
+deploy built before it is no longer a supported Render rollback target; check with
+`docker/rollback-target-check.sh <commit> 0012_user_roles`. Taking admin access away is a tool
+command (`revoke-admin`, [AUTHENTICATION.md](AUTHENTICATION.md#administrators)), not a code
+rollback.
 
 The usage-records pull request adds migration `0020` (tables `job_usage` and `job_usage_attempts`;
-expand-only, no foreign key, the previous version never reads or writes them). Its revision id sits
-outside 0012-0019 on purpose; a database with two heads cannot `upgrade head`, so the migration
-merged second must re-point its `down_revision` at the head merged first (`alembic heads` must
-list one revision; a test checks it). Once it is deployed, every deploy built before it is no
+expand-only, no foreign key, the previous version never reads or writes them). It follows
+`0012_user_roles`; `alembic heads` must list one revision (a test checks it), because a database
+with two heads cannot `upgrade head`. Its downgrade drops the two tables and every recorded usage
+figure, and leaves the admin roles and accounts alone. Once it is deployed, every deploy built before it is no
 longer a supported Render rollback target; check with `docker/rollback-target-check.sh <commit>
 0020`. Recording can be turned off with `USAGE_RECORDING_ENABLED=false` (no code rollback needed);
 the report is a local command, never an API ([USAGE_COSTS.md](USAGE_COSTS.md)).

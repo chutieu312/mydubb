@@ -270,6 +270,8 @@ export class PageSession {
         return attached.pause();
       case "seek":
         return attached.seekBy(message.delta ?? 0);
+      case "place":
+        return attached.place(message.at ?? 0);
     }
   }
 }

@@ -1,5 +1,6 @@
 """Usage retention and the migration: cleanup touches only usage; the schema is expand-only."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -83,19 +84,55 @@ def test_there_is_a_single_alembic_head(database_url):
     assert len(heads) == 1, f"several heads {heads}: re-point down_revision of the later migration"
 
 
-def test_the_migration_is_expand_only_and_reversible(engine, database_url):
+def test_the_migration_is_expand_only_reversible_and_leaves_the_admin_roles_alone(
+    engine, database_url
+):
     config = alembic_config(database_url)
+    user = uuid.uuid4()
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE jobs, job_usage, job_usage_attempts, access_sessions CASCADE"))
-    command.downgrade(config, "0011")
+        conn.execute(text("TRUNCATE jobs, job_usage, job_usage_attempts, users CASCADE"))
+        conn.execute(
+            text(
+                "INSERT INTO users (id, cognito_issuer, cognito_sub, email, email_normalized, "
+                "role, created_at, updated_at) VALUES (:id, 'issuer', 'sub-1', 'a@example.com', "
+                "'a@example.com', 'admin', now(), now())"
+            ),
+            {"id": user},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO user_role_events (user_id, old_role, new_role, changed_by, changed_at)"
+                " VALUES (:id, 'user', 'admin', 'test', now())"
+            ),
+            {"id": user},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO job_usage (job_id, started_at, client, access, target_language, "
+                "voice, speed_percent, timing_mode, translation_provider, speech_provider, "
+                "audio_processor, baseline_seconds, target_audio_seconds, source_chars) "
+                "VALUES (:id, now(), 'web', 'invitation', 'vietnamese', 'AndrewMultilingual', "
+                "100, 'plain', 'a', 'b', 'c', 60, 60, 10)"
+            ),
+            {"id": uuid.uuid4()},
+        )
+    command.downgrade(config, "0012_user_roles")  # only the usage tables go (and their rows)
     try:
         tables = set(inspect(engine).get_table_names())
         assert not {"job_usage", "job_usage_attempts"} & tables
-        assert {"jobs", "user_sessions", "extension_auth_codes"} <= tables  # product data intact
+        assert {"jobs", "users", "user_role_events", "extension_auth_codes"} <= tables
+        with engine.connect() as conn:
+            role = conn.execute(text("SELECT role FROM users WHERE id = :id"), {"id": user})
+            assert role.scalar_one() == "admin"
+            events = conn.execute(text("SELECT count(*) FROM user_role_events")).scalar_one()
+            assert events == 1
     finally:
         command.upgrade(config, "head")
     inspector = inspect(engine)
     assert {"job_usage", "job_usage_attempts"} <= set(inspector.get_table_names())
+    with engine.connect() as conn:  # the account and the admin grant survived both directions
+        assert conn.execute(text("SELECT role FROM users")).scalar_one() == "admin"
+        assert conn.execute(text("SELECT count(*) FROM job_usage")).scalar_one() == 0
     # No foreign key anywhere: usage is independent of the jobs table.
     assert inspector.get_foreign_keys("job_usage") == []
     assert inspector.get_foreign_keys("job_usage_attempts") == []
@@ -108,3 +145,19 @@ def test_the_migration_is_expand_only_and_reversible(engine, database_url):
         "job_id",
         "seq",
     ]
+
+
+def test_models_and_migrations_describe_the_same_usage_tables(engine, database_url):
+    """Alembic's own autogenerate comparison finds no difference for the usage tables."""
+    from alembic.autogenerate import compare_metadata
+    from alembic.migration import MigrationContext
+
+    from app.db import Base
+
+    with engine.connect() as conn:
+        context = MigrationContext.configure(
+            conn, opts={"compare_type": True, "compare_server_default": False}
+        )
+        diffs = compare_metadata(context, Base.metadata)
+    usage = [d for d in diffs if "job_usage" in repr(d)]
+    assert usage == []
