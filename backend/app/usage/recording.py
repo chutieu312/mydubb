@@ -10,10 +10,13 @@ Reliability rules:
 * One attempt is one provider request, written once its outcome is known, in its own short
   transaction (so a failed job keeps what was spent before the failure). A request holding many
   blocks is one attempt (`items`).
-* Every write is guarded: an error is logged by type only, the job carries on, and writing
-  stops after the first failure (no database timeout per remaining request); the pending rows
-  get one last try when the job ends. `attempts_expected` and `write_errors` in the summary let
-  the report show what is missing. `(job_id, seq)` makes repeated writes harmless.
+* Every write is guarded and bounded: each usage transaction starts by limiting its own lock wait
+  and run time on the server (`USAGE_WRITE_TIMEOUT_SECONDS`, `store.limit_waits`), so a lock held
+  by someone else ends in an error, not a stuck worker. An error is logged by type only, the job
+  carries on, and writing stops after the first failure (no timeout per remaining request); the
+  pending rows get one last try when the job ends, bounded the same way. `attempts_expected`
+  and `write_errors` in the summary let the report show what is missing. `(job_id, seq)` makes
+  repeated writes harmless.
 * Missing figures stay unknown (NULL), never 0. A request that timed out or failed after being
   sent is *not* assumed to be free.
 * Limit: a process that dies mid-request cannot write that request, nor the job's ending; the
@@ -54,9 +57,14 @@ class UsageContext:
 
 class UsageCollector:
     def __init__(
-        self, session_factory: sessionmaker[Session], job_id: uuid.UUID, facts: dict[str, Any]
+        self,
+        session_factory: sessionmaker[Session],
+        job_id: uuid.UUID,
+        facts: dict[str, Any],
+        write_timeout_seconds: float = 3.0,
     ) -> None:
         self._factory = session_factory
+        self._write_timeout = write_timeout_seconds
         self.job_id = job_id
         self._facts = {**facts, "started_at": datetime.now(UTC), "method_version": METHOD_VERSION}
         self._notes: dict[str, Any] = {}
@@ -115,6 +123,9 @@ class UsageCollector:
     def _guarded(self, write, keep: list[dict[str, Any]] | None = None) -> None:
         try:
             with session_scope(self._factory) as db:
+                # First statement of every usage transaction: a lock held by someone else or a
+                # slow statement ends in an error here instead of holding the worker.
+                store.limit_waits(db, self._write_timeout)
                 write(db)
         except Exception as exc:
             with self._lock:

@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,24 @@ from app.usage.models import JobUsage, UsageAttempt
 
 # Written once when the job starts and never changed afterwards.
 _IMMUTABLE = ("job_id", "started_at")
+
+
+def limit_waits(db: Session, seconds: float) -> None:
+    """Bound this transaction's wait for a lock and its run time, on the server.
+
+    `set_config(..., is_local)` lasts until the transaction ends and is then forgotten, so the
+    shared connection pool and every other transaction keep their settings. PostgreSQL cancels the
+    statement itself (no Python thread left waiting on a query that still runs): the error ends
+    the transaction, which the caller rolls back.
+    """
+    milliseconds = str(max(1, round(seconds * 1000)))
+    db.execute(
+        text(
+            "SELECT set_config('lock_timeout', :ms, true),"
+            " set_config('statement_timeout', :ms, true)"
+        ),
+        {"ms": milliseconds},
+    )
 
 
 def upsert_summary(db: Session, job_id: uuid.UUID, values: Mapping[str, Any]) -> None:

@@ -58,10 +58,20 @@ every target language, voice and speed.
   `unknown` (NULL amount, never 0), unless the provider itself reported a charge.
 * **A job that fails keeps its usage**: attempts are written one by one as the job goes, in their
   own short transactions.
-* **A usage write error never fails the job.** It is logged by exception type only (the message
-  can quote SQL), writing stops after the first failure (no database timeout per remaining
-  request), the pending rows get one last try when the job ends, and the summary records
-  `write_errors` and `attempts_expected` so the report can show what is missing.
+* **A usage write error never fails the job, and a usage write never holds it.** Every usage
+  transaction (the start, each attempt, the ending, the retention purge) begins by limiting its
+  own lock wait and run time on the server, `lock_timeout` and `statement_timeout` set with
+  `set_config(..., is_local)` to `USAGE_WRITE_TIMEOUT_SECONDS` (default 3, range 0.2-30). They last
+  for that transaction only, so the shared pool and the auth, job and import transactions keep
+  their settings, and PostgreSQL itself cancels the statement (no thread is left waiting on a
+  query that still runs; the transaction is rolled back). A write that times out is logged by
+  exception type only (the message can quote SQL), writing stops after the first failure (no
+  timeout per remaining request), the pending rows get one last try when the job ends (bounded the
+  same way, so the job is delayed by at most about twice the timeout, and by the timeout once if a
+  write fails mid-job), and the summary records `write_errors` and `attempts_expected` so the
+  report can show what is missing. Rows that never get written are simply absent: the report then
+  shows the job as incomplete (or, if even the summary is lost, under "jobs without a usage
+  record").
 * **Mock providers are labelled `mock`** (usage basis `none`). The report counts them apart and
   excludes them from usage and cost; a job with real translation and mock speech keeps its real
   translator attempts.
@@ -98,6 +108,11 @@ for every Han ideograph (CJK Unified Ideographs, Extension A, Compatibility Ideo
 supplementary-plane extensions). Hiragana, katakana and Hangul are not mentioned by the page and
 count once. It is an **estimate** (labelled so): Microsoft does not publish the exact algorithm.
 The estimate is kept only when the request succeeded; a failed one is `unknown`.
+
+Residual limits of that bound: it covers lock waits and statement run time. Waiting for a pooled
+connection is bounded only by the engine's existing pool timeout, and a network that silently
+stops answering is a limit every database call of the application shares (a dedicated engine
+with its own keepalives, as the guest import runner has, was not added to avoid a second pool).
 
 ## Reference prices
 
@@ -233,13 +248,14 @@ cd backend
 uv run ruff check . && uv run ruff format --check .
 export TEST_DATABASE_URL=postgresql://...   # a disposable database
 uv run pytest tests/test_usage_providers.py tests/test_usage_jobs.py \
-  tests/test_usage_report.py tests/test_usage_retention.py
+  tests/test_usage_report.py tests/test_usage_retention.py tests/test_usage_timeouts.py
 ```
 
 They cover multi-request and multi-block jobs, missing and broken headers, SSML and CJK counting,
 timeout and error outcomes, duplicate writes, failing usage writes (the job still completes),
 mock versus real providers, reports with missing data, the period boundaries, exact money and
-half-up rounding, the read-only transaction, retention that leaves jobs alone, and the migration
+half-up rounding, the read-only transaction, usage writes blocked by a real PostgreSQL lock
+(timeout, job and slot released, shutdown), retention that leaves jobs alone, and the migration
 (expand-only, reversible, one Alembic head). The rest of the suite is unchanged and still passes.
 Only fake HTTP transports, mock providers and disposable PostgreSQL are used: Azure, Cognito
 and Supadata are never called.

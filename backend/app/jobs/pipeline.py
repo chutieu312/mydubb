@@ -113,9 +113,11 @@ class JobPipeline:
         result_ttl_seconds: int,
         glossary: Glossary | None = None,
         usage_enabled: bool = True,
+        usage_write_timeout_seconds: float = 3.0,
     ) -> None:
         self._session_factory = session_factory
         self._usage_enabled = usage_enabled
+        self._usage_write_timeout = usage_write_timeout_seconds
         self._glossary = glossary if glossary is not None else default_glossary()
         self._translator = translator
         self._speech = speech
@@ -292,6 +294,7 @@ class JobPipeline:
                     "source_chars": len(job.transcript),
                     "blocks": None if job.timed is None else len(job.timed.blocks),
                 },
+                self._usage_write_timeout,
             )
             collector.begin()
             return collector, usage.activate(collector)

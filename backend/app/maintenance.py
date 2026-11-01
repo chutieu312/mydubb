@@ -12,7 +12,7 @@ from app.guest.imports import release_stale_imports
 from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
-from app.usage.store import delete_usage_older_than
+from app.usage.store import delete_usage_older_than, limit_waits
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,7 @@ def _purge_usage(services: AppServices) -> None:
     cutoff = datetime.now(UTC) - timedelta(days=services.settings.usage_retention_days)
     try:
         with session_scope(services.session_factory) as db:
+            limit_waits(db, services.settings.usage_write_timeout_seconds)
             summaries, attempts = delete_usage_older_than(db, cutoff)
     except Exception as exc:
         logger.warning("Usage retention cleanup failed (%s)", type(exc).__name__)
