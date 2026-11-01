@@ -45,7 +45,7 @@ async function readyResult(
   await expect(panel.getByText(/^(Connected as|Not connected)/)).toBeVisible();
   if (await panel.getByRole("button", { name: "Connect MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
   await fillTimes(panel);
-  await panel.getByLabel("Audio speed").selectOption(speed);
+  await panel.getByRole("radio", { name: `${speed}x`, exact: true }).check();
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.getByText(READY)).toBeVisible();
   await expect.poll(async () => (await sessionOf(worker, tabId))?.duration ?? 0).toBeGreaterThan(25);

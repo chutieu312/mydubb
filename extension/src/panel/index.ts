@@ -30,7 +30,6 @@ import {
 } from "./draft";
 import { Dubbing } from "./dubbing";
 import { PlayerLink } from "./player";
-import { Tabs } from "./tabs";
 
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
@@ -98,10 +97,7 @@ class Panel {
   private readonly dubbing: Dubbing;
   private readonly audioChannel = new BroadcastChannel(AUDIO_CHANNEL);
 
-  constructor(
-    private readonly tabId: number,
-    private readonly tabs: Tabs,
-  ) {
+  constructor(private readonly tabId: number) {
     const player = new PlayerLink({
       tabId,
       hasDocument: () => chrome.offscreen.hasDocument(),
@@ -128,10 +124,6 @@ class Panel {
         currentLesson: () => this.currentLesson(),
         transcript: () => ui.transcript.value,
         linkPlayback: (lessonKey) => this.linkPlayback(lessonKey),
-        jobAccepted: () => tabs.jobAccepted(),
-        requestRefused: (focusId) => tabs.requestRefused(focusId),
-        jobRestored: () => tabs.jobRestored(),
-        listenAttention: (kind) => tabs.listenAttention(kind),
       },
     );
   }
@@ -434,8 +426,6 @@ class Panel {
   private processPending(pending: PendingSelection): void {
     if (this.tabClosed) return;
     void chrome.storage.session.remove(pendingKey(this.tabId));
-    // Send to MyDubb is for the form: its text, message or confirmation is shown there.
-    this.tabs.selectionArrived();
     const decision = decidePending(this.draft, pending, this.currentLesson());
     switch (decision.action) {
       case "reject":
@@ -570,8 +560,6 @@ function shortTitle(title: string): string {
   return first || title;
 }
 
-const tabs = new Tabs();
-tabs.wire(new AbortController().signal);
 const tabId = parseTabId(location.search);
 if (tabId === null) {
   ui.linkStatus.textContent =
@@ -579,5 +567,5 @@ if (tabId === null) {
   ui.transcript.disabled = true;
   ui.clear.disabled = true;
 } else {
-  void new Panel(tabId, tabs).start();
+  void new Panel(tabId).start();
 }

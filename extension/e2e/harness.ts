@@ -89,6 +89,8 @@ export class FakeMyDubb {
   progression = ["queued", "processing", "completed"];
   /** When false, jobs stay at their current status (the test moves them on). */
   advance = true;
+  /** A translation per job id, instead of the short default (screenshots). */
+  translations: Record<string, string> = {};
   /** Answers for the MP3 download, consumed in order: "ok" (default) or an HTTP status. */
   audioAnswers: ("ok" | number)[] = [];
   private nextJob = 1;
@@ -212,7 +214,7 @@ export class FakeMyDubb {
         speed: job.body.speed,
         output_duration_seconds: baseline / Number(job.body.speed),
         timing,
-        translation: { text: `Bản dịch <b>${job.id}</b>`, is_illustrative: true, provider: "mock" },
+        translation: { text: this.translations[job.id] ?? `Bản dịch <b>${job.id}</b>`, is_illustrative: true, provider: "mock" },
         audio: {
           url: `/api/jobs/${job.id}/result/audio`,
           download_url: `/api/jobs/${job.id}/result/audio?download=1`,
@@ -407,21 +409,9 @@ export async function connectAccount(panel: Page, mydubb: FakeMyDubb, extensionI
   await expect(panel.locator("#account-status")).toHaveText("Connected as Lan");
 }
 
-/** One of the panel's two tabs; switching only changes what is shown. */
-export async function showTab(panel: Page, name: "Create audio" | "Listen") {
-  const tab = panel.getByRole("tab", { name });
-  await tab.click();
-  await expect(tab).toHaveAttribute("aria-selected", "true");
-}
-
 async function openGroup(panel: Page, selector: string) {
   const group = panel.locator(selector);
   if (!(await group.evaluate((d) => (d as HTMLDetailsElement).open))) await group.locator("summary").first().click();
-}
-
-/** Story 1's Udemy video controls: on Create audio, beside the start times they help to fill. */
-export async function videoControls(panel: Page) {
-  await showTab(panel, "Create audio");
 }
 
 /** Disconnect sits under the header's Details. */
@@ -431,6 +421,6 @@ export async function disconnect(panel: Page) {
 }
 
 export async function fillTimes(panel: Page) {
-  await panel.getByLabel("First Sentence Start Time").fill("000010");
-  await panel.getByLabel("Last Sentence Start Time").fill("000610");
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000610");
 }

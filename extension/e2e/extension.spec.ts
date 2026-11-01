@@ -1,7 +1,7 @@
 // Browser tests of the real extension build in Chromium against synthetic fixture pages.
 // They prove the local behaviour only; they are not evidence that it works on udemy.com.
 
-import { ORIGIN, expect, openLecture, openPanel, sendTranscriptSelection, sessionGet, showTab, test, videoControls } from "./harness";
+import { ORIGIN, expect, openLecture, openPanel, sendTranscriptSelection, sessionGet, test } from "./harness";
 
 test("selection reaches the panel unchanged; edited drafts are only replaced after confirmation", async ({ context, worker, extensionId }) => {
   const { page, tabId } = await openLecture(context, worker, 101);
@@ -12,15 +12,12 @@ test("selection reaches the panel unchanged; edited drafts are only replaced aft
   await expect(panel.locator("#lesson-detail")).toHaveText("Lecture 101 | Demo Course | Udemy (lecture 101)");
   await expect(panel.locator("#tab-label")).toHaveText(`#${tabId}`);
   await expect(panel.locator("#tab-label")).toBeHidden();
-  // A selection sent while Listen is shown brings the form back.
-  await showTab(panel, "Listen");
 
   const expected = await sendTranscriptSelection(page, worker, tabId);
   expect(expected).toContain("\n");
   expect(expected).toContain("<b>");
-  const textarea = panel.getByRole("textbox", { name: "Transcript selection" });
+  const textarea = panel.getByRole("textbox", { name: "English transcript" });
   await expect(textarea).toHaveValue(expected);
-  await expect(panel.getByRole("tab", { name: "Create audio" })).toHaveAttribute("aria-selected", "true");
   await expect(panel.getByText(/Selection received/)).toBeVisible();
   // Called without a user gesture, sidePanel.open() fails: the toolbar button is flagged instead,
   // and the selection was still delivered.
@@ -60,13 +57,12 @@ test("empty selection is reported, not inserted", async ({ context, worker, exte
     [tabId, page.url()] as const,
   );
   await expect(panel.getByText(/The selection was empty/)).toBeVisible();
-  await expect(panel.getByRole("textbox", { name: "Transcript selection" })).toHaveValue("");
+  await expect(panel.getByRole("textbox", { name: "English transcript" })).toHaveValue("");
 });
 
 test("play, pause and seek drive the real video and the panel follows its events", async ({ context, worker, extensionId }) => {
   const { page, tabId } = await openLecture(context, worker, 103);
   const panel = await openPanel(context, extensionId, tabId);
-  await videoControls(panel);
   const play = panel.getByRole("button", { name: "Play video" });
   await expect(play).toBeEnabled();
   await expect(panel.locator("#time-duration")).toHaveText("0:30");
@@ -102,7 +98,6 @@ test("play, pause and seek drive the real video and the panel follows its events
 test("several videos: controls stay disabled until the user starts one, then follow only that one", async ({ context, worker, extensionId }) => {
   const { page, tabId } = await openLecture(context, worker, 104, "?videos=2");
   const panel = await openPanel(context, extensionId, tabId);
-  await videoControls(panel);
   await expect(panel.getByText(/Found 2 videos/)).toBeVisible();
   await expect(panel.getByRole("button", { name: "Play video" })).toBeDisabled();
   await expect(panel.getByRole("button", { name: "Forward 5 seconds" })).toBeDisabled();
@@ -119,7 +114,6 @@ test("several videos: controls stay disabled until the user starts one, then fol
 test("replaced video, SPA lecture change, reload and tab close", async ({ context, worker, extensionId }) => {
   const { page, tabId } = await openLecture(context, worker, 105);
   const panel = await openPanel(context, extensionId, tabId);
-  // By id: it is checked while Listen is shown too (role queries skip hidden panels).
   const textarea = panel.locator("#transcript");
   await sendTranscriptSelection(page, worker, tabId);
   await expect(textarea).not.toHaveValue("");
@@ -128,7 +122,6 @@ test("replaced video, SPA lecture change, reload and tab close", async ({ contex
   await page.evaluate(() => window.fixture.replaceVideo(30));
   await expect(panel.locator("#link-detail")).toContainText("video player was replaced");
   await expect(textarea).not.toHaveValue("");
-  await videoControls(panel);
   await panel.getByRole("button", { name: "Play video" }).click();
   await expect.poll(() => page.evaluate(() => window.fixture.state()!.paused)).toBe(false);
 
@@ -149,13 +142,13 @@ test("replaced video, SPA lecture change, reload and tab close", async ({ contex
   await expect(panel.locator("#link-detail")).toHaveText("Connected to the lecture tab.");
   // All is well: nothing about the link is shown in the header.
   await expect(panel.locator("#link-status")).toBeHidden();
-  await expect(panel.getByRole("button", { name: "Play video", includeHidden: true })).toBeEnabled();
+  await expect(panel.getByRole("button", { name: "Play video" })).toBeEnabled();
   await expect(textarea).not.toHaveValue("");
 
   // Tab closed: panel says so, controls off, session data removed.
   await page.close();
   await expect(panel.getByText(/linked tab was closed/)).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Play video", includeHidden: true })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "Play video" })).toBeDisabled();
   await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toBeNull();
 });
 
@@ -165,18 +158,16 @@ test("panels are tied to one tab and never control another", async ({ context, w
   const panelA = await openPanel(context, extensionId, a.tabId);
   const panelB = await openPanel(context, extensionId, b.tabId);
   await sendTranscriptSelection(a.page, worker, a.tabId);
-  await expect(panelA.getByRole("textbox", { name: "Transcript selection" })).not.toHaveValue("");
-  await expect(panelB.getByRole("textbox", { name: "Transcript selection" })).toHaveValue("");
-  await videoControls(panelB);
+  await expect(panelA.getByRole("textbox", { name: "English transcript" })).not.toHaveValue("");
+  await expect(panelB.getByRole("textbox", { name: "English transcript" })).toHaveValue("");
   await panelB.getByRole("button", { name: "Play video" }).click();
   await expect.poll(() => b.page.evaluate(() => window.fixture.state()!.paused)).toBe(false);
   expect(await a.page.evaluate(() => window.fixture.state()!.paused)).toBe(true);
 
   // Opening a second panel for the same tab and closing it leaves the first one working.
   const extra = await openPanel(context, extensionId, a.tabId);
-  await expect(extra.getByRole("button", { name: "Play video", includeHidden: true })).toBeEnabled();
+  await expect(extra.getByRole("button", { name: "Play video" })).toBeEnabled();
   await extra.close();
-  await videoControls(panelA);
   await panelA.getByRole("button", { name: "Play video" }).click();
   await expect.poll(() => a.page.evaluate(() => window.fixture.state()!.paused)).toBe(false);
 });
@@ -190,7 +181,7 @@ test("unsupported tab and missing tab are reported with controls disabled", asyn
   });
   const panel = await openPanel(context, extensionId, otherId);
   await expect(panel.getByText(/MyDubb is not active in this tab/)).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Play video", includeHidden: true })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: "Play video" })).toBeDisabled();
   // The web page has no channel into the extension.
   expect(await other.evaluate(() => typeof (window as { chrome?: { runtime?: { id?: string } } }).chrome?.runtime?.id)).toBe("undefined");
 
@@ -205,7 +196,7 @@ test("a lecture's draft never survives a detour through a non-lecture page to an
   const { page, tabId } = await openLecture(context, worker, 108);
   let panel = await openPanel(context, extensionId, tabId);
   await sendTranscriptSelection(page, worker, tabId);
-  await panel.getByRole("textbox", { name: "Transcript selection" }).fill("Edited draft for lecture 108");
+  await panel.getByRole("textbox", { name: "English transcript" }).fill("Edited draft for lecture 108");
   await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toMatchObject({
     lessonKey: "demo-course/108",
     text: "Edited draft for lecture 108",
@@ -218,7 +209,7 @@ test("a lecture's draft never survives a detour through a non-lecture page to an
 
   // Reopen the panel there: leaving the lecture is confirmed, so draft A is discarded.
   panel = await openPanel(context, extensionId, tabId);
-  const textarea = panel.getByRole("textbox", { name: "Transcript selection" });
+  const textarea = panel.getByRole("textbox", { name: "English transcript" });
   await expect(panel.locator("#lesson-label")).toHaveText("Not a Udemy lecture page");
   await expect(panel.getByText(/You left the lecture\. The previous draft was cleared/)).toBeVisible();
   await expect(textarea).toHaveValue("");

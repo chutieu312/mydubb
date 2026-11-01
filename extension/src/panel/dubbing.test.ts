@@ -8,7 +8,6 @@ import type { PanelPlayerView, PlayerCommand } from "../shared/playback";
 import { Dubbing, type DubbingDeps } from "./dubbing";
 import type { JobRecord } from "./jobs";
 import type { OpenOutcome, OpenRequest, PanelPlayer } from "./player";
-import { Tabs } from "./tabs";
 import { NO_SYNC } from "../shared/testSync";
 
 const html = readFileSync(join(__dirname, "../../static/sidepanel.html"), "utf8");
@@ -144,7 +143,6 @@ let transcript = "";
 let lesson: string | null | undefined = LESSON;
 let player: FakePlayer;
 let links: string[];
-let tabs: Tabs;
 
 function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
   const deps: DubbingDeps = {
@@ -165,10 +163,6 @@ function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
     currentLesson: () => lesson,
     transcript: () => transcript,
     linkPlayback: (key) => links.push(key),
-    jobAccepted: () => tabs.jobAccepted(),
-    requestRefused: (focusId) => tabs.requestRefused(focusId),
-    jobRestored: () => tabs.jobRestored(),
-    listenAttention: (kind) => tabs.listenAttention(kind),
   });
   return { dubbing, storage, api };
 }
@@ -185,11 +179,19 @@ function typeTime(id: string, value: string) {
   input.dispatchEvent(new InputEvent("input", { inputType: "insertFromPaste", data: value }));
 }
 
+/** A select's option, or a radio of a group (Audio speed). */
 function choose(id: string, value: string) {
-  const select = $<HTMLSelectElement>(id);
-  select.value = value;
-  select.dispatchEvent(new Event("change"));
+  const control = $(id);
+  if (control instanceof HTMLSelectElement) {
+    control.value = value;
+    control.dispatchEvent(new Event("change"));
+  } else {
+    control.querySelector<HTMLInputElement>(`input[value="${value}"]`)!.click();
+  }
 }
+
+const chosenSpeed = () => $("speed").querySelector<HTMLInputElement>("input:checked")?.value;
+const playerTime = () => `${$("player-current").textContent} / ${$("player-duration").textContent}`;
 
 beforeEach(() => {
   document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
@@ -200,8 +202,6 @@ beforeEach(() => {
   lesson = LESSON;
   player = new FakePlayer();
   links = [];
-  tabs = new Tabs();
-  tabs.wire(new AbortController().signal);
 });
 
 afterEach(() => {
@@ -220,7 +220,7 @@ describe("form and request", () => {
     const { api } = await started();
     expect([...$<HTMLSelectElement>("target-language").options].map((o) => o.value)).toEqual(["vietnamese", "arabic"]);
     expect($<HTMLSelectElement>("target-language").value).toBe("vietnamese");
-    expect([...$<HTMLSelectElement>("speed").options].map((o) => o.value)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"]);
+    expect([...$("speed").querySelectorAll("input")].map((o) => o.value)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "1.75", "2"]);
     typeTime("first-start", "000010");
     typeTime("last-start", "000610");
     choose("target-language", "arabic");
@@ -310,7 +310,7 @@ describe("job and result", () => {
     });
     // The form changing later does not change what the player says the file was made with.
     choose("speed", "2");
-    expect($("player-info").textContent).toBe("LanguageArabicVoiceAndrew MultilingualSpeed1xVideo sourceNot recorded for this audioMP3 length180.000 s");
+    expect($("player-info").textContent).toBe("Arabic · Andrew Multilingual · 1xVideo source not recorded MP3 180.000 s");
     expect(player.commands).toEqual([]);
     expect($("audio-status").textContent).toBe("Ready. Press play when you want to listen.");
     // The page is asked to link itself to the session (for the lecture watch and floating player).
@@ -331,7 +331,7 @@ describe("job and result", () => {
     $<HTMLButtonElement>("generate").click();
     await settle(12);
     expect($("player-section").hidden).toBe(false);
-    expect($("player-time").textContent).toBe("0:00 / 3:00");
+    expect(playerTime()).toBe("0:00 / 3:00");
     $<HTMLButtonElement>("player-play").click();
     player.set({ ...player.view!, paused: false, currentTime: 12 });
     expect($("player-play").textContent).toBe("Pause");
@@ -341,7 +341,7 @@ describe("job and result", () => {
     const seek = $<HTMLInputElement>("player-seek");
     seek.value = "90";
     seek.dispatchEvent(new Event("input"));
-    expect($("player-time").textContent).toBe("1:30 / 3:00");
+    expect(playerTime()).toBe("1:30 / 3:00");
     seek.dispatchEvent(new Event("change"));
     expect(player.commands).toEqual([
       { command: "play" },
@@ -372,6 +372,7 @@ describe("job and result", () => {
             url: `/api/jobs/${id}/result/audio`,
             duration: { mp3_decoded_seconds: id === "job-2" ? 15.333 : 10 },
           },
+          translation: { ...RESULT.translation, text: `Bản dịch ${id}` },
         })),
         ...extra,
       });
@@ -398,16 +399,53 @@ describe("job and result", () => {
       expect(api.getAudio).toHaveBeenCalledTimes(1);
       const callout = $("result-switch");
       expect(callout.hidden).toBe(false);
-      expect(callout.textContent).toContain("New audio is ready. The player is still using an earlier result.");
-      expect(text("result-switch-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1.5xVideo source00:00:00 → 00:00:23MP3 length15.333 s");
+      expect(text("result-switch-title")).toBe("New audio ready");
+      expect(text("result-switch-info")).toBe("Vietnamese · Andrew Multilingual · 1.5xVideo 00:00:00 → 00:00:23 MP3 15.333 s");
       // The button is inside the callout, which is inside the new result.
       expect(callout.contains($("player-switch"))).toBe(true);
       expect($("result").contains(callout)).toBe(true);
       expect($("player-switch").textContent).toBe("Use new audio");
       // The loaded audio keeps its own snapshot: other speed, span and length.
-      expect(text("player-info")).toBe("LanguageVietnameseVoiceAndrew MultilingualSpeed1xVideo source00:00:00 → 00:00:10MP3 length10.000 s");
+      expect(text("player-info")).toBe("Vietnamese · Andrew Multilingual · 1xVideo 00:00:00 → 00:00:10 MP3 10.000 s");
       expect($("player-badge").hidden).toBe(false);
+      expect(text("player-badge")).toBe("Earlier result");
       expect($("result-using").hidden).toBe(true);
+    });
+
+    it("shows the loaded audio's translation, not the waiting result's; Use new audio switches both", async () => {
+      await earlierAndNew();
+      expect(text("translation")).toBe("Bản dịch job-1");
+      expect(text("translation-heading")).toBe("Translation · Vietnamese");
+      $<HTMLButtonElement>("player-switch").click();
+      await settle(12);
+      expect(player.view?.owner.jobId).toBe("job-2");
+      expect(text("translation")).toBe("Bản dịch job-2");
+      expect(text("player-info")).toContain("00:00:00 → 00:00:23");
+      expect(player.commands).toEqual([]);
+    });
+
+    it("a reopened panel still shows the earlier audio's translation while the new result waits", async () => {
+      const api = twoJobs();
+      const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+      const first = await started(storage, api);
+      typeTime("first-start", "000000");
+      typeTime("last-start", "000010");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      typeTime("last-start", "000023");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(text("translation")).toBe("Bản dịch job-1");
+      first.dubbing.dispose();
+      expect(storage.data[`loaded:${TAB}`]).toMatchObject({ jobId: "job-1", text: "Bản dịch job-1", tag: "ar", dir: "rtl" });
+
+      document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+      await started(storage, api);
+      await settle(12);
+      expect(api.getAudio).toHaveBeenCalledTimes(1);
+      expect($("result-switch").hidden).toBe(false);
+      expect(text("translation")).toBe("Bản dịch job-1");
+      expect($("translation").dir).toBe("rtl");
     });
 
     it("tells two jobs with the same language, voice and speed apart by span and length", async () => {
@@ -485,16 +523,16 @@ describe("job and result", () => {
       $<HTMLButtonElement>("generate").click();
       await settle(12);
       expect(player.opened[0]?.request.choices.sourceRange).toBe("00:00:05.480 → 00:00:34.250");
-      expect(text("player-info")).toContain("Video source00:00:05.480 → 00:00:34.250");
+      expect(text("player-info")).toContain("Video 00:00:05.480 → 00:00:34.250");
       expect(text("player-info")).not.toContain("00:00:56");
       // The form changing later changes nothing about the loaded audio or the next result's label.
       typeTime("first-start", "000100");
       typeTime("last-start", "000200");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
-      expect(text("result-switch-info")).toContain("Video source00:00:05.480 → 00:00:34.250");
+      expect(text("result-switch-info")).toContain("Video 00:00:05.480 → 00:00:34.250");
       expect(text("result-switch-info")).not.toContain("00:01:00");
-      expect(text("player-info")).toContain("Video source00:00:05.480 → 00:00:34.250");
+      expect(text("player-info")).toContain("Video 00:00:05.480 → 00:00:34.250");
     });
 
     it("a job without a Sync snapshot does not borrow its start-time fields for the source", async () => {
@@ -530,7 +568,10 @@ describe("job and result", () => {
         owner: { userId: "u1", connectionId: "conn-a", jobId: "job-9", operationId: "op-9" },
         linked: true,
       });
-      expect(text("player-info")).toBe("LanguageHindiVoiceOld voiceSpeed0.75xVideo sourceNot recorded for this audioMP3 length12.000 s");
+      expect(text("player-info")).toBe("Hindi · Old voice · 0.75xVideo source not recorded MP3 12.000 s");
+      // Not this panel's result and no stored translation for it: said, never another result's text.
+      expect(text("translation-heading")).toBe("Translation · Hindi");
+      expect(text("translation")).toMatch(/no longer available/);
     });
   });
 
@@ -566,7 +607,7 @@ describe("job and result", () => {
     expect(player.opened).toHaveLength(0);
     expect(player.ended).toEqual([]);
     expect($("player-play").textContent).toBe("Pause");
-    expect($("player-time").textContent).toBe("0:33 / 3:00");
+    expect(playerTime()).toBe("0:33 / 3:00");
   });
 
   it("ends a session of another account connection or lecture instead of showing it", async () => {
@@ -620,16 +661,14 @@ describe("job and result", () => {
     $<HTMLButtonElement>("generate").click();
     await settle();
     expect(api.createJob).toHaveBeenCalledTimes(1);
-    // Said beside the form, where the click was; the job card on Listen says it briefly.
+    // Said beside the form, where the click was; Your audio says it briefly.
     expect($("form-error").textContent).toMatch(/not known whether the job was created/);
     expect($("job-status").textContent).toMatch(/unknown whether this job was created/);
-    expect(tabs.active).toBe("create");
     expect((storage.data[`job:${TAB}`] as JobRecord).state).toBe("sending");
     // Reopening the panel says the same, and still sends nothing.
     $("form-error").textContent = "";
     const reopened = await started(storage, api);
     expect($("form-error").textContent).toMatch(/not known whether the job was created/);
-    expect(tabs.active).toBe("create");
     expect(api.createJob).toHaveBeenCalledTimes(1);
     reopened.dubbing.dispose();
   });
@@ -797,7 +836,7 @@ describe("restoring a reopened panel", () => {
     expect($<HTMLInputElement>("first-start").value).toBe("00:00:01");
     expect($<HTMLInputElement>("last-start").value).toBe("00:00:21");
     // The other stored choices are still restored.
-    expect($<HTMLSelectElement>("speed").value).toBe("1.5");
+    expect(chosenSpeed()).toBe("1.5");
     // Saved after the 250 ms debounce: the stored form now holds the new times too.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect((storage.data[`form:${TAB}`] as { firstStart: string }).firstStart).toBe("00:00:01");
@@ -989,7 +1028,7 @@ describe("Sync with video", () => {
     await generate();
     const view = player.view!;
     player.set({ ...view, sync: SYNC_VIEW("off") as PanelPlayerView["sync"] });
-    expect($("sync-status").textContent).toBe("Sync with video: OFF");
+    expect($("sync-status").textContent).toBe("OFF");
     expect($<HTMLButtonElement>("sync-toggle").disabled).toBe(false);
     $<HTMLButtonElement>("sync-toggle").click();
     expect($("sync-confirm").hidden).toBe(false);
@@ -1004,8 +1043,9 @@ describe("Sync with video", () => {
     $<HTMLButtonElement>("sync-on").click();
     expect(player.syncs).toEqual([true]);
     player.set({ ...player.view!, sync: SYNC_VIEW("playing", true) as PanelPlayerView["sync"] });
-    expect($("sync-status").textContent).toBe("Sync with video: ON · Playing");
-    expect($("sync-toggle").textContent).toBe("Turn off sync");
+    expect($("sync-status").textContent).toBe("ON · Playing");
+    // The toggle keeps its name; its pressed state says ON.
+    expect($("sync-toggle").textContent).toBe("Sync with video");
     expect($("sync-toggle").getAttribute("aria-pressed")).toBe("true");
     $<HTMLButtonElement>("sync-toggle").click();
     expect(player.syncs).toEqual([true, false]);
@@ -1022,8 +1062,7 @@ describe("Sync with video", () => {
   });
 });
 
-describe("Create audio and Listen tabs", () => {
-  const shown = (name: "create" | "listen") => !$(`panel-${name}`).hidden;
+describe("one page: English transcript, Translate to, Your audio", () => {
   const SYNC_ON = {
     status: "playing",
     unavailable: null,
@@ -1035,147 +1074,142 @@ describe("Create audio and Listen tabs", () => {
     notice: null,
   } as unknown as PanelPlayerView["sync"];
 
-  it("Listen starts with a short empty state, not idle controls; its button leads to the form", async () => {
+  it("shows the three blocks at once, with no tabs; Your audio starts with a short empty state", async () => {
     await started();
-    expect(shown("create")).toBe(true);
-    expect(shown("listen")).toBe(false);
-    $<HTMLButtonElement>("tab-listen").click();
+    expect(document.querySelector("[role=tablist], [role=tab], [role=tabpanel]")).toBeNull();
+    const headings = [...document.querySelectorAll("section > h2, section > .card-head > h2")].map((h) => h.textContent?.trim());
+    expect(headings).toEqual(["English transcript", "Translate to", "Your audio Earlier result"]);
+    // The video row sits between the transcript and the two start times.
+    const order = ["transcript", "video-box", "first-start", "last-start", "target-language", "speed", "generate", "player-section"].map($);
+    for (let i = 1; i < order.length; i += 1) {
+      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect($("video-heading").textContent).toBe("Video");
     expect($("listen-empty").hidden).toBe(false);
     expect($("result-section").hidden).toBe(true);
     expect($("player-section").hidden).toBe(true);
-    $<HTMLButtonElement>("go-create").click();
-    expect(tabs.active).toBe("create");
-    expect(document.activeElement).toBe($("tab-create"));
+    expect($("result-details").hidden).toBe(true);
   });
 
-  it("an accepted Generate shows Listen with that job, without playing it", async () => {
+  it("the seven speeds are radio buttons: one is checked, the choice is saved and sent", async () => {
+    const { api } = await started();
+    const radios = [...$("speed").querySelectorAll<HTMLInputElement>("input[type=radio]")];
+    expect(radios.map((r) => r.parentElement?.textContent)).toEqual(["0.5x", "0.75x", "1x", "1.25x", "1.5x", "1.75x", "2x"]);
+    expect(radios.filter((r) => r.checked).map((r) => r.value)).toEqual(["1"]);
+    choose("speed", "1.75");
+    expect(chosenSpeed()).toBe("1.75");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect((api.createJob.mock.calls[0] as [string, { speed: number }])[1].speed).toBe(1.75);
+  });
+
+  it("an accepted Generate shows the job under Your audio without playing it; focus stays on Generate", async () => {
     let answer!: (value: unknown) => void;
     const api = fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) });
     await started(undefined, api);
     choose("speed", "1.5");
-    $<HTMLButtonElement>("generate").focus();
     $<HTMLButtonElement>("generate").click();
     await settle();
-    // Not before the server answered.
-    expect(tabs.active).toBe("create");
     answer(job("queued"));
     await settle(12);
-    expect(tabs.active).toBe("listen");
-    expect(document.activeElement).toBe($("tab-listen"));
+    expect(document.activeElement).toBe($("generate"));
     expect($("listen-empty").hidden).toBe(true);
+    expect($("result-section").hidden).toBe(false);
     expect($("job-choices").textContent).toContain("1.5x");
     expect(player.opened).toHaveLength(1);
     expect(player.commands).toEqual([]);
     expect(player.view?.paused).toBe(true);
   });
 
-  it("a validation error brings back the form with the field to fix focused", async () => {
-    let refuse!: (reason: unknown) => void;
+  it("a validation error focuses the field to fix and marks it", async () => {
     const refusal = new MyDubbError(422, "validation_error", "Fix the times.", [
       { field: "last_sentence_start", message: "Must be after the first." },
     ]);
-    const { storage } = await started(undefined, fakeApi({ createJob: vi.fn(() => new Promise((_, reject) => (refuse = reject))) }));
+    const { storage } = await started(undefined, fakeApi({ createJob: vi.fn(async () => Promise.reject(refusal)) }));
     $<HTMLButtonElement>("generate").click();
     await settle();
-    // The user looks at Listen while the request is on its way.
-    $<HTMLButtonElement>("tab-listen").click();
-    refuse(refusal);
-    await settle();
-    expect(tabs.active).toBe("create");
     expect(document.activeElement).toBe($("last-start"));
     expect($("last-start").getAttribute("aria-invalid")).toBe("true");
     expect($("first-start").hasAttribute("aria-invalid")).toBe(false);
+    expect($("last-start-error").textContent).toBe("Must be after the first.");
     expect($("form-error").textContent).toBe("Fix the times.");
     expect($("listen-empty").hidden).toBe(false);
     expect(storage.data[`job:${TAB}`]).toBeUndefined();
   });
 
-  it("a refusal without a field still returns to the form, focus on its tab", async () => {
+  it("a refused speed focuses the chosen speed; a refusal without a field keeps focus on Generate", async () => {
+    const speed = new MyDubbError(422, "validation_error", "Check the speed.", [{ field: "speed", message: "Not offered." }]);
     const busy = new MyDubbError(503, "server_at_capacity", "Busy.");
-    let refuse!: (reason: unknown) => void;
-    await started(undefined, fakeApi({ createJob: vi.fn(() => new Promise((_, reject) => (refuse = reject))) }));
+    await started(undefined, fakeApi({ createJob: vi.fn().mockRejectedValueOnce(speed).mockRejectedValueOnce(busy) }));
+    choose("speed", "0.75");
     $<HTMLButtonElement>("generate").click();
     await settle();
-    $<HTMLButtonElement>("tab-listen").click();
-    // Focus somewhere in the job card shown on Listen meanwhile.
-    $("job-status").tabIndex = -1;
-    $("job-status").focus();
-    expect(document.activeElement).toBe($("job-status"));
-    refuse(busy);
+    expect(document.activeElement).toBe($("speed").querySelector("input[value='0.75']"));
+    expect($("speed").getAttribute("aria-invalid")).toBe("true");
+    (document.activeElement as HTMLElement).blur();
+    $<HTMLButtonElement>("generate").click();
     await settle();
-    expect(tabs.active).toBe("create");
-    expect(document.activeElement).toBe($("tab-create"));
+    expect(document.activeElement).toBe($("generate"));
     expect($("form-error").textContent).not.toBe("");
   });
 
-  it("a job that completes while the user edits the form does not pull them away", async () => {
+  it("a job that completes while the user edits the form leaves the focus and the edit alone", async () => {
     let finish!: (value: unknown) => void;
     const { api } = await started(undefined, fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) }));
     $<HTMLButtonElement>("generate").click();
     await settle(6);
-    expect(tabs.active).toBe("listen");
-    // Back to the form to change the draft while the job runs.
-    $<HTMLButtonElement>("tab-create").click();
     $<HTMLInputElement>("first-start").focus();
     typeTime("first-start", "000005");
     finish(job("completed"));
     await settle(12);
     expect(api.getResult).toHaveBeenCalledTimes(1);
-    expect(tabs.active).toBe("create");
     expect(document.activeElement).toBe($("first-start"));
     expect($<HTMLInputElement>("first-start").value).toBe("00:00:05");
-    // Told by a badge with a word (not only a color), cleared once Listen is shown.
-    expect($("listen-badge").hidden).toBe(false);
-    expect($("listen-badge").textContent).toBe("New");
-    $<HTMLButtonElement>("tab-listen").click();
-    expect($("listen-badge").hidden).toBe(true);
     expect(player.opened).toHaveLength(1);
     expect(player.commands).toEqual([]);
   });
 
-  it("a failed job is flagged on Listen when the form is shown", async () => {
-    const failed = { ...job("failed"), error: { code: "speech_quota_exceeded", message: "The speech quota is used up." } };
-    let finish!: (value: unknown) => void;
-    await started(undefined, fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) }));
-    $<HTMLButtonElement>("generate").click();
-    await settle(6);
-    $<HTMLButtonElement>("tab-create").click();
-    finish(failed);
-    await settle(6);
-    expect(tabs.active).toBe("create");
-    expect($("listen-badge").textContent).toBe("Error");
-    expect($("job-error").textContent).toBe("The job failed: The speech quota is used up.");
-  });
-
-  it("switching tabs keeps the draft, the job, the playback and Sync, and sends nothing", async () => {
-    const { api, storage } = await started();
+  it("editing the form and scrolling while the audio plays with Sync on sends nothing to the player or MyDubb", async () => {
+    const { api } = await started();
     typeTime("first-start", "000010");
     typeTime("last-start", "000610");
-    choose("voice", "EmmaMultilingual");
     $<HTMLButtonElement>("generate").click();
     await settle(12);
     player.set({ ...player.view!, paused: false, currentTime: 42, sync: SYNC_ON });
-    await new Promise((resolve) => setTimeout(resolve, 300)); // the form edits above are saved (250 ms debounce)
     const requests = () => Object.values(api).reduce((n, fn) => n + fn.mock.calls.length, 0);
     const before = requests();
-    const writes = storage.set.mock.calls.length;
-    for (let i = 0; i < 4; i += 1) {
-      $<HTMLButtonElement>(i % 2 ? "tab-listen" : "tab-create").click();
-      await settle();
-    }
+    typeTime("last-start", "000700");
+    choose("speed", "2");
+    choose("voice", "EmmaMultilingual");
+    window.dispatchEvent(new Event("scroll"));
+    await settle();
     expect(requests()).toBe(before);
-    expect(storage.set.mock.calls.length).toBe(writes);
     expect(player.ended).toEqual([]);
     expect(player.commands).toEqual([]);
     expect(player.syncs).toEqual([]);
     expect(player.view).toMatchObject({ paused: false, currentTime: 42 });
-    expect($<HTMLInputElement>("first-start").value).toBe("00:00:10");
-    expect($<HTMLSelectElement>("voice").value).toBe("EmmaMultilingual");
-    expect($("translation").textContent).toBe("<b>نص</b>");
-    expect($("player-time").textContent).toBe("0:42 / 3:00");
+    expect(playerTime()).toBe("0:42 / 3:00");
+    expect($("sync-toggle").getAttribute("aria-pressed")).toBe("true");
+    // What the loaded audio was made with does not follow the form.
+    expect($("player-info").textContent).toContain("1x");
   });
 
-  it("a reopened panel with a followed job opens on Listen; one without opens on the form", async () => {
+  it("the translation is shown before Play, in its language and direction, as text", async () => {
+    await started();
+    choose("target-language", "arabic");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    const translation = $("translation");
+    expect(translation.closest("details")).toBeNull();
+    expect(translation.compareDocumentPosition($("player-play")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect($("translation-heading").textContent).toBe("Translation · Arabic");
+    expect(translation.textContent).toBe("<b>نص</b>");
+    expect(translation.children).toHaveLength(0);
+    expect(translation.dir).toBe("rtl");
+    expect(translation.lang).toBe("ar");
+  });
+
+  it("a reopened panel with a followed job restores it without sending anything", async () => {
     const record: JobRecord = {
       operationId: "op-1",
       userId: "u1",
@@ -1188,17 +1222,12 @@ describe("Create audio and Listen tabs", () => {
     };
     const { api } = await started(fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record }));
     await settle(10);
-    expect(tabs.active).toBe("listen");
-    expect($("listen-badge").hidden).toBe(true);
+    expect($("listen-empty").hidden).toBe(true);
+    expect($("result-section").hidden).toBe(false);
     expect(api.createJob).not.toHaveBeenCalled();
-
-    tabs = new Tabs();
-    tabs.select("create");
-    await started();
-    expect(tabs.active).toBe("create");
   });
 
-  it("changing the account empties Listen and says why there", async () => {
+  it("changing the account empties Your audio and says why there", async () => {
     const { dubbing } = await started();
     $<HTMLButtonElement>("generate").click();
     await settle(12);
