@@ -105,7 +105,9 @@ player on the lecture page alike.
    span and MP3 length, paused at its beginning, Sync OFF, the video paused at its start. The
    translation and facts shown always belong to the audio in the player (from that audio's own
    session, never from the form; the panel keeps the loaded audio's translation for the tab, so it
-   is still there after reopening). If the new job fails or its MP3 cannot be downloaded, the
+   is still there after reopening, for the same account, connection and lecture only; it is removed
+   with Disconnect, an ended connection, another account or another lecture, with or without a job
+   record, and a late storage write of an older copy cannot bring it back). If the new job fails or its MP3 cannot be downloaded, the
    earlier audio and its translation stay, the error is shown, and **Load audio** retries the
    download without a new job (nothing is generated again by itself). Reopening the panel on the
    same audio is not a new load: position, playback, Sync and the video are left alone. The video

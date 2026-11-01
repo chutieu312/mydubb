@@ -237,3 +237,44 @@ test("opening the panel with a new timestamped selection is not undone by the st
   await panel.waitForTimeout(500);
   await expect(panel.getByLabel("First sentence starts")).toHaveValue("00:00:01");
 });
+
+test("a refused new Generate keeps the earlier audio and its stored translation; Disconnect then removes the translation", async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  const { page, tabId } = await openLecture(context, worker, 307);
+  const panel = await openPanel(context, extensionId, tabId);
+  await sendTranscriptSelection(page, worker, tabId);
+  await connectAccount(panel, mydubb, extensionId);
+  await fillTimes(panel);
+  mydubb.translations["job-1"] = "Bản dịch của âm thanh đầu tiên";
+  await panel.getByRole("button", { name: "Generate audio" }).click();
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  const loaded = await sessionGet(worker, `loaded:${tabId}`);
+  expect(loaded).toMatchObject({ jobId: "job-1", text: "Bản dịch của âm thanh đầu tiên", lessonKey: "demo-course/307" });
+
+  // Clear empties the draft only: the loaded audio and its stored translation stay.
+  await panel.getByRole("button", { name: "Clear" }).click();
+  await expect(panel.locator("#transcript")).toHaveValue("");
+  expect(await sessionGet(worker, `loaded:${tabId}`)).toEqual(loaded);
+  expect((await playerSessions(worker)).map((s) => s.tabId)).toEqual([tabId]);
+  await expect(panel.locator("#translation")).toHaveText("Bản dịch của âm thanh đầu tiên");
+  await sendTranscriptSelection(page, worker, tabId);
+  await expect(panel.locator("#transcript")).not.toHaveValue("");
+
+  // The server refuses the second Generate: no new job, no job record, and nothing earlier is lost.
+  mydubb.createAnswers.push(422);
+  await panel.getByRole("button", { name: "Generate audio" }).click();
+  await expect(panel.locator("#last-start")).toHaveAttribute("aria-invalid", "true");
+  await expect.poll(() => sessionGet(worker, `job:${tabId}`)).toBeNull();
+  expect((await playerSessions(worker)).map((s) => s.tabId)).toEqual([tabId]);
+  await expect(panel.locator("#translation")).toHaveText("Bản dịch của âm thanh đầu tiên");
+  expect(await sessionGet(worker, `loaded:${tabId}`)).toEqual(loaded);
+
+  // Disconnect: the audio and the stored translation go although there is no job record.
+  await disconnect(panel);
+  await expect.poll(() => playerSessions(worker)).toEqual([]);
+  await expect.poll(() => sessionGet(worker, `loaded:${tabId}`)).toBeNull();
+});

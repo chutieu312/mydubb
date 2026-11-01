@@ -111,11 +111,13 @@ investigation, or to follow the law]`.
 - The **audio** (kept in memory only) is discarded when a newer result replaces it, when you move
   to another lecture, reload or leave the lecture page, or close the tab, and when you
   **Disconnect** or connect another account.
-- The saved **translation** of the loaded audio is removed when a newer result replaces it, when
-  you move to another lecture, **Disconnect** or connect another account (in the normal case that
-  the tab still has its job record), when you close the tab (everything the extension saved for
-  that tab goes), and when the browser quits (session memory is cleared). Reloading the page keeps
-  it.
+- The saved **translation** of the loaded audio is removed when a newer result has loaded and
+  replaces it, when you move to another lecture or off the lecture pages, when you **Disconnect**
+  or the connection ends or expires, when another account connects, when you close the tab
+  (everything the extension saved for that tab goes), and when the browser quits (session memory is
+  cleared). It does not matter whether a job is still being followed. A request that MyDubb
+  refuses, or a job or download that fails, does not remove the earlier audio or its translation.
+  Reloading the page keeps the saved translation.
 - Uninstalling the extension removes everything it stored in your browser.
 - Translations and audio disappear from the server on their own (see above).
 - To ask about your account or job records: `[PO: how to ask, what the operator will do and
