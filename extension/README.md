@@ -1,4 +1,4 @@
-# MyDubb Chrome extension (prototype)
+# MyDubb Chrome extension
 
 On a Udemy lecture: select transcript text → right-click → **Send to MyDubb** → the text appears in
 a side panel. There you can edit it, control the lecture video (Play/Pause, −5 s/+5 s, time),
@@ -7,9 +7,13 @@ audio**, follow the job, read the translation and listen to the MP3, in the pane
 **floating player** on the lecture page that keeps playing when the panel is closed. With **Sync
 with video** on, the MyDubb audio and the Udemy video play, pause and seek together.
 
-This is a **prototype**, installed only with Developer mode → Load unpacked; it is not on the Chrome
-Web Store. Nothing is sent to MyDubb until you choose **Generate audio** (apart from loading the
-public list of languages and voices, and the sign-in when you choose **Connect MyDubb**). Guests
+The extension is **prepared for the Chrome Web Store but not published**: today it is installed
+only with Developer mode → Load unpacked ([store/](store/README.md) holds the release preparation).
+Your transcript text and choices are sent to MyDubb only when you choose **Generate audio**. Some
+other requests happen without a click and carry no text: loading the public list of languages and
+voices when the panel opens, checking a stored sign-in, and, for a job started earlier in the tab,
+asking for its status, its translation and its audio file (see
+[store/PRIVACY-AUDIT.md](store/PRIVACY-AUDIT.md)); **Connect MyDubb** opens the sign-in. Guests
 ("Try as guest") cannot use the extension.
 
 ## Build and install
@@ -32,6 +36,10 @@ The MyDubb server is fixed at build time and becomes the extension's only host p
    Tabs that were open before the extension was installed or reloaded need a page reload.
 
 After a rebuild, click the reload icon on the extension card, then reload the Udemy tab.
+
+`npm run build` writes only `extension/dist/` (without a `key`, so the ID stays path-derived);
+the Chrome Web Store build goes to `dist-release/` and the upload ZIP to `release/`, so building the
+Store package never overwrites `dist/` (if Chrome loads `dist/`, only `npm run build` changes it).
 
 **The server must allow this extension ID** (`EXTENSION_IDS`, see
 [docs/EXTENSION_AUTH.md](../docs/EXTENSION_AUTH.md)). An unpacked extension's ID depends on the
@@ -102,7 +110,9 @@ player on the lecture page alike.
    span and MP3 length, paused at its beginning, Sync OFF, the video paused at its start. The
    translation and facts shown always belong to the audio in the player (from that audio's own
    session, never from the form; the panel keeps the loaded audio's translation for the tab, so it
-   is still there after reopening). If the new job fails or its MP3 cannot be downloaded, the
+   is still there after reopening, for the same account, connection and lecture only; it is removed
+   with Disconnect, an ended connection, another account or another lecture, with or without a job
+   record, and a late storage write of an older copy cannot bring it back). If the new job fails or its MP3 cannot be downloaded, the
    earlier audio and its translation stay, the error is shown, and **Load audio** retries the
    download without a new job (nothing is generated again by itself). Reopening the panel on the
    same audio is not a new load: position, playback, Sync and the video are left alone. The video
@@ -122,7 +132,7 @@ player on the lecture page alike.
    an account change stops the audio and removes the player. After a reload, **Load audio** in the
    panel downloads the same result again (it never creates a job).
 
-The toolbar button **Open MyDubb Prototype** opens the panel for the current tab without a selection.
+The toolbar button **Open MyDubb** opens the panel for the current tab without a selection.
 If the panel could not be opened from the menu, the button shows a **!** badge; click it.
 
 Note: Play/Seek act on the real Udemy video and may update your watch progress. With Sync on, the
@@ -367,8 +377,12 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   echoes vs user actions, end of span, a page resetting the rate on play/playing/seek, a tug of war
   (bounded), the restore limit per window, a speed picked right after Play, late rate events across
   off/on) and the hub (two tabs, Close, ending sessions).
-- `npm run check:dist`: `dist/` has no test hook or test server and exactly the documented
-  permissions.
+- `npm run check:dist`: `dist/` has no test hook or test server, exactly the documented
+  permissions, only the known files, the four icons (PNG, right size) and **no `key`**. The Chrome
+  Web Store release mode (`npm run build:release`, `check:dist:release`, `package:draft`,
+  `package:release`, written in [store/STABLE-ID.md](store/STABLE-ID.md)) is separate: it builds
+  `dist-release/`, never `dist/`. `npm test` also runs the node tests of that tooling
+  (`store/tools/release.test.mjs`).
 - `npm run test:browser`: the real extension in Playwright's Chromium against **synthetic fixture
   pages** served for `https://www.udemy.com/...` and a **fake MyDubb server** for
   `https://mydubb.test` (udemy.com and mydubb.com are never contacted; other requests are aborted).
@@ -464,7 +478,7 @@ use the Azure free allowance.
    and speed back). Note anything Udemy's player does that the fixture does not (its own seeks on
    load, speed menu, buffering).
 
-## Limits (prototype)
+## Limits
 
 - Udemy lecture pages only; quizzes/articles show "no video". Video inside an iframe is not supported.
 - When the content script cannot be reached (e.g. inside an iframe) the selection falls back to

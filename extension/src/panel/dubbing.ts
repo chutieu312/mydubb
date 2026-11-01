@@ -321,6 +321,30 @@ function isTranslationText(value: unknown): value is TranslationText {
   );
 }
 
+/**
+ * The stored copy of the translation of the audio in the player: the translation plus whose it is
+ * (account, connection and lecture), so a reopened panel can tell it is still the right one.
+ */
+interface LoadedRecord extends TranslationText {
+  userId: string;
+  connectionId: string;
+  lessonKey: string;
+}
+
+type LoadedOwner = Pick<LoadedRecord, "userId" | "connectionId" | "lessonKey">;
+
+function isLoadedRecord(value: unknown): value is LoadedRecord {
+  if (!isTranslationText(value)) return false;
+  const v = value as unknown as Record<string, unknown>;
+  return typeof v.userId === "string" && typeof v.connectionId === "string" && typeof v.lessonKey === "string";
+}
+
+/** Same rule as for a job record: another account or connection never; an unknown lecture is decided later. */
+function loadedBelongs(loaded: LoadedRecord, account: { userId: string; connectionId: string } | null, lessonKey: string | null | undefined): boolean {
+  if (!account || loaded.userId !== account.userId || loaded.connectionId !== account.connectionId) return false;
+  return lessonKey === undefined || loaded.lessonKey === lessonKey;
+}
+
 export class Dubbing {
   private readonly ui = dubbingUi();
   private meta: AppMeta | null = null;
@@ -347,8 +371,13 @@ export class Dubbing {
     translation: TranslationText;
   } | null = null;
   // The translation of the audio last loaded into the player: an earlier result stays readable
-  // while a newer one waits for Use new audio (also after the panel is reopened).
-  private loaded: TranslationText | null = null;
+  // while a newer one loads (also after the panel is reopened), as long as the account, connection
+  // and lecture it was made for are still the tab's. Its stored copy (loaded:<tab>) is written and
+  // removed one operation at a time; an operation that a newer one has superseded never runs, so a
+  // late write cannot bring back what was removed or overwrite what came after.
+  private loaded: LoadedRecord | null = null;
+  private loadedVersion = 0;
+  private loadedStore: Promise<void> = Promise.resolve();
   private audioLoad: AbortController | null = null;
   private loadingAudio = false;
   // The session the content script was last asked to link, and whether one was shown.
@@ -412,7 +441,8 @@ export class Dubbing {
     if (isFormRecord(form) && this.formEdits === 0) this.form = form;
     this.applyAuth(stored[AUTH_KEY], false);
     const loaded = stored[loadedKey(this.deps.tabId)];
-    if (isTranslationText(loaded)) this.loaded = loaded;
+    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), this.host.currentLesson())) this.loaded = loaded;
+    else if (loaded !== undefined) this.clearLoaded(); // another owner, an older shape or no account
     const record = stored[jobKey(this.deps.tabId)];
     if (isJobRecord(record) && recordBelongs(record, this.account(), this.host.currentLesson())) {
       this.record = record;
@@ -480,6 +510,8 @@ export class Dubbing {
     if (this.record && !recordBelongs(this.record, this.account(), key)) {
       this.dropJob(LESSON_CHANGED);
     }
+    // The translation of the loaded audio goes with its lecture, with or without a job record.
+    if (this.loaded && !loadedBelongs(this.loaded, this.account(), key)) this.clearLoaded();
     this.checkPlayer();
     if (this.form.lessonKey !== key) {
       // The times belong to the transcript of one lecture; the language, voice and speed stay.
@@ -528,6 +560,9 @@ export class Dubbing {
     this.auth = next;
     // Another account (or none): nothing of the previous one may stay on screen or keep playing.
     if (this.record) this.dropJob(fromChange && hadAuth ? ACCOUNT_CHANGED : null);
+    // Also when no job record is left (a refused Generate): the translation is the old account's.
+    // Not while restoring, which has still to decide about the stored copy.
+    if (this.restored) this.clearLoaded();
     if (hadAuth) this.deps.player.end();
     this.checkPlayer();
     this.setFieldErrors([]);
@@ -790,7 +825,7 @@ export class Dubbing {
     ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null;
     ui.generate.textContent = this.sendingOp !== null ? "Sending…" : "Generate audio";
     ui.generateHint.textContent = this.auth
-      ? "Nothing is sent to MyDubb until you choose Generate audio."
+      ? "Your text is sent to MyDubb only when you choose Generate audio."
       : "Connect MyDubb (top of the panel) to generate audio.";
   }
 
@@ -1079,7 +1114,9 @@ export class Dubbing {
     if (!current()) return;
     const view = this.sessionView();
     if (view?.owner.jobId === jobId) {
-      this.rememberLoaded(this.resultAudio.translation);
+      if (typeof record.lessonKey === "string") {
+        this.rememberLoaded(this.resultAudio.translation, { userId: auth.user.id, connectionId: auth.connectionId, lessonKey: record.lessonKey });
+      }
       this.ui.audioStatus.textContent = AUDIO_READY;
       this.checkPlayer();
       return;
@@ -1181,7 +1218,7 @@ export class Dubbing {
             : "The audio player could not start. Choose Load audio to try again (no new job is created).";
         return;
       }
-      this.rememberLoaded(target.translation);
+      this.rememberLoaded(target.translation, { userId: auth.user.id, connectionId: auth.connectionId, lessonKey });
       ui.audioStatus.textContent = AUDIO_READY;
       void this.placeVideo(target.record, lessonKey, current);
     } finally {
@@ -1212,10 +1249,28 @@ export class Dubbing {
   }
 
   /** The translation of the audio now in the player, kept for this tab. */
-  private rememberLoaded(text: TranslationText): void {
-    if (this.loaded?.jobId === text.jobId && this.loaded.text === text.text) return;
-    this.loaded = text;
-    void this.deps.storage.set({ [loadedKey(this.deps.tabId)]: text });
+  private rememberLoaded(text: TranslationText, owner: LoadedOwner): void {
+    const same = this.loaded;
+    if (same && same.jobId === text.jobId && same.text === text.text && same.userId === owner.userId && same.connectionId === owner.connectionId && same.lessonKey === owner.lessonKey) return;
+    this.loaded = { ...text, ...owner };
+    this.storeLoaded(this.loaded);
+  }
+
+  /** Forgets the translation of the loaded audio, in memory and in storage. */
+  private clearLoaded(): void {
+    this.loaded = null;
+    this.storeLoaded(null);
+  }
+
+  /** Queues the stored copy's next state; an operation a newer one superseded is skipped. */
+  private storeLoaded(value: LoadedRecord | null): void {
+    const version = (this.loadedVersion += 1);
+    const key = loadedKey(this.deps.tabId);
+    const run = this.loadedStore.then(async () => {
+      if (version !== this.loadedVersion) return;
+      await (value ? this.deps.storage.set({ [key]: value }) : this.deps.storage.remove(key));
+    });
+    this.loadedStore = run.catch(() => undefined);
   }
 
   /** Load audio: the same download again (and the video placed again), never a new job. */
@@ -1427,8 +1482,7 @@ export class Dubbing {
     this.resultAudio = null;
     if (endPlayback) {
       this.deps.player.end();
-      this.loaded = null;
-      void this.deps.storage.remove(loadedKey(this.deps.tabId));
+      this.clearLoaded();
     }
     if (this.record) void this.forgetRecord();
     this.record = null;

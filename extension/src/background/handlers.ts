@@ -53,7 +53,7 @@ function markOpenFailure(api: WorkerApi, tabId: number): void {
 
 function clearOpenFailure(api: WorkerApi, tabId: number): void {
   void api.action.setBadgeText({ tabId, text: "" }).catch(() => undefined);
-  void api.action.setTitle({ tabId, title: "Open MyDubb Prototype" }).catch(() => undefined);
+  void api.action.setTitle({ tabId, title: "Open MyDubb" }).catch(() => undefined);
 }
 
 function isUdemyUrl(url: string | undefined): boolean {
