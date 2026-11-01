@@ -676,6 +676,13 @@ The Chrome extension pull request adds migration `0011` (column
 every deploy built before it is no longer a supported Render rollback target; check with
 `docker/rollback-target-check.sh <commit> 0011`. Turning the extension off is a configuration
 change (remove `EXTENSION_IDS`), not a code rollback ([EXTENSION_AUTH.md](EXTENSION_AUTH.md)).
+The admin role pull request adds migration `0012_user_roles` (column
+`users.role varchar(10) NOT NULL DEFAULT 'user'` with a CHECK, and the table `user_role_events`;
+expand-only, every account stays `user` and older code ignores both). Once it is deployed, every
+deploy built before it is no longer a supported Render rollback target; check with
+`docker/rollback-target-check.sh <commit> 0012_user_roles`. Taking admin access away is a tool
+command (`revoke-admin`, [AUTHENTICATION.md](AUTHENTICATION.md#administrators)), not a code
+rollback.
 
 **Before rolling back** (read-only checks):
 

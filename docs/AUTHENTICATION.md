@@ -305,6 +305,83 @@ Render-generated value can stay for a quick rollback.
   verified). An administrator can also use **Reset password** in the console (then also
   `revoke-sessions`, see the limits above).
 
+## Administrators
+
+MyDubb's own `admin` role. It has nothing to do with AWS or Cognito permissions: an administrator of
+the AWS account is not a MyDubb administrator, and the reverse. Nothing in Cognito or its groups is
+read or changed.
+
+- **Stored** in `users.role` (`user`, the default, or `admin`, with a CHECK), attached to the MyDubb
+  user id, which follows Cognito's `sub`. The email is only for looking up and confirming: a
+  Cognito user deleted and created again with the same email is a new MyDubb user with the role
+  `user`.
+- **Who gets it:** only the people named with the tool below. There is no automatic grant (first
+  account, email domain, sign-in claim, client data), and no API writes the role: sign-in refreshes
+  the profile only and leaves the role alone.
+- **Checked on the server** by `require_admin` (and `require_admin_csrf` for state-changing calls,
+  in `app/dependencies.py`), for every endpoint added under `app/admin/`. The role is read from the
+  user row by each request, in the same query that validates the session, and is never cached or
+  sent in a cookie. So a revoked role, a disabled user and an expired or revoked session are all
+  refused from the next request on.
+- **Answers:** `401 not_authenticated` without a valid website session, which includes a guest, a
+  disabled user, and any request with an `Authorization` header whatever its cookies are (an
+  extension token never reaches administration).
+  `403 admin_required` for a signed-in ordinary user. State-changing calls also get the usual
+  `403 csrf_failed` and `403 origin_rejected`. Administration exists only with `AUTH_MODE=cognito`:
+  an Access Code session has no user and no role.
+- **What it does not change:** quotas, Generate, job ownership (another user's job stays `404`),
+  guest and extension behaviour. `GET /api/auth/me` and the sign-in responses do not show the role.
+
+### Granting and revoking
+
+Run the tool from your machine, like the other commands above. It never asks for or prints a
+password, a token or the connection string. Use the code of the deployed version: before migration
+`0012_user_roles` has run, it stops with `database operation failed (ProgrammingError)`.
+
+```bash
+cd backend
+read -rs DATABASE_URL && export DATABASE_URL     # Neon direct connection string, no echo
+
+# 1. Find the account. Check the email, the state and the last sign-in on the row, and copy the id.
+uv run python -m scripts.auth_users lookup first@example.com
+uv run python -m scripts.auth_users lookup second@example.com
+
+# 2. Grant to one id at a time; the email must be that id's current email.
+uv run python -m scripts.auth_users grant-admin <id-of-first> --confirm-email first@example.com
+uv run python -m scripts.auth_users grant-admin <id-of-second> --confirm-email second@example.com
+
+# 3. Check who is an administrator, and one user's role with its recorded changes.
+uv run python -m scripts.auth_users list --role admin
+uv run python -m scripts.auth_users role <id-of-first>
+
+# To take it back (no email needed, also works on a disabled user):
+uv run python -m scripts.auth_users revoke-admin <id-of-first>
+
+unset DATABASE_URL
+```
+
+- `lookup` answering `no user has this email`: MyDubb creates a user row at the first sign-in, so
+  sign in once on the website, then look again. If it lists several accounts, choose by id.
+- Changes apply from that user's next request; nobody needs to sign in again, and revoking does not
+  sign anyone out (use `revoke-sessions` or `disable` for that).
+- To verify, sign in on the website with that account and open `/api/admin/session`:
+  `{"role":"admin"}` for an administrator, `403 admin_required` otherwise.
+- `grant-admin` refuses a disabled user. `disable` does not clear the role, and `enable` prints the
+  role that comes back: run `revoke-admin` first if it should not.
+- Each command takes exactly one id and never an email; there is no bulk option. Repeating a command
+  changes nothing and records nothing.
+
+**Trail.** Each change writes a row in `user_role_events` in the same transaction (user id, old and
+new role, database time, `changed_by`), shown by `role`. It holds no email and has no foreign key,
+so it outlives the account. `changed_by` is `auth_users:<login name on the machine that ran the
+tool>`: a trace, not an authenticated identity, since whoever holds `DATABASE_URL` can do anything.
+Editing `users.role` with SQL would leave no trail, so don't. Rows are never cleaned up.
+
+**Limits.** No web UI or list of users; `/api/admin/session` is the only endpoint so far. Disabling a
+user only in Cognito leaves their MyDubb session, and so their admin access, until it expires (see
+"Disabling a user"): use `revoke-admin` or MyDubb's `disable`. An administrator request already in
+progress when the role is revoked finishes.
+
 ## Testing
 
 **Automated (CI, no AWS):** `tests/fake_cognito.py` stands in for the user pool.
@@ -320,6 +397,9 @@ check administrator revocation against sign-ins in flight and the lease fencing 
 after Cognito succeeded, process interrupted, no answer from Cognito, unrecorded rejection), wrong
 codes, a sign-in racing an unrecorded reset, lease operations and the client's response deadline.
 Each fix was also checked by disabling it and seeing its tests fail.
+`tests/test_admin_role.py` covers the admin role: user, administrator, guest and Access Code
+session, expired and revoked sessions, disabled users, revoking while signed in, forged role
+values on every state-changing endpoint, extension tokens, the tool and migration `0012_user_roles`.
 
 **Local run in Cognito mode** (needs a real test user pool; never the production pool): put the
 variables above in `backend/.env` with `AUTH_MODE=cognito`, start the backend as in the README and
@@ -359,6 +439,9 @@ merged, the AWS setup above done, the live check passed.
   `0006` are supported Render rollback targets; older images need the emergency path
   (`RUN_MIGRATIONS_ON_START=false`), which was rehearsed (see DEPLOYMENT.md). Older code never reads
   the new tables, so it cannot accept a Cognito session.
+- Migration `0012_user_roles` (`users.role`, `user_role_events`) is expand-only: code from before
+  it ignores both, and its new users read as `user`. Once deployed, older images are not supported
+  Render rollback targets (same rule). `alembic downgrade` drops the grants and their trail.
 - The tables can stay after a rollback; nothing needs to be deleted.
 
 ## Limits of this version

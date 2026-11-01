@@ -45,7 +45,7 @@ only that token counts (cookies are ignored, no fallback); it needs no `X-CSRF-T
 validation, errors and responses are the account's, unchanged. The origin
 `chrome-extension://<listed id>` is accepted only for `POST /api/extension/token` and, with a
 bearer token, `POST /api/jobs` and `POST /api/extension/logout`. The token is not accepted by any
-other endpoint (account, guest, YouTube import).
+other endpoint (account, guest, YouTube import, administration).
 
 **Body size**: state-changing requests above `MAX_REQUEST_BODY_BYTES` (default 10 MB) get
 `413 request_too_large`; chunked bodies without `Content-Length` get `411 length_required`.

@@ -22,6 +22,9 @@ class Principal:
     Chrome extension: `bearer` is True, `session_id` is a `user_sessions` row issued to the
     extension and the `user` owns jobs. Resolved only by the job endpoints and the extension's own
     endpoints, from the Authorization header (never from a cookie).
+
+    `is_admin` is read from the user row by each request, and only for a website session: a guest,
+    an extension token or an Access Code session is never an administrator.
     """
 
     session_id: uuid.UUID
@@ -30,6 +33,7 @@ class Principal:
     user: UserProfile | None = None
     guest: bool = False
     bearer: bool = False
+    is_admin: bool = False
 
     @property
     def user_id(self) -> uuid.UUID | None:
