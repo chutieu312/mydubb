@@ -65,10 +65,19 @@ mode accepts only the one recorded key, never "any key". Tests: `store/tools/rel
    If not, stop: the key is wrong or from another item.
 6. Only then create `store/release-key.json` with the two verified values and commit it (a public
    key and an ID are not secrets).
-7. `npm run build:release && npm run check:dist:release && npm run package:release`.
+7. **Raise the version before the next build and upload.** The draft in step 3 used the version
+   in `extension/static/manifest.json` at that time (0.4.0). The next package for the **same
+   Store item** (this keyed one, and every later one) must have a **higher** `version` than the
+   last one uploaded, or the dashboard refuses it. Edit `"version"` in
+   `extension/static/manifest.json` (for example `0.4.1`) **before** step 8; the build copies it
+   and the ZIP name carries it. This version has **not** been raised yet: it is a step for the
+   preparation of the next upload, and it applies again to every further upload (including a
+   re-upload after a fix or a rejection). Commit the change with the package it belongs to.
+8. `npm run build:release && npm run check:dist:release && npm run package:release`.
    Load `dist-release/` unpacked **in a separate Chrome profile** and compare its ID in
-   `chrome://extensions` with the Item ID. Upload the ZIP (higher `version`) as the next draft.
-8. **PO**: add the Item ID to `EXTENSION_IDS` on Render (below). Not done by Claude.
+   `chrome://extensions` with the Item ID. Upload the ZIP (the raised `version`) to the same
+   item as the next draft.
+9. **PO**: add the Item ID to `EXTENSION_IDS` on Render (below). Not done by Claude.
 
 Until step 6 is done, `package:release` and `check:dist:release` fail with
 "verified release key: store/release-key.json does not exist" and the package is a **draft**, not

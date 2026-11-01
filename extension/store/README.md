@@ -48,7 +48,7 @@ A new result loads by itself; there is no "Use new audio" step and no tabs.
 4. Register the Chrome Web Store developer account (fee, verified e-mail) when ready. Then:
    `cd extension && npm ci && npm run build && npm run package:draft`, upload
    `release/mydubb-extension-0.4.0-draft.zip` in the dashboard as a **draft** (do not submit),
-   and send the Item ID and the public key from the Package tab (STABLE-ID.md steps 3–6).
+   and send the Item ID and the public key from the Package tab (STABLE-ID.md steps 3–6). The version is raised before the **next** upload (step 7), not for this first draft.
 5. Add the Item ID to `EXTENSION_IDS` on Render when ready (not done by this work).
 6. Choose the visibility (unlisted/private/public), and whether reviewers get a disposable
    invitation account and an accessible lecture.

@@ -70,7 +70,7 @@ npm ci
 npm run build              # dist/ (no key). Builds into dist/, not into any folder Chrome has loaded from elsewhere
 npm run check:dist
 npm run package:draft      # release/mydubb-extension-<version>-draft.zip  (first draft upload)
-# after STABLE-ID.md step 6 (verified key recorded):
+# after STABLE-ID.md step 6 (verified key recorded) and step 7 (raise the version):
 npm run build:release && npm run check:dist:release && npm run package:release
 ```
 
@@ -79,7 +79,9 @@ npm run build:release && npm run check:dist:release && npm run package:release
   `check:dist` refuses any other file, test hook, fixture or test host; `make-zip.mjs` also refuses
   `.map`, tests, `dist-test`, `.env`, key files and documents, then reads the ZIP back and compares
   every entry with the build. `release/` is git-ignored.
-- Version: `static/manifest.json` (0.4.0; each upload needs a higher one). Node ≥ 22, `npm ci`
+- Version: `static/manifest.json`, **0.4.0 today and for the first draft upload**. Every later upload
+  to the same Store item needs a higher one: raise `"version"` there **before** building the next
+  package (STABLE-ID.md step 7); it is not raised yet. Node ≥ 22, `npm ci`
   from the lockfile, esbuild 0.28.2; everything is bundled, so the ZIP has no runtime dependency
   and loads no remote code.
 - **Chrome's loaded folder:** this tooling writes only inside the worktree's `extension/dist`,

@@ -105,7 +105,17 @@ investigation, or to follow the law]`.
 ## Ending it and removing data
 
 - **Disconnect** in the extension removes the token from your browser and ends it on the server.
-- **Clear**, closing the Udemy tab, or quitting the browser removes the text and the translation from the extension.
+- **Clear** empties the transcript text in the panel and removes the saved draft and any selection
+  waiting to be shown. It does **not** remove the translation or the audio already loaded in the
+  player, the job being followed or your start times.
+- The **audio** (kept in memory only) is discarded when a newer result replaces it, when you move
+  to another lecture, reload or leave the lecture page, or close the tab, and when you
+  **Disconnect** or connect another account.
+- The saved **translation** of the loaded audio is removed when a newer result replaces it, when
+  you move to another lecture, **Disconnect** or connect another account (in the normal case that
+  the tab still has its job record), when you close the tab (everything the extension saved for
+  that tab goes), and when the browser quits (session memory is cleared). Reloading the page keeps
+  it.
 - Uninstalling the extension removes everything it stored in your browser.
 - Translations and audio disappear from the server on their own (see above).
 - To ask about your account or job records: `[PO: how to ask, what the operator will do and
