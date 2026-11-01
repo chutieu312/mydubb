@@ -395,14 +395,43 @@ CI run for merge commit `86c6ca4` (run 41353266464) reports Render deployment
 `mydubb` (auto-deploy off), and the following production smoke check passed (health ok, ready with
 database ok, providers azure/azure/ffmpeg, mock_mode false). The earlier merge `0c7a0b0` (PR #48)
 was also reported live (run 41347929701, 20:47 UTC). `86c6ca4` contains PR #48 and #49.
-Migration `0020`: the container entrypoint runs `alembic upgrade head` and exits on failure
-(default `RUN_MIGRATIONS_ON_START=true`; the value set on Render was not readable), so a deployment
-that went live with a ready database implies the migration ran. This is inference, **not** direct
-evidence: neither the Render logs, `alembic_version` nor the existence of the two usage tables
-was seen. Render and Neon dashboards, production metrics and the production usage report were not
-accessible, so plan, CPU/memory, restarts, spin-downs, Neon active/idle hours, CU-hours, storage and
-real job usage are **unverified** (see section 5 for what to read).
+Migration `0020`: see "Dashboard evidence" below; the CI log alone only implies it.
 
-**Production usage:** no access; no number reported. Jobs created before the deploy have no usage
-rows by design. Until real jobs after the deploy are counted (`usage_report`, read-only, UTC), the
-conclusion is "not enough data"; synthetic data must not stand in for it.
+### Dashboard evidence (read by the Product Owner, 2026-11-01)
+
+Reported by the Product Owner from the Render and Neon dashboards and a read-only SQL editor, in
+the browser's time zone (the deploy times match UTC-8 against the CI log). Not independently
+checked by Claude; no secrets or account data were shared. **[M, reported]**
+
+- **Render, service `mydubb`:** `dep-dbjr8a7f3r2c73ctu3k0` Live, commit `86c6ca4` (1:50 PM start,
+  1:51 PM live; matches the CI log). Plan **Free**, memory limit 512 MB, dashboard warns that a free
+  instance spins down with inactivity. Log line `Running upgrade 0012_user_roles -> 0020, per-job
+  usage records` at 12:46:39 PM, in deploy `dep-dbjqa50u01pc7387k8kg` (commit `0c7a0b0`, PR #48);
+  later deploys stayed at `0020`, so the migration ran once, before `86c6ca4`. No CPU/memory graphs
+  (Application Metrics are not shown on Free; absent is not zero). Network out: about 27 MB in the
+  month. The Events filter for restart/OOM was **not** opened, so restarts/OOM are unverified.
+- **Neon, project `mydubb`** (AWS US West 2): Free plan, 1 GB storage, 100 compute hours,
+  autoscaling 0.25-2 CU, autosuspend fixed at 5 minutes (not configurable on Free). Usage since
+  1 Nov: **4.13 CU-hours**, storage 0.03 GB. Monitoring graphs need a paid plan, so no 7-day
+  active/idle graph. System operations (last 100 events, 30 Oct 6:28 AM to 1 Nov 3:10 PM, about 2.4
+  days): suspend and start **15 / 15** on 30 Oct (from 6:28), **20 / 20** on 31 Oct, **15 / 15** on
+  1 Nov (to 3:10 PM), for example suspended 8:06 AM, started 8:21 AM; suspended 1:07 PM, started
+  1:26 PM. Compute was running again from 3:10 PM.
+- **Production DB:** both usage tables exist (`job_usage`, `job_usage_attempts`) and
+  `alembic_version` is `0020`. Migration `0020` is therefore **verified**.
+
+What this changes: the local result "a running app issues a statement at least every 15 s, so Neon
+cannot suspend" still holds **for an app that is running**. Production shows many real suspends
+(15-20 a day), so Neon is not kept awake all day. The likely reason is Render Free spinning the
+instance down after inactivity (which stops the 15 s loop), but suspend times were not matched
+against Render spin-down events, so this is a hypothesis, not a finding. Neon 4.13 CU-hours in
+the first part of 1 Nov is a measured account figure; it must not be extrapolated to a month
+or to paid plans (the 730 h x 0.25 CU model above is for an always-running compute and does
+not describe this account today). When a paid Render instance that does not spin down is
+used, the 15 s loop is expected to keep Neon awake.
+
+**Production usage:** the usage tables exist and are at revision `0020`. The usage report itself
+(job counts, real vs mock, actual/estimated/unknown) was **not** run, so there is no usage figure
+yet; jobs created before the deploy have no usage rows by design. Until real jobs after the deploy
+are counted with the read-only `usage_report` (UTC), the conclusion is "not enough data";
+synthetic data must not stand in for it.
