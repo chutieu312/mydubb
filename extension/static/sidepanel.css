@@ -8,6 +8,7 @@
   --accent-fg: #ffffff;
   --error: #b3261e;
   --panel: #f5f6f8;
+  --gap: 12px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,27 +33,114 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow-wrap: anywhere;
 }
 
 main {
-  padding: 12px 16px 24px;
+  padding: 10px 14px 24px;
   display: grid;
-  gap: 16px;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---- Header -------------------------------------------------------------------------------- */
+
+header {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 h1 {
   font-size: 18px;
   margin: 0;
+  flex: none;
 }
+
+.account {
+  margin: 0;
+  color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lesson {
+  margin: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+header .row:not(:has(button:not([hidden]))) {
+  display: none;
+}
+
+/* ---- Tabs ---------------------------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  gap: 4px;
+}
+
+[role="tab"] {
+  flex: 1 1 0;
+  min-width: 0;
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  padding: 8px 6px 6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+[role="tab"][aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+  background: var(--panel);
+}
+
+.tabpanel {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+/* ---- Common -------------------------------------------------------------------------------- */
 
 h2 {
   font-size: 14px;
   margin: 0 0 6px;
 }
 
+h3 {
+  font-size: 13px;
+  margin: 10px 0 4px;
+}
+
 section {
+  min-width: 0;
+}
+
+section + section {
   border-top: 1px solid var(--border);
-  padding-top: 12px;
+  padding-top: var(--gap);
 }
 
 .hint {
@@ -60,9 +148,12 @@ section {
   margin: 4px 0 8px;
 }
 
+.hint:empty {
+  display: none;
+}
+
 .status {
   margin: 6px 0;
-  min-height: 1.45em;
 }
 
 .error {
@@ -70,14 +161,28 @@ section {
   margin: 6px 0 0;
 }
 
+/* Errors are told apart by a marker as well as by color. */
+.error:not(:empty)::before {
+  content: "⚠ ";
+}
+
 .error:empty,
-.status:empty {
+.status:empty,
+.notice:empty {
   display: none;
+}
+
+.notice {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+  border-radius: 0 6px 6px 0;
 }
 
 .link {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 2px 10px;
   margin: 0;
 }
@@ -117,6 +222,7 @@ button {
   background: var(--panel);
   color: inherit;
   cursor: pointer;
+  max-width: 100%;
 }
 
 button:disabled {
@@ -124,10 +230,7 @@ button:disabled {
   cursor: not-allowed;
 }
 
-#playpause,
-#player-play,
-#confirm-replace,
-#generate {
+button.primary {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
@@ -157,21 +260,53 @@ button:disabled {
   margin: 4px 0;
 }
 
-h3 {
-  font-size: 13px;
-  margin: 12px 0 4px;
+/* ---- Expandable groups --------------------------------------------------------------------- */
+
+details.more {
+  margin-top: 8px;
+  min-width: 0;
 }
+
+details.more > summary {
+  cursor: pointer;
+  color: var(--muted);
+  width: fit-content;
+  max-width: 100%;
+}
+
+details.more[open] > summary {
+  margin-bottom: 6px;
+}
+
+details.more > p {
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+
+#video-group {
+  border-top: 1px solid var(--border);
+  padding-top: var(--gap);
+  margin-top: 0;
+}
+
+/* ---- Create audio -------------------------------------------------------------------------- */
 
 .fields {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 
-.fields label,
-section > label {
+.fields label {
   display: block;
   margin-top: 6px;
   color: var(--muted);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0 8px;
 }
 
 input,
@@ -183,6 +318,11 @@ select {
   border-radius: 6px;
   padding: 5px 8px;
   width: 100%;
+  min-width: 0;
+}
+
+[aria-invalid="true"] {
+  border-color: var(--error);
 }
 
 input[type="checkbox"] {
@@ -195,8 +335,16 @@ input[type="checkbox"] {
   align-items: center;
 }
 
-.timing p {
-  margin: 0 0 6px;
+/* ---- Listen -------------------------------------------------------------------------------- */
+
+.empty {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.empty p {
+  margin: 0 0 8px;
 }
 
 input.seek {
@@ -204,12 +352,13 @@ input.seek {
   border: none;
   background: transparent;
   accent-color: var(--accent);
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 .translation {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  user-select: text;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -220,6 +369,10 @@ input.seek {
 
 #notices {
   padding-left: 18px;
+}
+
+#result-durations {
+  margin-top: 6px;
 }
 
 .callout {
@@ -236,16 +389,21 @@ input.seek {
   overflow-wrap: anywhere;
 }
 
-.loaded-head {
-  margin: 0 0 4px;
+.callout .link {
+  margin-bottom: 8px;
+}
+
+.sync {
+  margin-top: 8px;
 }
 
 .badge {
   display: inline-block;
   margin-left: 6px;
-  padding: 1px 8px;
+  padding: 0 8px;
   border: 1px solid var(--accent);
   border-radius: 10px;
   font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }

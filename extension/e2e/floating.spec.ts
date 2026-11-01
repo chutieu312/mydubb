@@ -9,6 +9,7 @@ import type { BrowserContext, Page, Worker } from "@playwright/test";
 
 import {
   connectAccount,
+  disconnect,
   expect,
   fillTimes,
   hasPlayerDocument,
@@ -231,7 +232,7 @@ test("a lecture change, a reload or closing the tab ends the session", async ({ 
   await expect(floating(b.page)).toHaveCount(0);
   // The open panel offers to load the same result again (a download, never a new job).
   await expect(b.panel.getByText(/player was released/)).toBeVisible();
-  await expect(b.panel.getByText("Connected to the lecture tab.")).toBeVisible();
+  await expect(b.panel.locator("#link-detail")).toHaveText("Connected to the lecture tab.");
   await b.panel.getByRole("button", { name: "Load audio" }).click();
   await expect(b.panel.getByText(READY)).toBeVisible();
   await expect.poll(async () => (await sessionOf(worker, b.tabId))?.paused).toBe(true);
@@ -280,7 +281,7 @@ test("disconnecting ends every tab's playback, also where the panel is closed", 
 
   const b = await openLecture(context, worker, 608);
   const panelB = await openPanel(context, extensionId, b.tabId);
-  await panelB.getByRole("button", { name: "Disconnect" }).click();
+  await disconnect(panelB);
   await expect.poll(() => sessionOf(worker, a.tabId)).toBeNull();
   await expect(floating(a.page)).toHaveCount(0);
 
@@ -322,7 +323,7 @@ test("a stopped service worker neither stops nor duplicates the playback", async
   let otherTab = -1;
   await expect.poll(async () => (otherTab = await tabIdFor(probe as unknown as Worker, "demo-course/609").catch(() => -1))).toBeGreaterThan(-1);
   const otherPanel = await openPanel(context, extensionId, otherTab);
-  await otherPanel.getByRole("button", { name: "Disconnect" }).click();
+  await disconnect(otherPanel);
   await expect(floating(page)).toHaveCount(0);
   await expect.poll(() => playerSessions(otherPanel)).toEqual([]);
 });

@@ -43,6 +43,7 @@ import {
   type JobRecord,
 } from "./jobs";
 import type { PanelPlayer } from "./player";
+import type { TabRequests } from "./tabs";
 
 /** The form fields of a tab, kept with the lecture they were filled for. */
 export interface FormRecord {
@@ -85,13 +86,14 @@ export function isFormRecord(value: unknown): value is FormRecord {
   );
 }
 
-const FIELD_IDS: Record<string, string> = {
-  transcript: "transcript-error",
-  first_sentence_start: "first-start-error",
-  last_sentence_start: "last-start-error",
-  target_language: "target-language-error",
-  voice: "voice-error",
-  speed: "speed-error",
+// A field the server can refuse: where its message goes and the control to focus, in form order.
+const FIELDS: Record<string, { error: string; input: string }> = {
+  transcript: { error: "transcript-error", input: "transcript" },
+  first_sentence_start: { error: "first-start-error", input: "first-start" },
+  last_sentence_start: { error: "last-start-error", input: "last-start" },
+  target_language: { error: "target-language-error", input: "target-language" },
+  voice: { error: "voice-error", input: "voice" },
+  speed: { error: "speed-error", input: "speed" },
 };
 const SAVE_DEBOUNCE_MS = 250;
 const LESSON_CHANGED =
@@ -165,7 +167,7 @@ export interface DubbingDeps {
   player: PanelPlayer;
 }
 
-export interface DubbingHost {
+export interface DubbingHost extends TabRequests {
   /** The lecture now shown in the tab; undefined until the tab reported a state. */
   currentLesson(): CurrentLesson;
   /** The transcript as the panel's text box holds it. */
@@ -183,6 +185,7 @@ function byId<T extends HTMLElement>(id: string): T {
 function dubbingUi() {
   return {
     accountStatus: byId("account-status"),
+    accountDetail: byId("account-detail"),
     accountError: byId("account-error"),
     connect: byId<HTMLButtonElement>("connect"),
     disconnect: byId<HTMLButtonElement>("disconnect"),
@@ -200,15 +203,22 @@ function dubbingUi() {
     voice: byId<HTMLSelectElement>("voice"),
     speed: byId<HTMLSelectElement>("speed"),
     lengthSummary: byId("length-summary"),
+    lengthNote: byId("length-note"),
+    timingNote: byId("timing-note"),
     disclosure: byId("disclosure"),
     formError: byId("form-error"),
     generate: byId<HTMLButtonElement>("generate"),
+    generateHint: byId("generate-hint"),
+    listenEmpty: byId("listen-empty"),
+    listenNotice: byId("listen-notice"),
     resultSection: byId("result-section"),
     jobStatus: byId("job-status"),
     jobError: byId("job-error"),
     checkAgain: byId<HTMLButtonElement>("check-again"),
     jobChoices: byId("job-choices"),
     result: byId("result"),
+    resultText: byId("result-text"),
+    resultDetailsLabel: byId("result-details-label"),
     audioStatus: byId("audio-status"),
     playerSection: byId("player-section"),
     player: byId("player"),
@@ -226,6 +236,7 @@ function dubbingUi() {
     playerSwitch: byId<HTMLButtonElement>("player-switch"),
     resultUsing: byId("result-using"),
     playerLoad: byId<HTMLButtonElement>("player-load"),
+    playerEmpty: byId("player-empty"),
     syncStatus: byId("sync-status"),
     syncToggle: byId<HTMLButtonElement>("sync-toggle"),
     syncConfirm: byId("sync-confirm"),
@@ -348,8 +359,10 @@ export class Dubbing {
     if (isJobRecord(record) && recordBelongs(record, this.account(), this.host.currentLesson())) {
       this.record = record;
       this.renderRecord();
-      if (record.state === "created") this.follow(record);
-      else this.setJobError(UNKNOWN_OUTCOME);
+      if (record.state === "created") {
+        this.host.jobRestored();
+        this.follow(record);
+      } else this.showUnknownOutcome();
     } else if (isJobRecord(record)) {
       void this.forgetRecord(record.operationId);
     } else if (record !== undefined) {
@@ -519,7 +532,7 @@ export class Dubbing {
     // Every panel forgets the token first; then the server is asked to end it.
     await this.deps.storage.remove(AUTH_KEY);
     this.applyAuth(null, false);
-    this.ui.accountStatus.textContent = "Disconnected from MyDubb.";
+    this.ui.accountStatus.textContent = "Disconnected";
     try {
       await this.deps.api.logout(auth.token);
     } catch {
@@ -537,12 +550,15 @@ export class Dubbing {
     ui.disconnect.hidden = auth === null;
     if (auth) {
       const name = auth.user.display_name;
-      ui.accountStatus.textContent = `Connected as ${name ? `${name} (${auth.user.email})` : auth.user.email}.`;
-    } else if (this.connecting) {
-      ui.accountStatus.textContent = "Sign in to MyDubb in the window that opened.";
-    } else if (ui.accountStatus.textContent !== "Disconnected from MyDubb.") {
-      ui.accountStatus.textContent =
-        "Not connected. Connect your MyDubb invitation account to generate audio (sign-in happens on mydubb.com).";
+      ui.accountStatus.textContent = `Connected as ${name || auth.user.email}`;
+      ui.accountStatus.title = auth.user.email;
+      ui.accountDetail.textContent = name ? `${name} (${auth.user.email})` : auth.user.email;
+    } else {
+      ui.accountStatus.removeAttribute("title");
+      ui.accountDetail.textContent =
+        "MyDubb invitation accounts only; sign-in happens on mydubb.com.";
+      if (this.connecting) ui.accountStatus.textContent = "Signing in…";
+      else if (ui.accountStatus.textContent !== "Disconnected") ui.accountStatus.textContent = "Not connected";
     }
     this.renderGenerate();
   }
@@ -655,30 +671,28 @@ export class Dubbing {
     const ignore = this.form.ignoreTimestamps;
     ui.timing.hidden = timing.kind === "none";
     ui.timingOverride.hidden = true;
+    ui.timingNote.hidden = true;
     ui.ignoreTimestamps.parentElement!.hidden = timing.kind === "cues";
     if (timing.kind === "none") return;
     if (timing.kind === "cues") {
-      ui.timingText.textContent =
-        "SRT/WebVTT timing is not used yet: this transcript is processed as plain text with the two start times below.";
+      ui.timingText.textContent = "SRT/WebVTT timing is not used yet: processed as plain text with the two start times.";
       return;
     }
     if (timing.kind === "invalid") {
       ui.timingText.textContent = ignore
-        ? "The timestamps are ignored: the transcript is processed as plain text."
-        : `The timestamps cannot be used. ${timing.message} Fix them, or process the transcript as plain text.`;
+        ? "Timestamps ignored: processed as plain text."
+        : `The timestamps cannot be used. ${timing.message} Fix them, or ignore them.`;
       return;
     }
     if (ignore) {
-      ui.timingText.textContent = "Timestamps detected but ignored: the whole audio is fitted to the two start times.";
+      ui.timingText.textContent = "Timestamps ignored: the audio is fitted to the two start times.";
       return;
     }
     const fields = fieldsFromCaptions(timing);
+    ui.timingNote.hidden = false;
     ui.timingText.textContent =
       `Timestamps detected: ${timing.captions} captions from ${captionClock(timing.first)} to ${captionClock(timing.last)}. ` +
-      (fields
-        ? "The start times below are filled from the first and last caption (whole seconds). "
-        : "They start within the same second, so the start times below cannot be filled: enter them. ") +
-      "Timing follows the captions and is estimated: some sentences may be grouped together or start slightly off their caption time.";
+      (fields ? "Start times filled from the captions." : "They start in the same second: enter the start times.");
     if (fields && (this.form.firstStart !== fields.first || this.form.lastStart !== fields.last)) {
       const baseline = previewTargetDuration(this.form.firstStart, this.form.lastStart);
       ui.timingOverrideText.textContent = `You changed the start times${
@@ -692,8 +706,8 @@ export class Dubbing {
     const baseline = previewTargetDuration(this.form.firstStart, this.form.lastStart);
     const speed = this.form.speed;
     if (baseline === null) {
-      this.ui.lengthSummary.textContent =
-        "Expected audio length: — (enter both start times; the last must be after the first).";
+      this.ui.lengthSummary.textContent = "Expected audio length: — (enter both start times, the last after the first).";
+      this.ui.lengthNote.textContent = "";
       return;
     }
     const output = formatClock(previewOutputSeconds(baseline, speed));
@@ -701,13 +715,17 @@ export class Dubbing {
       speed === DEFAULT_SPEED
         ? "It matches the time between your two start times."
         : `At ${speedLabel(speed)} the audio is ${speed > DEFAULT_SPEED ? "shorter" : "longer"} than the time between the two start times.`;
-    this.ui.lengthSummary.textContent = `Expected audio length: ${output} (${formatSeconds(baseline)} at 1x). ${relation} Estimate only; MyDubb calculates the final length.`;
+    this.ui.lengthSummary.textContent = `Expected audio length: ${output} (${formatSeconds(baseline)} at 1x).`;
+    this.ui.lengthNote.textContent = `${relation} Estimate only; MyDubb calculates the final length.`;
   }
 
   private renderGenerate(): void {
     const ui = this.ui;
     ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null;
     ui.generate.textContent = this.sendingOp !== null ? "Sending…" : "Generate audio";
+    ui.generateHint.textContent = this.auth
+      ? "Nothing is sent to MyDubb until you choose Generate audio."
+      : "Connect MyDubb (top of the panel) to generate audio.";
   }
 
   private scheduleSave(): void {
@@ -724,12 +742,17 @@ export class Dubbing {
     void this.deps.storage.set({ [formKey(this.deps.tabId)]: this.form });
   }
 
-  private setFieldErrors(fields: { field: string; message: string }[]): void {
-    for (const id of Object.values(FIELD_IDS)) byId(id).textContent = "";
-    for (const f of fields) {
-      const id = FIELD_IDS[f.field];
-      if (id) byId(id).textContent = f.message;
+  /** Shows the server's field messages; returns the first refused control (form order), if any. */
+  private setFieldErrors(fields: { field: string; message: string }[]): string | null {
+    let first: string | null = null;
+    for (const [name, ids] of Object.entries(FIELDS)) {
+      const message = fields.find((f) => f.field === name)?.message ?? "";
+      byId(ids.error).textContent = message;
+      if (message) byId(ids.input).setAttribute("aria-invalid", "true");
+      else byId(ids.input).removeAttribute("aria-invalid");
+      if (message && first === null) first = ids.input;
     }
+    return first;
   }
 
   // ---- Generate ------------------------------------------------------------------------------
@@ -794,6 +817,7 @@ export class Dubbing {
     this.dropJob(null, false);
     this.record = record;
     this.sendingOp = record.operationId;
+    ui.listenNotice.textContent = "";
     this.renderGenerate();
     this.renderRecord();
     ui.jobStatus.textContent = "Sending to MyDubb…";
@@ -818,6 +842,9 @@ export class Dubbing {
     try {
       job = await this.deps.api.createJob(auth.token, body, SEND_TIMEOUT_MS);
     } catch (error) {
+      // Unlocked first, so a refused field or the button can take the focus.
+      if (this.sendingOp === record.operationId) this.sendingOp = null;
+      this.renderGenerate();
       if (current()) this.sendFailed(error, auth);
       return;
     } finally {
@@ -828,6 +855,8 @@ export class Dubbing {
     if (!current()) return;
     const created: JobRecord = { ...record, state: "created", jobId: job.id };
     this.record = created;
+    // The server accepted this click: its progress is on Listen (nothing plays by itself).
+    this.host.jobAccepted();
     await this.saveRecord(created);
     // Checked again after the write: a newer click or a lecture/account change owns the panel now.
     if (!current()) return;
@@ -838,19 +867,30 @@ export class Dubbing {
   private sendFailed(error: unknown, auth: StoredAuth): void {
     if (error instanceof MyDubbError && NO_ANSWER.has(error.code)) {
       // Never sent again automatically: the job may exist.
-      this.ui.jobStatus.textContent = "";
-      this.setJobError(UNKNOWN_OUTCOME);
+      this.showUnknownOutcome();
       return;
     }
     // The server refused it: no job was created.
     void this.forgetRecord();
-    this.ui.resultSection.hidden = true;
+    this.record = null;
+    this.renderRecord();
     if (error instanceof MyDubbError && error.isUnauthenticated) {
       void this.expireAuth(auth);
       return;
     }
-    if (error instanceof MyDubbError) this.setFieldErrors(error.fields);
+    const field = error instanceof MyDubbError ? this.setFieldErrors(error.fields) : null;
     this.ui.formError.textContent = jobErrorMessage(error);
+    this.host.requestRefused(field);
+  }
+
+  /**
+   * No answer to a Generate click: said beside the form (the click's place), and the record stays
+   * so a reopened panel says it again. Nothing is resent.
+   */
+  private showUnknownOutcome(): void {
+    this.ui.formError.textContent = UNKNOWN_OUTCOME;
+    this.ui.jobStatus.textContent = "No answer from MyDubb: unknown whether this job was created.";
+    this.setJobError("");
   }
 
   // ---- Following a job -----------------------------------------------------------------------
@@ -957,6 +997,9 @@ export class Dubbing {
     ui.resultSection.hidden = record === null;
     ui.jobChoices.replaceChildren();
     ui.result.hidden = true;
+    ui.resultText.hidden = true;
+    ui.resultDetailsLabel.textContent = "Job details";
+    this.renderListen();
     if (!record) return;
     const c = record.choices;
     addPair(ui.jobChoices, "Translate to", c.languageLabel);
@@ -969,6 +1012,9 @@ export class Dubbing {
   private renderResult(result: JobResult): void {
     const ui = this.ui;
     ui.result.hidden = false;
+    ui.resultText.hidden = false;
+    ui.resultDetailsLabel.textContent = "Translation & details";
+    this.host.listenAttention("ready");
     ui.durations.replaceChildren();
     addPair(ui.durations, "Language", result.target_language_label ?? jobLanguage(result, this.languages).label);
     addPair(ui.durations, "Baseline (1x)", formatClock(result.baseline_duration_seconds));
@@ -1178,6 +1224,7 @@ export class Dubbing {
     const result = this.resultAudio;
     ui.playerSection.hidden = !view && !result;
     ui.player.hidden = !view;
+    ui.playerEmpty.hidden = !!view;
     if (view) {
       const playing = !view.paused && !view.ended;
       const ready = view.status === "ready";
@@ -1228,6 +1275,12 @@ export class Dubbing {
       addPair(ui.resultSwitchInfo, "MP3 length", result.mp3Seconds === null ? "Not reported" : `${result.mp3Seconds.toFixed(3)} s`);
     }
     ui.playerLoad.hidden = !result || busy || (!!view && (other || view.status !== "error"));
+    this.renderListen();
+  }
+
+  /** Listen without a job, a result or loaded audio: a short empty state instead of idle controls. */
+  private renderListen(): void {
+    this.ui.listenEmpty.hidden = this.record !== null || this.resultAudio !== null || this.sessionView() !== null;
   }
 
   private renderSync(view: PanelPlayerView): void {
@@ -1272,10 +1325,8 @@ export class Dubbing {
     this.renderRecord();
     this.renderGenerate();
     this.renderPlayer();
-    if (message) {
-      ui.resultSection.hidden = true;
-      ui.formError.textContent = message;
-    }
+    // Why the job and its audio went away is said where they were shown.
+    if (message) ui.listenNotice.textContent = message;
     this.setJobError("");
   }
 
@@ -1306,5 +1357,6 @@ export class Dubbing {
 
   private setJobError(text: string): void {
     this.ui.jobError.textContent = text;
+    if (text) this.host.listenAttention("error");
   }
 }

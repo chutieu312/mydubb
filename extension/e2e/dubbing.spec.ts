@@ -5,6 +5,7 @@
 import {
   MYDUBB,
   connectAccount,
+  disconnect,
   expect,
   fillTimes,
   openLecture,
@@ -12,7 +13,9 @@ import {
   playerSessions,
   sendTranscriptSelection,
   sessionGet,
+  showTab,
   test,
+  videoControls,
 } from "./harness";
 
 test("connect, generate with the chosen options and listen in the panel", async ({ context, worker, extensionId, mydubb }) => {
@@ -41,7 +44,12 @@ test("connect, generate with the chosen options and listen in the panel", async 
   await expect(panel.locator("#length-summary")).toContainText("00:04:00");
   await panel.getByRole("button", { name: "Generate audio" }).click();
 
+  // Accepted: Listen shows the job; the form, with its values, is one tab away.
+  await expect(panel.getByRole("tab", { name: "Listen" })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByRole("tab", { name: "Listen" })).toBeFocused();
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  await expect(panel.getByLabel("Audio speed")).toBeHidden();
+  await expect(panel.getByLabel("Audio speed")).toHaveValue("1.5");
   const [post] = mydubb.posts("/api/jobs");
   expect(post?.body).toEqual({
     transcript: `${expected}\nEdited in the panel.`,
@@ -72,6 +80,7 @@ test("connect, generate with the chosen options and listen in the panel", async 
   expect(audioGet?.headers.authorization).toBe(`Bearer ${auth.token}`);
 
   // Story 1 controls still drive the Udemy video, separately from the MyDubb player.
+  await videoControls(panel);
   await panel.getByRole("button", { name: "Play video" }).click();
   await expect.poll(() => page.evaluate(() => window.fixture.state()!.paused)).toBe(false);
   expect((await playerSessions(worker))[0]?.paused).toBe(true);
@@ -94,10 +103,12 @@ test("closing the panel neither cancels nor resends; reopening and reloading res
   await panel.close();
 
   // Closing the panel did not cancel anything (there is no cancel call) and nothing was resent.
+  // Reopened, it shows the job it follows on Listen.
   panel = await openPanel(context, extensionId, tabId);
   await expect(panel.getByText("Queued…")).toBeVisible();
+  await expect(panel.getByRole("tab", { name: "Listen" })).toHaveAttribute("aria-selected", "true");
   await page.reload();
-  await expect(panel.getByText("Connected to the lecture tab.")).toBeVisible();
+  await expect(panel.locator("#link-detail")).toHaveText("Connected to the lecture tab.");
   mydubb.complete("job-1");
   mydubb.advance = true;
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible({ timeout: 20_000 });
@@ -108,6 +119,7 @@ test("closing the panel neither cancels nor resends; reopening and reloading res
   const cdp = await context.newCDPSession(panel);
   await cdp.send("ServiceWorker.enable");
   await cdp.send("ServiceWorker.stopAllWorkers");
+  await showTab(panel, "Create audio");
   await panel.getByLabel("Audio speed").selectOption("2");
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.locator("#job-choices")).toContainText("2x");
@@ -138,7 +150,9 @@ test("a request without an answer is never resent and is reported as unknown", a
   await fillTimes(panel);
   mydubb.createAnswers = ["drop"];
   await panel.getByRole("button", { name: "Generate audio" }).dblclick();
+  // Said beside the Generate button (no confirmation came, so the form stays shown).
   await expect(panel.getByText(/not known whether the job was created/)).toBeVisible();
+  await expect(panel.getByRole("tab", { name: "Create audio" })).toHaveAttribute("aria-selected", "true");
   expect(mydubb.posts("/api/jobs")).toHaveLength(1);
   panel = await openPanel(context, extensionId, tabId);
   await expect(panel.getByText(/not known whether the job was created/)).toBeVisible();
@@ -159,7 +173,7 @@ test("a job of lecture A is never shown under lecture B, nor in another tab", as
   await sendTranscriptSelection(a.page, worker, a.tabId);
   await connectAccount(panelA, mydubb, extensionId);
   // Both panels share the connection, not the job.
-  await expect(panelB.getByText("Connected as Lan (lan@example.com).")).toBeVisible();
+  await expect(panelB.locator("#account-status")).toHaveText("Connected as Lan");
   await fillTimes(panelA);
   mydubb.advance = false;
   await panelA.getByRole("button", { name: "Generate audio" }).click();
@@ -190,20 +204,21 @@ test("disconnecting or an ended session clears every panel and its result", asyn
   await panelA.getByRole("button", { name: "Generate audio" }).click();
   await expect(panelA.getByText("Ready. Press play when you want to listen.")).toBeVisible();
 
-  await panelB.getByRole("button", { name: "Disconnect" }).click();
+  await disconnect(panelB);
   await expect(panelA.getByRole("button", { name: "Connect MyDubb" })).toBeVisible();
   await expect(panelA.locator("#result-section")).toBeHidden();
   await expect.poll(() => playerSessions(worker)).toEqual([]);
-  await expect(panelA.getByRole("button", { name: "Generate audio" })).toBeDisabled();
+  await expect(panelA.getByRole("button", { name: "Generate audio", includeHidden: true })).toBeDisabled();
   expect(await sessionGet(worker, "auth")).toBeNull();
   await expect.poll(() => mydubb.posts("/api/extension/logout").length).toBe(1);
   // The draft is the user's selection from Udemy, not account data: it stays.
-  await expect(panelA.getByRole("textbox", { name: "Transcript selection" })).not.toHaveValue("");
+  await expect(panelA.locator("#transcript")).not.toHaveValue("");
 
   // Connected again, the server ends the session meanwhile: the panel asks to connect again.
   await connectAccount(panelA, mydubb, extensionId);
   mydubb.revokeAll();
   mydubb.advance = false;
+  await showTab(panelA, "Create audio");
   await panelA.getByRole("button", { name: "Generate audio" }).click();
   await expect(panelA.getByText(/connection ended/)).toBeVisible();
   expect(await sessionGet(worker, "auth")).toBeNull();

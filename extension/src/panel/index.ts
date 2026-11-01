@@ -30,6 +30,7 @@ import {
 } from "./draft";
 import { Dubbing } from "./dubbing";
 import { PlayerLink } from "./player";
+import { Tabs } from "./tabs";
 
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
@@ -56,7 +57,9 @@ function byId<T extends HTMLElement>(id: string): T {
 const ui = {
   tabLabel: byId("tab-label"),
   lessonLabel: byId("lesson-label"),
+  lessonDetail: byId("lesson-detail"),
   linkStatus: byId("link-status"),
+  linkDetail: byId("link-detail"),
   reconnect: byId<HTMLButtonElement>("reconnect"),
   transcript: byId<HTMLTextAreaElement>("transcript"),
   clear: byId<HTMLButtonElement>("clear"),
@@ -95,7 +98,10 @@ class Panel {
   private readonly dubbing: Dubbing;
   private readonly audioChannel = new BroadcastChannel(AUDIO_CHANNEL);
 
-  constructor(private readonly tabId: number) {
+  constructor(
+    private readonly tabId: number,
+    private readonly tabs: Tabs,
+  ) {
     const player = new PlayerLink({
       tabId,
       hasDocument: () => chrome.offscreen.hasDocument(),
@@ -122,6 +128,10 @@ class Panel {
         currentLesson: () => this.currentLesson(),
         transcript: () => ui.transcript.value,
         linkPlayback: (lessonKey) => this.linkPlayback(lessonKey),
+        jobAccepted: () => tabs.jobAccepted(),
+        requestRefused: (focusId) => tabs.requestRefused(focusId),
+        jobRestored: () => tabs.jobRestored(),
+        listenAttention: (kind) => tabs.listenAttention(kind),
       },
     );
   }
@@ -261,7 +271,7 @@ class Panel {
     this.awaitingConfirm = null;
     ui.confirm.hidden = true;
     ui.reconnect.hidden = true;
-    ui.lessonLabel.textContent = "—";
+    this.setLesson("—", "—");
     this.setLinkStatus("The linked tab was closed. Open a Udemy lecture and send a selection to start again.");
     this.renderVideo();
     this.dubbing.tabClosed();
@@ -298,14 +308,17 @@ class Panel {
       prevKey === nextKey &&
       previous.video.id !== next.video.id
     ) {
-      this.setLinkStatus("The video player was replaced. Controls now follow the new video.");
+      this.setLinkStatus("The video player was replaced. Controls now follow the new video.", true);
     } else if (!previous) {
-      this.setLinkStatus(next.lesson ? "Connected to the lecture tab." : "This tab is not a Udemy lecture page.");
+      this.setLinkStatus(next.lesson ? "Connected to the lecture tab." : "This tab is not a Udemy lecture page.", true);
     }
     ui.reconnect.hidden = true;
-    ui.lessonLabel.textContent = next.lesson
-      ? `${next.lesson.title || "Untitled lecture"} (lecture ${next.lesson.lectureId})`
-      : "Not a Udemy lecture page";
+    if (next.lesson) {
+      const title = next.lesson.title || "Untitled lecture";
+      this.setLesson(shortTitle(title), `${title} (lecture ${next.lesson.lectureId})`);
+    } else {
+      this.setLesson("Not a Udemy lecture page", "Not a Udemy lecture page");
+    }
     this.renderVideo();
     // After the draft decision above, so the form and the job follow the same lecture rule.
     this.dubbing.lessonState(nextKey);
@@ -394,8 +407,16 @@ class Panel {
     ui.videoError.textContent = text;
   }
 
-  private setLinkStatus(text: string): void {
-    ui.linkStatus.textContent = text;
+  /** The state of the link to the tab: shown in the header, or only under Details when all is well (`quiet`). */
+  private setLinkStatus(text: string, quiet = false): void {
+    ui.linkStatus.textContent = quiet ? "" : text;
+    ui.linkDetail.textContent = quiet ? text : "See the message above.";
+  }
+
+  private setLesson(short: string, full: string): void {
+    ui.lessonLabel.textContent = short;
+    ui.lessonLabel.title = full;
+    ui.lessonDetail.textContent = full;
   }
 
   // ---- Draft ----------------------------------------------------------------------------------
@@ -413,6 +434,8 @@ class Panel {
   private processPending(pending: PendingSelection): void {
     if (this.tabClosed) return;
     void chrome.storage.session.remove(pendingKey(this.tabId));
+    // Send to MyDubb is for the form: its text, message or confirmation is shown there.
+    this.tabs.selectionArrived();
     const decision = decidePending(this.draft, pending, this.currentLesson());
     switch (decision.action) {
       case "reject":
@@ -538,6 +561,14 @@ function launchAuthWindow(url: string): Promise<string | undefined> {
   return chrome.identity.launchWebAuthFlow({ url, interactive: true });
 }
 
+/** A Udemy page title without the course and site parts ("Lecture | Course | Udemy"). */
+function shortTitle(title: string): string {
+  const first = title.split(" | ")[0]?.trim();
+  return first || title;
+}
+
+const tabs = new Tabs();
+tabs.wire(new AbortController().signal);
 const tabId = parseTabId(location.search);
 if (tabId === null) {
   ui.linkStatus.textContent =
@@ -545,5 +576,5 @@ if (tabId === null) {
   ui.transcript.disabled = true;
   ui.clear.disabled = true;
 } else {
-  void new Panel(tabId).start();
+  void new Panel(tabId, tabs).start();
 }

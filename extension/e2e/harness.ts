@@ -157,6 +157,15 @@ export class FakeMyDubb {
     if (path === "/api/jobs" && request.method() === "POST") {
       const answer = this.createAnswers.shift() ?? "ok";
       if (answer === "drop") return route.abort("connectionreset");
+      if (answer === 422) {
+        return json(route, 422, {
+          error: {
+            code: "validation_error",
+            message: "Check the highlighted fields.",
+            fields: [{ field: "last_sentence_start", message: "Must be after the first sentence start time." }],
+          },
+        });
+      }
       if (typeof answer === "number") return apiError(route, answer, "server_at_capacity", "Busy.");
       const id = `job-${this.nextJob++}`;
       this.jobs.set(id, { id, body: body ?? {}, status: "queued", owner });
@@ -395,7 +404,31 @@ export async function allowConnect(panel: Page, mydubb: FakeMyDubb, extensionId:
 export async function connectAccount(panel: Page, mydubb: FakeMyDubb, extensionId: string) {
   await allowConnect(panel, mydubb, extensionId);
   await panel.getByRole("button", { name: "Connect MyDubb" }).click();
-  await expect(panel.getByText("Connected as Lan (lan@example.com).")).toBeVisible();
+  await expect(panel.locator("#account-status")).toHaveText("Connected as Lan");
+}
+
+/** One of the panel's two tabs; switching only changes what is shown. */
+export async function showTab(panel: Page, name: "Create audio" | "Listen") {
+  const tab = panel.getByRole("tab", { name });
+  await tab.click();
+  await expect(tab).toHaveAttribute("aria-selected", "true");
+}
+
+async function openGroup(panel: Page, selector: string) {
+  const group = panel.locator(selector);
+  if (!(await group.evaluate((d) => (d as HTMLDetailsElement).open))) await group.locator("summary").first().click();
+}
+
+/** Story 1's Udemy video controls: a group at the end of Listen. */
+export async function videoControls(panel: Page) {
+  await showTab(panel, "Listen");
+  await openGroup(panel, "#video-group");
+}
+
+/** Disconnect sits under the header's Details. */
+export async function disconnect(panel: Page) {
+  await openGroup(panel, "#header-details");
+  await panel.getByRole("button", { name: "Disconnect" }).click();
 }
 
 export async function fillTimes(panel: Page) {

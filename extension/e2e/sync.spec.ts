@@ -8,11 +8,13 @@ import type { BrowserContext, Page, Worker } from "@playwright/test";
 
 import {
   connectAccount,
+  disconnect,
   expect,
   openLecture,
   openPanel,
   playerSessions,
   sendTranscriptSelection,
+  showTab,
   test,
   type FakeMyDubb,
 } from "./harness";
@@ -189,7 +191,9 @@ test("timed job with changed start times: V0/V1 from the captions, R differs fro
   await expect(panel.getByText(READY)).toBeVisible();
   expect(mydubb.posts("/api/jobs")[0]!.body).toMatchObject({ timing_mode: "timed", speed: 1.5, last_sentence_start: "00:00:56" });
   // Edited after Generate: the job's own span is used, never the form.
+  await showTab(panel, "Create audio");
   await panel.getByLabel("First Sentence Start Time").fill("000001");
+  await showTab(panel, "Listen");
   await panel.getByRole("button", { name: "Sync with video" }).click();
   await expect(panel.locator("#sync-preview")).toContainText(/Video 0:10\.250 → 0:40\.250 \(30 s\), MP3 30\.56\d? s, video speed 0\.98\dx\./);
   await panel.getByRole("button", { name: "Turn on sync" }).click();
@@ -323,7 +327,7 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
   await expect.poll(async () => (await video(page)).paused).toBe(true);
 
   // Disconnect: the session ends and the video gets its sound and rate back.
-  await panel.getByRole("button", { name: "Disconnect" }).click();
+  await disconnect(panel);
   await expect.poll(async () => (await video(page)).muted).toBe(false);
   expect(await video(page)).toMatchObject({ paused: true, rate: 1 });
   expect(await sessionOf(worker, tabId)).toBeNull();
