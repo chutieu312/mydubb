@@ -129,15 +129,19 @@ the MyDubb service, and a policy is required whenever user data is handled.
 
 ## 7. What the Product Owner must confirm or provide
 
-- Operator of MyDubb for the policy and the dashboard (an individual or an organisation): name,
-  and whether the dashboard publisher is trader or non-trader.
-- Support e-mail (verified by the dashboard) and a **contact for privacy questions**.
-- Where the policy is published (URL), its scope (extension only, or website too) and the
+- **Confirmed by the Product Owner (2026-11-01):** the operator is Can Nguyen; support and
+  privacy contact is support@mydubb.com; the policy is separate for the extension and the
+  requests it sends to MyDubb (the website gets its own).
+- Still open: whether the dashboard publisher is trader or non-trader; that the Chrome Web Store
+  account can verify support@mydubb.com as its contact e-mail (the dashboard verifies it; this
+  work cannot).
+- Where the policy is published (URL), the URL of the website policy it points to, and the
   homepage/support URL for the listing.
 - That the facts in §1 and §2 are true for production: result lifetime (code default 1 hour),
   no analytics, which website features are on (guest, YouTube import).
-- How a user asks for data to be deleted and what the operator will actually do (§2: no process
-  exists today). Whether to build the proposed 7-day job-metadata cleanup first. The policy must
-  say only what exists.
+- What the operator will actually do with a deletion request and within what time (§2: no process
+  exists today). Users are told only to write to support@mydubb.com; a proposed intake process is
+  in [DATA-REQUESTS.md](DATA-REQUESTS.md). Whether to build the proposed 7-day job-metadata
+  cleanup first. The policy must say only what exists.
 - Confirmation of the Microsoft Azure data handling the operator relies on (not verified here).
 - After reading the live dashboard labels: the final declarations, made on the facts above.

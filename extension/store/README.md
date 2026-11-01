@@ -19,7 +19,7 @@ A new result loads by itself; there is no "Use new audio" step and no tabs.
 | Four 1280×800 screenshots from the real panel | yes, [screenshots/](screenshots/) | look at them | upload | no | no |
 | Listing text, getting started, limits, support text | draft, [LISTING.md](LISTING.md) | approve wording, URLs, visibility, reviewer account | enter | no | no |
 | Data audit, permission justifications, what to declare | draft, [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md) | confirm facts and declarations | confirm labels and enter | no | no |
-| Privacy policy (extension scope + optional website appendix) | draft with `[PO]` gaps, [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) | scope, operator, contact, retention and deletion decisions, publish it | enter the URL | no | no |
+| Privacy policy for the extension (the website appendix is source material for a separate policy) | draft with `[PO]` gaps, [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md); operator (Can Nguyen) and contact (support@mydubb.com) filled in | the remaining decisions below, deletion handling, publish it | enter the URL | no | no |
 | Release ZIP | draft ZIP only ([RELEASE-PACKAGE.md](RELEASE-PACKAGE.md)); release ZIP waits for the key | – | upload | no | no |
 | Promo tiles (optional) | no | – | upload | no | no |
 
@@ -30,6 +30,7 @@ A new result loads by itself; there is no "Use new audio" step and no tabs.
 | [LISTING.md](LISTING.md) | Name, short and detailed description, getting started, limits, support, reviewer notes |
 | [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md) | What data is read, sent, stored and removed; automatic requests; permission justifications; what the Privacy practices tab must declare (pending dashboard confirmation) |
 | [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) | Policy text with `[PO: …]` gaps |
+| [DATA-REQUESTS.md](DATA-REQUESTS.md) | **Proposal** for handling data requests sent to support@mydubb.com; where the server keeps user data; nothing in it is promised in the policy |
 | [STABLE-ID.md](STABLE-ID.md) | Account → draft upload → Item ID/public key → verified key → release build and check; effect on `EXTENSION_IDS` and sessions |
 | [RELEASE-PACKAGE.md](RELEASE-PACKAGE.md) | Chrome's image sizes, screenshots, how to rebuild the ZIP |
 | `branding/` | `mydubb-icon.svg`, `mydubb-icon-small.svg`, `png/`, `preview.png` |
@@ -39,11 +40,13 @@ A new result loads by itself; there is no "Use new audio" step and no tabs.
 
 ## What the Product Owner still has to provide or do
 
-1. Decide who operates MyDubb (individual or organisation) and give the name, the support e-mail
-   and a privacy contact.
-2. Decide the policy scope (extension only, or website too), where it and a support/home page are
-   published, and what is promised about deleting data (none is implemented today; see
-   PRIVACY-AUDIT §2). Confirm the production facts the audit lists (§7).
+1. ~~Operator, support e-mail, privacy contact, policy scope~~ **Confirmed (2026-11-01):** Can
+   Nguyen; support@mydubb.com for support and privacy; a separate policy for the extension and
+   the requests it sends to MyDubb.
+2. Decide where the policy and a support/home page are published, whether the website gets its
+   own policy (and its URL), and what is promised about deleting data (none is implemented
+   today; proposal in [DATA-REQUESTS.md](DATA-REQUESTS.md)). Confirm the production facts the
+   audit lists (§7). The full list of remaining placeholders is below.
 3. Look at `branding/preview.png` and `screenshots/`.
 4. Register the Chrome Web Store developer account (fee, verified e-mail) when ready. Then:
    `cd extension && npm ci && npm run build && npm run package:draft`, upload
@@ -54,3 +57,35 @@ A new result loads by itself; there is no "Use new audio" step and no tabs.
    invitation account and an accessible lecture.
 7. Read the live Privacy practices tab, confirm the declarations, publish the policy, then enter
    the dashboard declarations and press *Submit for review* only when satisfied.
+
+## Placeholders still in the drafts (2026-11-01)
+
+Filled from the Product Owner: operator Can Nguyen, contact support@mydubb.com, extension-only
+policy. Everything below is still a `[PO: …]` marker or a pending item. None is filled with a guess.
+
+**A. Can be checked by a read-only look (not done yet; the answer is a fact, not a decision)**
+
+| Marker | Where to look |
+|---|---|
+| Result lifetime on production (policy "What MyDubb does with your text"; code default 1 hour) | `result_ttl_seconds` in the public `GET /api/meta`, or the Render environment page |
+| Eight output languages and both voices on production (listing, screenshots note) | `GET /api/meta` |
+| Render region and Neon region (policy "Who receives data") | `render.yaml` says `oregon`; `docs/DEPLOYMENT.md` says Neon AWS us-west-2; confirm in the two dashboards |
+| Azure settings the operator relies on (policy, Microsoft line) | Azure portal and the Render environment (`AZURE_*_REGION`); the Microsoft terms link is a public page |
+| How long the host keeps access logs (policy, "Ordinary server logs") | Render's documentation and plan |
+| No analytics or telemetry in the extension (policy) | Searched `extension/src` and `extension/static` on 2026-11-01: none found. Re-check before publishing; production and the website were not examined |
+| Which website features are on, and the website's cookies (Appendix A only, for the website policy) | Render environment (`GUEST_ACCESS_ENABLED` defaults to `false`), a look at the live site; Supadata's terms are a public page |
+| Dashboard labels on the Privacy practices tab | Readable only after a developer account exists |
+
+**B. Needs the Product Owner's decision**
+
+| Marker | Decision |
+|---|---|
+| Date of publication; changes ("how changes will be announced") | When, and how |
+| Postal or contact address (optional) | Give one or not |
+| Policy URL; website policy URL (Scope sentence); homepage and support URL | Where they will be published; whether to write the website policy (Appendix A is its start) |
+| Trader or non-trader on the dashboard | Declare |
+| Deletion handling and any time limit; sentence on job records that are not deleted automatically | Adopt, change or reject [DATA-REQUESTS.md](DATA-REQUESTS.md); whether to build the 7-day cleanup first |
+| "Does not sell data / no other purpose" and "People working on MyDubb do not read your text except…" | Confirm that these are true and list the cases |
+| How a user asks for an invitation | Whether it is support@mydubb.com |
+| Visibility; reviewer test account and lecture | Choose |
+| Developer account, fee, Item ID, public key, `EXTENSION_IDS` | As in the steps above |

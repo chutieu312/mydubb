@@ -6,13 +6,13 @@
 > it also satisfies privacy law that applies to the operator is for the operator to check.
 > The sections below the line are the proposed public text.
 >
-> **Scope decision (Product Owner).** As drafted, this policy is for the **extension** and the
-> parts of the MyDubb service the extension uses. It says so and points to a separate website
-> policy, which does not exist yet (`[PO: URL when published]`). If the Product Owner prefers one
-> policy for both, replace the "does **not** describe the MyDubb website" sentence in "Scope" and append **Appendix A (website)**
-> at the end of the public text; Appendix A is written from the code and documents (guest
-> sessions, cookies, network quota, YouTube import) and has its own `[PO]` gaps. Until one of the
-> two is chosen and published, the dashboard has no valid policy URL.
+> **Decided by the Product Owner (2026-11-01).** The operator is **Can Nguyen**; the contact for
+> support and privacy is **support@mydubb.com**; this policy is **separate for the extension** and
+> the requests the extension sends to MyDubb. It points to a separate website policy, which does
+> not exist yet (`[PO: URL when published]`). **Appendix A (website) is therefore not part of
+> this policy**: it stays below only as source material for that website policy (written from the
+> code and documents, with its own `[PO]` gaps) and must not be published with this text. Until
+> this policy is published at a URL, the dashboard has no valid policy URL.
 
 ---
 
@@ -20,9 +20,9 @@
 
 Last updated: `[PO: date of publication]`
 
-**Who runs MyDubb:** `[PO: name of the individual or organisation]`, `[PO: postal or contact
-address if the operator wishes to give one]`.
-**Contact for questions about this policy:** `[PO: e-mail address]`.
+**Who runs MyDubb:** Can Nguyen`[PO: postal or contact address, only if the operator wishes to
+give one]`.
+**Contact for questions about this policy, support and privacy:** support@mydubb.com.
 
 ## Scope
 
@@ -120,8 +120,11 @@ investigation, or to follow the law]`.
   Reloading the page keeps the saved translation.
 - Uninstalling the extension removes everything it stored in your browser.
 - Translations and audio disappear from the server on their own (see above).
-- To ask about your account or job records: `[PO: how to ask, what the operator will do and
-  within what time. No deletion process exists today; write only what will be done]`.
+- Questions about your account or job records: write to support@mydubb.com from the e-mail
+  address of your MyDubb account. Do not include transcripts, passwords or tokens.
+  `[PO: what the operator will do with a request to delete data, and within what time. No
+  deletion process exists today, so nothing is promised here; write only what will be done. A
+  proposed process is in DATA-REQUESTS.md]`
 
 ## Security
 
@@ -140,7 +143,7 @@ Policy, including the Limited Use requirements.
 
 ---
 
-# Appendix A: MyDubb website (use ONLY if one policy covers the website too)
+# Appendix A: MyDubb website (NOT part of the extension policy; source for a separate website policy)
 
 Written from `docs/GUEST_ACCESS.md`, `docs/AUTH_API.md`, `docs/API.md` and `docs/ARCHITECTURE.md`,
 not from production. Whether each feature is **switched on in production** was not verified here

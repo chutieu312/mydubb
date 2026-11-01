@@ -19,7 +19,8 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 | Language | English |
 | Short description (manifest `description`, max 132 characters) | `Turn the English transcript you select on a Udemy lecture into audio in your language and play it with the video.` (113; identical to the manifest) |
 | Visibility | Start as **Unlisted** or **Private**: the extension needs an invitation account, so a public listing would send users to a sign-in they cannot complete (Product Owner decides; all options go through the same review) |
-| Homepage / support URL | `[PO: URLs]` |
+| Support e-mail | support@mydubb.com (confirmed by the Product Owner; the dashboard still has to verify it) |
+| Homepage / support URL | `[PO: URLs]` (mydubb.com is the service's address; whether it is the homepage and has a support page is the Product Owner's decision) |
 | Privacy policy URL | `[PO: published URL of PRIVACY-POLICY-DRAFT.md after review]` |
 | Screenshots | [screenshots/](screenshots/) (four, 1280×800), see [RELEASE-PACKAGE.md](RELEASE-PACKAGE.md) |
 
@@ -72,7 +73,7 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 
 ## Getting started (also for the support page)
 
-1. Ask the operator for an invitation `[PO: how a user asks]`; activate the account on mydubb.com.
+1. Ask the operator (Can Nguyen) for an invitation `[PO: how a user asks; support@mydubb.com is the confirmed address, whether invitations are requested there is not]`; activate the account on mydubb.com.
 2. Install the extension, open an Udemy lecture you have access to, **reload the tab**.
 3. In the panel (toolbar button **Open MyDubb**) choose **Connect MyDubb** and sign in in the
    window that opens. Or select transcript text → right-click → **Send to MyDubb**, then connect.
@@ -101,9 +102,9 @@ times**).
 
 ## Support and bug reports
 
-`[PO: support e-mail / issue tracker URL]`. Text to show:
+Support e-mail: **support@mydubb.com** (an issue tracker URL, if any, is `[PO]`). Text to show:
 
-> To report a problem, tell us what you did, what you expected, what happened, your Chrome
+> To report a problem, write to support@mydubb.com. Tell us what you did, what you expected, what happened, your Chrome
 > version and the extension version (chrome://extensions). Do **not** send transcripts, course
 > content, passwords, tokens or screenshots showing your account. A screenshot of the panel
 > with the text hidden is enough.

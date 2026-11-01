@@ -91,6 +91,6 @@ npm run build:release && npm run check:dist:release && npm run package:release
 ## Not release-ready until
 
 The verified release key (Store Item ID and public key from a draft upload) is recorded and
-`npm run check:dist:release` passes; the policy URL, support contact and publisher details are
-provided; the Product Owner has decided about the reviewer test account
+`npm run check:dist:release` passes; the policy is published and its URL given (operator Can Nguyen and
+support@mydubb.com are confirmed; the other placeholders are listed in [README.md](README.md)); the Product Owner has decided about the reviewer test account
 ([LISTING.md](LISTING.md)); and the screenshots are looked at again after any panel change.
