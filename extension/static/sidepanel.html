@@ -3,167 +3,214 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MyDubb Prototype</title>
+    <title>MyDubb</title>
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
     <main>
-      <header>
-        <h1>MyDubb Prototype</h1>
-        <p class="hint">Nothing is sent to MyDubb until you choose Generate audio.</p>
+      <header class="head">
+        <div class="head-row">
+          <h1>MyDubb</h1>
+          <p id="account-status" class="account" role="status" aria-live="polite"></p>
+        </div>
+        <p id="account-error" class="error" role="alert"></p>
+        <div class="row" id="header-actions">
+          <button id="reconnect" type="button" hidden>Reconnect</button>
+          <button id="connect" type="button" class="primary" hidden>Connect MyDubb</button>
+        </div>
       </header>
 
-      <section aria-labelledby="link-heading">
-        <h2 id="link-heading">Linked lecture</h2>
-        <dl class="link">
-          <dt>Tab</dt>
-          <dd id="tab-label">—</dd>
-          <dt>Lecture</dt>
-          <dd id="lesson-label">—</dd>
-        </dl>
+      <div class="lesson-box">
+        <p class="eyebrow" id="lesson-eyebrow">Current lesson</p>
+        <p id="lesson-label" class="lesson" aria-describedby="lesson-eyebrow">—</p>
         <p id="link-status" class="status" role="status" aria-live="polite"></p>
-        <button id="reconnect" type="button" hidden>Reconnect</button>
-      </section>
+        <details id="header-details" class="more">
+          <summary>Details</summary>
+          <dl class="link">
+            <dt>Account</dt>
+            <dd id="account-detail">—</dd>
+            <dt>Lecture</dt>
+            <dd id="lesson-detail">—</dd>
+            <dt>Tab</dt>
+            <dd id="tab-label">—</dd>
+            <dt>Page link</dt>
+            <dd id="link-detail">—</dd>
+          </dl>
+          <div class="row">
+            <button id="disconnect" type="button" hidden>Disconnect</button>
+          </div>
+        </details>
+      </div>
 
-      <section aria-labelledby="draft-heading">
-        <h2 id="draft-heading"><label for="transcript">Transcript selection</label></h2>
-        <p class="hint" id="draft-hint">
-          Select transcript text on the Udemy page, right-click, then choose “Send to MyDubb”. You can edit
-          the text here.
-        </p>
-        <textarea id="transcript" rows="10" spellcheck="false" aria-describedby="draft-hint draft-status"></textarea>
-        <div class="row">
-          <button id="clear" type="button">Clear</button>
+      <!-- 1. The transcript, the video's time and the two start times it helps to fill. -->
+      <section class="card" aria-labelledby="draft-heading">
+        <div class="card-head">
+          <h2 id="draft-heading"><label for="transcript">English transcript</label></h2>
+          <p id="draft-status" class="small" role="status" aria-live="polite"></p>
         </div>
-        <p id="draft-status" class="status" role="status" aria-live="polite"></p>
+        <p id="draft-hint" class="sr-only">On Udemy, select transcript text, right-click, then choose “Send to MyDubb”.</p>
+        <textarea
+          id="transcript"
+          rows="5"
+          spellcheck="false"
+          placeholder="On Udemy, select transcript text, right-click, then choose “Send to MyDubb”."
+          aria-describedby="draft-hint transcript-error"
+        ></textarea>
+        <button id="clear" type="button" class="quiet">Clear</button>
+        <p id="transcript-error" class="error"></p>
         <div id="confirm" class="confirm" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-desc" hidden>
           <p id="confirm-title"><strong>Replace your edited draft?</strong></p>
           <p id="confirm-desc">A new selection arrived from the page. Replacing it discards your edits.</p>
           <div class="row">
-            <button id="confirm-replace" type="button">Replace draft</button>
+            <button id="confirm-replace" type="button" class="primary">Replace draft</button>
             <button id="confirm-keep" type="button">Keep my draft</button>
           </div>
         </div>
-      </section>
-
-      <section aria-labelledby="video-heading">
-        <h2 id="video-heading">Udemy video</h2>
-        <p id="video-status" class="status" role="status" aria-live="polite"></p>
-        <p class="time" aria-label="Playback position">
-          <span id="time-current">--:--</span> / <span id="time-duration">--:--</span>
-        </p>
-        <div class="row controls" role="group" aria-label="Video controls">
-          <button id="back" type="button" aria-label="Back 5 seconds" disabled>−5s</button>
-          <button id="playpause" type="button" disabled>Play</button>
-          <button id="forward" type="button" aria-label="Forward 5 seconds" disabled>+5s</button>
+        <div id="video-box" class="video" role="group" aria-labelledby="video-heading">
+          <h3 id="video-heading">Video</h3>
+          <p id="video-status" class="small" role="status" aria-live="polite"></p>
+          <p class="clock" aria-label="Playback position">
+            <strong id="time-current">--:--</strong> <span>/ <span id="time-duration">--:--</span></span>
+          </p>
+          <div class="video-buttons" role="group" aria-label="Video controls">
+            <button id="back" type="button" aria-label="Back 5 seconds" disabled>−5s</button>
+            <button id="playpause" type="button" class="primary" disabled>Play</button>
+            <button id="forward" type="button" aria-label="Forward 5 seconds" disabled>+5s</button>
+          </div>
+          <p id="video-error" class="error" role="alert"></p>
         </div>
-        <p id="video-error" class="error" role="alert"></p>
-      </section>
-
-      <section aria-labelledby="account-heading">
-        <h2 id="account-heading">MyDubb account</h2>
-        <p id="account-status" class="status" role="status" aria-live="polite"></p>
-        <div class="row">
-          <button id="connect" type="button" hidden>Connect MyDubb</button>
-          <button id="disconnect" type="button" hidden>Disconnect</button>
+        <div class="pair">
+          <div>
+            <label class="label" for="first-start">First sentence starts</label>
+            <input id="first-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="HH:MM:SS" aria-describedby="times-hint first-start-error" />
+            <p id="first-start-error" class="error"></p>
+          </div>
+          <div>
+            <label class="label" for="last-start">Last sentence starts</label>
+            <input id="last-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="HH:MM:SS" aria-describedby="times-hint last-start-error" />
+            <p id="last-start-error" class="error"></p>
+          </div>
         </div>
-        <p id="account-error" class="error" role="alert"></p>
-      </section>
-
-      <section aria-labelledby="dub-heading">
-        <h2 id="dub-heading">Dubbing</h2>
-        <p id="meta-status" class="status" role="status" aria-live="polite"></p>
-        <button id="meta-retry" type="button" hidden>Try again</button>
+        <p id="times-hint" class="hint">Digits only: 000130 becomes 00:01:30.</p>
         <div id="timing" class="confirm" role="status" hidden>
           <p id="timing-text"></p>
           <p id="timing-override" hidden>
             <span id="timing-override-text"></span>
             <button id="use-transcript-times" type="button">Use the transcript times</button>
           </p>
-          <label class="check"><input id="ignore-timestamps" type="checkbox" /> Ignore the timestamps (process as plain text)</label>
+          <label class="check"><input id="ignore-timestamps" type="checkbox" /> Ignore the timestamps (plain text)</label>
         </div>
-        <div class="fields">
-          <label for="first-start">First Sentence Start Time</label>
-          <input id="first-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="HH:MM:SS" aria-describedby="times-hint first-start-error" />
-          <p id="first-start-error" class="error"></p>
-          <label for="last-start">Last Sentence Start Time</label>
-          <input id="last-start" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="HH:MM:SS" aria-describedby="times-hint last-start-error" />
-          <p id="last-start-error" class="error"></p>
-          <p id="times-hint" class="hint">Type the digits only; the colons are added (000130 becomes 00:01:30). Use the start times from the transcript.</p>
-          <label for="target-language">Translate to</label>
-          <select id="target-language" disabled></select>
-          <p id="target-language-error" class="error"></p>
-          <label for="voice">Voice</label>
-          <select id="voice" disabled></select>
-          <p id="voice-error" class="error"></p>
-          <label for="speed">Audio speed</label>
-          <select id="speed"></select>
-          <p id="speed-error" class="error"></p>
+      </section>
+
+      <!-- 2. What to make: language, voice, speed, then Generate. -->
+      <section class="card" aria-labelledby="dub-heading">
+        <h2 id="dub-heading">Translate to</h2>
+        <p id="meta-status" class="status" role="status" aria-live="polite"></p>
+        <button id="meta-retry" type="button" hidden>Try again</button>
+        <div class="pair">
+          <div>
+            <label class="label" for="target-language">Translate to</label>
+            <select id="target-language" disabled aria-describedby="target-language-error"></select>
+            <p id="target-language-error" class="error"></p>
+          </div>
+          <div>
+            <label class="label" for="voice">Voice</label>
+            <select id="voice" disabled aria-describedby="voice-error"></select>
+            <p id="voice-error" class="error"></p>
+          </div>
         </div>
-        <p id="length-summary" class="status" aria-live="polite"></p>
-        <p id="transcript-error" class="error"></p>
-        <p id="disclosure" class="hint"></p>
+        <p class="label" id="speed-label">Audio speed</p>
+        <div id="speed" class="speeds" role="radiogroup" aria-labelledby="speed-label" aria-describedby="speed-error"></div>
+        <p id="speed-error" class="error"></p>
+        <p id="length-summary" class="length" aria-live="polite"></p>
         <p id="form-error" class="error" role="alert"></p>
-        <div class="row">
-          <button id="generate" type="button" class="primary" disabled>Generate audio</button>
-        </div>
+        <button id="generate" type="button" class="cta" disabled>Generate audio</button>
+        <p id="disclosure" class="small"></p>
+        <p id="generate-hint" class="hint"></p>
+        <details class="more">
+          <summary>Timing &amp; details</summary>
+          <p>Use the start times shown in the Udemy transcript; the video time above helps to find them.</p>
+          <p id="timing-note" hidden>
+            Timing follows the captions and is estimated: some sentences may be grouped together or start slightly off their caption time.
+          </p>
+          <p id="length-note"></p>
+        </details>
       </section>
 
-      <section id="result-section" aria-labelledby="result-heading" hidden>
-        <h2 id="result-heading">MyDubb audio</h2>
-        <p id="job-status" class="status" role="status" aria-live="polite"></p>
-        <p id="job-error" class="error" role="alert"></p>
-        <button id="check-again" type="button" hidden>Check again</button>
-        <dl id="job-choices" class="link"></dl>
-        <div id="result" hidden>
-          <p id="audio-status" class="status" role="status" aria-live="polite"></p>
-          <div id="result-switch" class="callout" role="group" aria-labelledby="result-switch-title" hidden>
-            <p id="result-switch-title" class="callout-title">New audio is ready. The player is still using an earlier result.</p>
-            <dl id="result-switch-info" class="link"></dl>
-            <button id="player-switch" type="button" class="primary">Use new audio</button>
-          </div>
-          <p id="result-using" class="hint" hidden>The player is using this result.</p>
-          <dl id="result-durations" class="link"></dl>
-          <h3>Translation</h3>
-          <div id="translation" class="translation"></div>
-          <ul id="notices" class="hint"></ul>
+      <!-- 3. The job, the audio in the player, its translation, Sync and the floating player. -->
+      <section class="card audio-card" aria-labelledby="player-heading">
+        <div class="card-head">
+          <h2 id="player-heading">Your audio</h2>
+          <p id="player-state" class="small"></p>
         </div>
-      </section>
 
-      <section id="player-section" aria-labelledby="player-heading" hidden>
-        <h2 id="player-heading">MyDubb player</h2>
-        <p class="hint">Plays the MyDubb audio; it keeps playing when this panel is closed. It moves the Udemy video only while Sync with video is on.</p>
-        <div id="player" role="group" aria-labelledby="player-heading" hidden>
-          <p class="loaded-head"><strong>Loaded audio</strong> <span id="player-badge" class="badge" hidden>Earlier result</span></p>
-          <dl id="player-info" class="link"></dl>
-          <input id="player-seek" class="seek" type="range" min="0" step="0.1" value="0" aria-label="Position in the MyDubb audio" />
-          <p class="time"><span id="player-time">--:-- / --:--</span></p>
-          <div class="row controls">
-            <button id="player-back" type="button" aria-label="Back 5 seconds in the MyDubb audio">−5s</button>
-            <button id="player-play" type="button" class="primary" aria-label="Play MyDubb audio">Play</button>
-            <button id="player-forward" type="button" aria-label="Forward 5 seconds in the MyDubb audio">+5s</button>
+        <div id="listen-empty" class="empty">
+          <p class="small">No audio yet. Choose Generate audio above; the audio and its translation appear here.</p>
+          <p id="listen-notice" class="status" role="status" aria-live="polite"></p>
+        </div>
+
+        <div id="result-section" hidden>
+          <p id="job-status" class="status" role="status" aria-live="polite"></p>
+          <p id="job-note" class="hint" hidden>Your earlier audio stays below until the new one is loaded.</p>
+          <p id="job-error" class="error" role="alert"></p>
+          <button id="check-again" type="button" hidden>Check again</button>
+          <div id="result" hidden>
+            <p id="audio-status" class="status" role="status" aria-live="polite"></p>
           </div>
-          <p id="player-problem" class="error" role="alert"></p>
-          <div class="row">
-            <button id="player-floating" type="button">Show floating player</button>
-          </div>
-          <div id="sync" class="sync" role="group" aria-label="Sync with video">
-            <p class="hint">Sync applies to the loaded audio above.</p>
-            <p id="sync-status" class="status" role="status" aria-live="polite"></p>
-            <div class="row">
-              <button id="sync-toggle" type="button" aria-pressed="false">Sync with video</button>
-            </div>
-            <div id="sync-confirm" class="confirm" hidden>
-              <p id="sync-preview"></p>
-              <div class="row">
-                <button id="sync-on" type="button" class="primary">Turn on sync</button>
-                <button id="sync-cancel" type="button">Cancel</button>
+        </div>
+
+        <div id="player-section" hidden>
+          <div id="player" role="group" aria-labelledby="player-heading" hidden>
+            <div id="player-info"></div>
+            <p id="video-place" class="status" role="status" aria-live="polite"></p>
+            <div class="translation-block">
+              <div class="card-head">
+                <h3 id="translation-heading">Translation</h3>
+                <span class="small">Loaded audio</span>
               </div>
+              <div id="translation" class="translation" role="region" aria-labelledby="translation-heading" tabindex="0"></div>
             </div>
-            <p id="sync-notice" class="error" role="alert"></p>
+            <input id="player-seek" class="seek" type="range" min="0" step="0.1" value="0" aria-label="Position in the MyDubb audio" />
+            <p id="player-time" class="audio-times"><span id="player-current">--:--</span><span id="player-duration">--:--</span></p>
+            <div class="audio-buttons">
+              <button id="player-back" type="button" aria-label="Back 5 seconds in the MyDubb audio">−5s</button>
+              <button id="player-play" type="button" class="primary" aria-label="Play MyDubb audio">Play</button>
+              <button id="player-forward" type="button" aria-label="Forward 5 seconds in the MyDubb audio">+5s</button>
+            </div>
+            <p id="player-problem" class="error" role="alert"></p>
+            <div id="sync" class="sync" role="group" aria-label="Sync with video">
+              <div class="sync-row">
+                <button id="sync-toggle" type="button" class="toggle" aria-pressed="false">Sync with video</button>
+                <p id="sync-status" class="small" role="status" aria-live="polite"></p>
+              </div>
+              <div id="sync-confirm" class="sync-confirm" hidden>
+                <p id="sync-preview"></p>
+                <div class="row">
+                  <button id="sync-on" type="button" class="primary">Turn on sync</button>
+                  <button id="sync-cancel" type="button">Cancel</button>
+                </div>
+              </div>
+              <p id="sync-notice" class="error" role="alert"></p>
+            </div>
+            <button id="player-floating" type="button" class="floating-toggle">Show floating player</button>
+            <details class="more">
+              <summary>Playback details</summary>
+              <p>
+                The audio keeps playing when this panel is closed. Sync applies to the loaded audio above and moves the Udemy video only
+                while it is on.
+              </p>
+            </details>
           </div>
+          <p id="player-empty" class="hint" hidden>No audio is loaded in the player.</p>
+          <button id="player-load" type="button" hidden>Load audio</button>
         </div>
-        <button id="player-load" type="button" hidden>Load audio</button>
+
+        <details id="result-details" class="more" hidden>
+          <summary>Latest job details</summary>
+          <dl id="job-choices" class="link"></dl>
+          <dl id="result-durations" class="link"></dl>
+          <ul id="notices" class="hint"></ul>
+        </details>
       </section>
     </main>
     <script src="sidepanel.js"></script>

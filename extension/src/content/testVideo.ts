@@ -10,6 +10,8 @@ export interface FakeMedia {
   seekable: [number, number][];
   error: { code: number } | null;
   playImpl: () => Promise<void>;
+  /** Runs after currentTime is set: what the seek does (fires "seeked", lands elsewhere...). */
+  seekOutcome?: (video: HTMLVideoElement) => void;
 }
 
 export function fakeVideo(doc: Document, init: Partial<FakeMedia> = {}): HTMLVideoElement & { media: FakeMedia } {
@@ -37,6 +39,7 @@ export function fakeVideo(doc: Document, init: Partial<FakeMedia> = {}): HTMLVid
   prop("error");
   prop("currentTime", (v: number) => {
     media.currentTime = v;
+    if (media.seekOutcome) media.seekOutcome(video);
   });
   Object.defineProperty(video, "seekable", {
     configurable: true,

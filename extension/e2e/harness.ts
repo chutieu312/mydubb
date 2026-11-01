@@ -89,6 +89,8 @@ export class FakeMyDubb {
   progression = ["queued", "processing", "completed"];
   /** When false, jobs stay at their current status (the test moves them on). */
   advance = true;
+  /** A translation per job id, instead of the short default (screenshots). */
+  translations: Record<string, string> = {};
   /** Answers for the MP3 download, consumed in order: "ok" (default) or an HTTP status. */
   audioAnswers: ("ok" | number)[] = [];
   private nextJob = 1;
@@ -157,6 +159,15 @@ export class FakeMyDubb {
     if (path === "/api/jobs" && request.method() === "POST") {
       const answer = this.createAnswers.shift() ?? "ok";
       if (answer === "drop") return route.abort("connectionreset");
+      if (answer === 422) {
+        return json(route, 422, {
+          error: {
+            code: "validation_error",
+            message: "Check the highlighted fields.",
+            fields: [{ field: "last_sentence_start", message: "Must be after the first sentence start time." }],
+          },
+        });
+      }
       if (typeof answer === "number") return apiError(route, answer, "server_at_capacity", "Busy.");
       const id = `job-${this.nextJob++}`;
       this.jobs.set(id, { id, body: body ?? {}, status: "queued", owner });
@@ -203,7 +214,7 @@ export class FakeMyDubb {
         speed: job.body.speed,
         output_duration_seconds: baseline / Number(job.body.speed),
         timing,
-        translation: { text: `Bản dịch <b>${job.id}</b>`, is_illustrative: true, provider: "mock" },
+        translation: { text: this.translations[job.id] ?? `Bản dịch <b>${job.id}</b>`, is_illustrative: true, provider: "mock" },
         audio: {
           url: `/api/jobs/${job.id}/result/audio`,
           download_url: `/api/jobs/${job.id}/result/audio?download=1`,
@@ -395,10 +406,21 @@ export async function allowConnect(panel: Page, mydubb: FakeMyDubb, extensionId:
 export async function connectAccount(panel: Page, mydubb: FakeMyDubb, extensionId: string) {
   await allowConnect(panel, mydubb, extensionId);
   await panel.getByRole("button", { name: "Connect MyDubb" }).click();
-  await expect(panel.getByText("Connected as Lan (lan@example.com).")).toBeVisible();
+  await expect(panel.locator("#account-status")).toHaveText("Connected as Lan");
+}
+
+async function openGroup(panel: Page, selector: string) {
+  const group = panel.locator(selector);
+  if (!(await group.evaluate((d) => (d as HTMLDetailsElement).open))) await group.locator("summary").first().click();
+}
+
+/** Disconnect sits under the header's Details. */
+export async function disconnect(panel: Page) {
+  await openGroup(panel, "#header-details");
+  await panel.getByRole("button", { name: "Disconnect" }).click();
 }
 
 export async function fillTimes(panel: Page) {
-  await panel.getByLabel("First Sentence Start Time").fill("000010");
-  await panel.getByLabel("Last Sentence Start Time").fill("000610");
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000610");
 }

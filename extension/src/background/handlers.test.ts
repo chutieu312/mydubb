@@ -87,7 +87,7 @@ it("forgets a closed tab's draft and pending selection", async () => {
   const { api } = fakeApi(null);
   await handleTabRemoved(api, 4);
   // The draft, the hand-over, the dubbing form and the followed job of that tab only.
-  expect(api.session.remove).toHaveBeenCalledWith(["pending:4", "draft:4", "form:4", "job:4"]);
+  expect(api.session.remove).toHaveBeenCalledWith(["pending:4", "draft:4", "form:4", "job:4", "loaded:4"]);
   // And its playback session, if the offscreen document has one.
   expect(api.notifyPlayer).toHaveBeenCalledWith({ type: "mydubb:player-tab-closed", tabId: 4 });
 });

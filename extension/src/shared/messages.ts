@@ -6,6 +6,8 @@ import type { LessonInfo } from "./lesson";
 export const PANEL_PORT_NAME = "mydubb-panel";
 export const MAX_SELECTION_CHARS = 100_000;
 export const MAX_SEEK_DELTA_SECONDS = 60;
+/** The latest position "place" accepts (24 h, the longest start time the form takes). */
+export const MAX_PLACE_SECONDS = 24 * 3600;
 
 // ---- Service worker -> content script (chrome.tabs.sendMessage) ----------------------------
 
@@ -24,7 +26,7 @@ export interface SelectionReply {
 
 // ---- Side panel <-> content script (chrome.tabs.connect port) ------------------------------
 
-export type CommandName = "play" | "pause" | "seek";
+export type CommandName = "play" | "pause" | "seek" | "place";
 
 export interface CommandMessage {
   type: "command";
@@ -32,6 +34,8 @@ export interface CommandMessage {
   command: CommandName;
   /** Seconds to move, only for "seek". */
   delta?: number;
+  /** "place": pause the video at this position (seconds), where a newly loaded MyDubb audio starts. */
+  at?: number;
   /** The lecture and video the panel was showing when the user clicked. */
   lessonKey: string;
   videoId: number;
@@ -42,6 +46,8 @@ export type CommandError =
   | "stale"
   | "not-ready"
   | "not-seekable"
+  | "out-of-range"
+  | "seek-failed"
   | "play-blocked"
   | "play-interrupted"
   | "play-failed"
@@ -112,8 +118,16 @@ export const draftKey = (tabId: number): string => `draft:${tabId}`;
 export const formKey = (tabId: number): string => `form:${tabId}`;
 /** The MyDubb job the tab's panel follows (panel/jobs.ts). */
 export const jobKey = (tabId: number): string => `job:${tabId}`;
+/** The translation of the audio last loaded into the tab's player (panel/dubbing.ts). */
+export const loadedKey = (tabId: number): string => `loaded:${tabId}`;
 /** Everything the extension keeps for one tab; removed when the tab closes. */
-export const tabKeys = (tabId: number): string[] => [pendingKey(tabId), draftKey(tabId), formKey(tabId), jobKey(tabId)];
+export const tabKeys = (tabId: number): string[] => [
+  pendingKey(tabId),
+  draftKey(tabId),
+  formKey(tabId),
+  jobKey(tabId),
+  loadedKey(tabId),
+];
 
 // ---- Validators ------------------------------------------------------------------------------
 
@@ -154,9 +168,14 @@ export function isCommandMessage(value: unknown): value is CommandMessage {
   if (!isObject(value) || value.type !== "command") return false;
   if (!Number.isSafeInteger(value.requestId) || !Number.isSafeInteger(value.videoId)) return false;
   if (!isString(value.lessonKey, 250) || value.lessonKey === "") return false;
-  if (value.command === "play" || value.command === "pause") return value.delta === undefined;
+  if (value.command === "play" || value.command === "pause") return value.delta === undefined && value.at === undefined;
   if (value.command === "seek") {
-    return isFiniteNumber(value.delta) && Math.abs(value.delta) <= MAX_SEEK_DELTA_SECONDS && value.delta !== 0;
+    return (
+      value.at === undefined && isFiniteNumber(value.delta) && Math.abs(value.delta) <= MAX_SEEK_DELTA_SECONDS && value.delta !== 0
+    );
+  }
+  if (value.command === "place") {
+    return value.delta === undefined && isFiniteNumber(value.at) && value.at >= 0 && value.at <= MAX_PLACE_SECONDS;
   }
   return false;
 }

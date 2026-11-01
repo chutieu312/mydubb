@@ -39,23 +39,48 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
 
 ## Try it
 
+The panel is one page: a short header, the current lesson, then three blocks one under the other,
+**English transcript**, **Translate to** and **Your audio** (also when the panel is dragged wide).
+The **header** shows MyDubb and the account state (**Connect MyDubb** when not connected); the lesson
+box shows the lecture's short title (the full title on hover). Its **Details** holds the full title
+and id, the tab id, the page-link state, the account email and **Disconnect**. A problem with the
+link to the tab (not a lecture, reloading, tab closed) is shown there without opening Details.
+Colors are the MyDubb website's (light or dark, following the system), in the panel and in the floating
+player on the lecture page alike.
+
 1. On the lecture page, select some transcript text, right-click → **Send to MyDubb**.
-   The side panel opens for that tab with the exact text (line breaks kept, nothing rendered as HTML).
+   The side panel opens for that tab with the exact text in **English transcript** (line breaks
+   kept, nothing rendered as HTML).
 2. Edit the text if you like. Sending a new selection over an edited draft asks first
    (**Replace draft** / **Keep my draft**). **Clear** empties the draft.
-3. **Udemy video**: **Play/Pause**, **−5s**, **+5s**. The panel shows the video's real state and time.
-4. **MyDubb account → Connect MyDubb**: Chrome opens a MyDubb window; sign in there with your
-   invitation (email and password are typed on mydubb.com, never in the extension) and choose
-   **Connect extension**. **Disconnect** ends it.
-5. **Dubbing**: the two start times (type digits, the colons appear; a timestamped transcript fills
-   them from its first and last caption and is dubbed in timed mode unless you tick **Ignore the
-   timestamps**), **Translate to** (Vietnamese by default), **Voice** (Andrew/Emma), **Audio speed**
-   (seven speeds), the expected length, then **Generate audio**.
-6. **MyDubb audio**: the job's status, the choices it was made with, then the translation, durations
-   and notices. The MP3 is loaded into the tab's player (nothing plays by itself).
-7. **MyDubb player**: Play/Pause, −5s/+5s, a seek bar and the time, with the language, voice and speed
-   the file was made with. Always 1x (the speed is already in the file); separate from the Udemy
-   video controls. **Show floating player** puts the same player on the lecture page:
+3. **Connect MyDubb** (header): Chrome opens a MyDubb window; sign in there with your invitation
+   (email and password are typed on mydubb.com, never in the extension) and choose **Connect
+   extension**. **Details → Disconnect** ends it.
+4. **English transcript**, under the text: the **Video** row with the lecture video's state and
+   time and **−5s / Play / +5s**, right above **First sentence starts** and **Last sentence
+   starts**, so the time you read is next to the fields it helps to fill. Type digits, the colons
+   appear; a timestamped transcript fills them from its first and last caption and is dubbed in
+   timed mode unless you tick **Ignore the timestamps** (changed times are kept, with **Use the
+   transcript times** to go back).
+5. **Translate to**: the language (Vietnamese by default) and **Voice** (Andrew/Emma) side by side,
+   **Audio speed** as seven small buttons (a radio group: arrow keys move the choice), the expected
+   audio length, **Generate audio**, and the short Azure notice. **Timing & details** explains the
+   estimate. A refused request focuses the field to fix; no answer at all is reported beside
+   Generate (it may have been created; never resent).
+6. **Your audio**: the job's status (errors with **Check again** where it helps). When the job
+   finishes, its MP3 is loaded into the tab's player by itself, paused at its beginning (nothing
+   plays by itself), and the lecture video is **paused at the result's First Sentence Start**: the
+   start time of that Generate (for a timed job, its first caption), never the form as it is now,
+   with no need to turn Sync on. A line says "Video paused at 1:13, where this audio starts", or why
+   the video was not moved (not ready, outside the video, the seek did not finish there within 10 s, tab not connected): it is never shown as
+   done otherwise. Then what the loaded audio was made with
+   (language · voice · speed, video source span, MP3 length), its **Translation** (always shown,
+   before Play; it can be selected and copied, in its language and direction, Arabic right to
+   left), the seek bar, **−5s / Play / +5s** (always 1x: the speed is in the file), **Sync with
+   video**, **Show floating player**, then **Playback details** and **Latest job details** (the job's
+   choices, durations and notices). Without a job or audio it says "No audio yet". Editing the
+   form or scrolling never touches the playback. **Show floating player** puts the same player on
+   the lecture page:
    - drag it by its **MyDubb** handle (or focus the handle and use the arrow keys); it stays inside
      the window when you resize or zoom;
    - **–/+** collapses/expands it (playback goes on); **×** pauses and hides it (the job, the draft
@@ -64,24 +89,31 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
 
    The panel and the floating player control **one** audio: switching between them keeps the
    position and Play/Pause. Playing in another Udemy tab pauses this one (each keeps its position).
-   A new **Generate audio** does not replace or stop what you are listening to: when its result is
-   ready, the result shows a callout next to it ("New audio is ready. The player is still using an
-   earlier result.") with the new audio's language, voice, speed, **video source** span and real MP3 length
-   and a **Use new audio** button; it stops the old audio and loads the new one (paused, Sync OFF,
-   no new job). The player's **Loaded audio** block shows the same facts for the audio it actually
-   holds (taken from that audio's own session, never from the form), with an **Earlier result**
-   badge while it differs from the new result. The video source is the job's Sync snapshot (plain: its two start times; timed: the first/last caption, milliseconds kept), never the form and never the start-time fields of a timed job (those only set the requested baseline); audio without a snapshot says "Not recorded". Sync
-   applies to the loaded audio. If the switch fails, nothing claims the new audio is in use and
-   **Load audio** retries without a new job.
-8. **Sync with video** (panel and floating player, OFF by default): the first time it shows the
-   video span V0 → V1, the MP3 length and the video speed it will use, and that the video is muted
-   because the MyDubb audio replaces the spoken part (timing is an estimate); **Turn on sync**. Both
-   pause, the video moves to the audio's position at that speed, muted; nothing plays until you
-   press Play. Then Play/Pause/seek bar/±5 s of MyDubb drive both (the bar stays in MP3 time), and
-   Play/Pause/seek on the Udemy video drive the audio. **Turn off sync** pauses both and gives the
-   video its sound and speed back. It never turns itself on (Generate, reload, another lecture or
-   result, account change).
-9. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
+   A new **Generate audio** does not stop what you are listening to while the job runs and its MP3
+   downloads ("Your earlier audio stays below until the new one is loaded"; the new job's choices
+   are only under **Latest job details**). Once the new MP3 is here it replaces the earlier audio by
+   itself: the earlier audio stops (with Sync on, the video pauses and gets its sound and speed
+   back), and the new one is loaded with its own translation, language, voice, speed, video source
+   span and MP3 length, paused at its beginning, Sync OFF, the video paused at its start. The
+   translation and facts shown always belong to the audio in the player (from that audio's own
+   session, never from the form; the panel keeps the loaded audio's translation for the tab, so it
+   is still there after reopening). If the new job fails or its MP3 cannot be downloaded, the
+   earlier audio and its translation stay, the error is shown, and **Load audio** retries the
+   download without a new job (nothing is generated again by itself). Reopening the panel on the
+   same audio is not a new load: position, playback, Sync and the video are left alone. The video
+   source is the job's Sync snapshot (plain: its two start times; timed: the first/last caption,
+   milliseconds kept), never the form and never the start-time fields of a timed job (those only set
+   the requested baseline); audio without a snapshot says "Video source not recorded". Sync applies
+   to the loaded audio.
+7. **Sync with video** (panel and floating player, OFF by default; in the panel a check-box style
+   toggle with ON/OFF beside it): the first time it shows the video span V0 → V1, the MP3 length and
+   the video speed it will use, and that the video is muted because the MyDubb audio replaces the
+   spoken part (timing is an estimate); **Turn on sync**. Both pause, the video moves to the audio's
+   position at that speed, muted; nothing plays until you press Play. Then Play/Pause/seek bar/±5 s
+   of MyDubb drive both (the bar stays in MP3 time), and Play/Pause/seek on the Udemy video drive the
+   audio. Turning the toggle off pauses both and gives the video its sound and speed back. It never
+   turns itself on (Generate, reload, another lecture or result, account change).
+8. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
    an account change stops the audio and removes the player. After a reload, **Load audio** in the
    panel downloads the same result again (it never creates a job).
 
@@ -98,11 +130,11 @@ watching (or skipping) that part of the lecture.
 |---|---|
 | `contextMenus` | The **Send to MyDubb** item, shown only for a text selection on `https://www.udemy.com/*` pages. |
 | `sidePanel` | The tab-specific side panel. |
-| `storage` | `chrome.storage.session` only (memory, cleared when the browser quits, readable by the extension's own pages, not by content scripts): the draft, the selection hand-over, the form settings and the job a tab follows, and the MyDubb token. |
+| `storage` | `chrome.storage.session` only (memory, cleared when the browser quits, readable by the extension's own pages, not by content scripts): the draft, the selection hand-over, the form settings, the job a tab follows and the translation of the audio loaded in its player, and the MyDubb token. |
 | `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect MyDubb**. |
 | `offscreen` | One hidden extension page (`offscreen.html`) that plays the MyDubb audio, so it keeps playing when the side panel closes. Created when a result's audio is loaded; it closes itself when no tab has audio left. Reasons `AUDIO_PLAYBACK` and `BLOBS` (it holds the MP3 Blob and its object URL while paused; with `AUDIO_PLAYBACK` alone Chrome would close it after 30 s of silence). |
 | Host `https://mydubb.com/*` (the build's `MYDUBB_ORIGIN`) | Calls to the MyDubb API from the side panel. No other host. |
-| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected, draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
+| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected (including pausing it where a newly loaded MyDubb audio starts), draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
 
 No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`, no
 `externally_connectable` and no `web_accessible_resources`. The extension does not read cookies,
@@ -137,7 +169,10 @@ does not download video, does not intercept network requests and does not use Ud
   checked against the lecture the draft (and any waiting selection) belongs to: when the tab shows
   another lecture, or is confirmed to be on a non-lecture page, the draft is cleared from the panel
   and from session storage, and the panel says so. Reloading or reconnecting to the same lecture
-  keeps the draft.
+  keeps the draft. The page is one column of three blocks (`static/sidepanel.html`, styled with the
+  website's color tokens in `static/sidepanel.css`); nothing is hidden behind tabs. A refused
+  request focuses the field to fix (the chosen speed for the speed group); an accepted one brings
+  its status into view and leaves focus on Generate.
 - **MyDubb** (`src/panel/dubbing.ts`, `api.ts`, `auth.ts`, `jobs.ts`):
   - *Account*: Authorization Code + PKCE through the MyDubb website
     ([docs/EXTENSION_AUTH.md](../docs/EXTENSION_AUTH.md)). The token is in `storage.session` only
@@ -194,7 +229,8 @@ does not download video, does not intercept network requests and does not use Ud
     lecture or none ends the session, and so does the page port going away (reload, navigation,
     closed tab), a closed tab reported by the worker, or the end of the account connection (the
     worker forwards `storage.onChanged`; an ended connection can open nothing again). A new
-    Generate keeps the current session until **Use new audio**. Ending stops the audio, revokes
+    Generate keeps the current session until the new MP3 has arrived; the hub then replaces it
+    (released first, Sync included). Ending stops the audio, revokes
     the object URL and removes the listeners; with no session left the document closes itself.
     Playing a tab pauses every other tab's session.
   - *Floating UI*: a `mydubb-player` element with a closed Shadow DOM (styles isolated, placement
@@ -291,7 +327,23 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   retry, error shapes, audio fetch), PKCE (RFC 7636 vector), state/redirect checks, polling backoff
   and limits, job records, and the panel controller against a fake API (request body, timed/plain,
   double click, snapshot, field errors, unknown outcome, failed job, resume, lecture and account
-  changes, late answers, refused token, disconnect, 1x and cleanup). Story 3: the offscreen
+  changes, late answers, refused token, disconnect, 1x and cleanup). The one-page panel (panel
+  controller): the three blocks in order and no tabs, the speeds as a radio group, Generate
+  accepted (status under Your audio, nothing plays, focus kept), a validation error with the field
+  focused (also the speed), a refusal without a field, unknown outcome kept beside Generate, a job
+  finishing while the form is edited (focus and edit kept), form edits during playback with Sync on
+  sending nothing, the translation before Play in its language and direction, every result loaded by
+  itself (first and next) with audio, translation and facts together, the earlier audio kept
+  playing while the new job runs and downloads, an earlier audio with Sync ON replaced (new one
+  paused, Sync OFF), the video placed at the result's own start (not the form's; the captions'
+  start for a timed job) and a failed placement said as such, a failed job or download keeping the
+  earlier audio and its translation with Load audio retrying without a job, an earlier result
+  loaded again placed at its own start, late downloads after a new Generate, a lecture or an
+  account change neither loading nor placing, a reopened panel neither loading nor placing, an
+  audio without a known translation, the empty state and the account change. The `place` command
+  (`content/video.test.ts`, `shared/messages.test.ts`): pause at an exact time, refused (never
+  clamped) outside the video or before metadata, failed when the seek lands elsewhere, the page plays
+  the video again or the seek does not finish in 10 s. Story 3: the offscreen
   sessions (`offscreen/hub.test.ts`: Blob only for an announced transfer and only audio, senders of
   panel/page/worker, play only when linked, seek limits, 1x, autoplay blocked and failed start,
   media error, one tab at a time, Close, lecture change, page gone, closed tab, ended connection,
@@ -334,7 +386,16 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   (R ≈ 0.98 at 1.5x), an MP3 that does not fit, the floating player with the panel closed, a
   speed picked in the page's player, a page that puts 1x back on play (Sync sets R again and both
   play) or on every rate change (bounded, then both pause with the reason), an unmute, the end of the span and Play again, Close, two tabs, a replaced
-  video, a stopped service worker, Disconnect, reload and an SPA lecture change. Autoplay is allowed
+  video, a stopped service worker, Disconnect, reload and an SPA lecture change. The one-page layout
+  (`e2e/layout.spec.ts`, screenshots at 320, 390 and 430 px, light and dark, with no sideways scroll
+  at any of them): the three blocks in order and no tabs, the Video row above the start times, the
+  speed radios with the arrow keys, the translation (selectable) before Play, editing the form and
+  scrolling while the audio plays (still playing, no request), the video paused at the First
+  Sentence Start (0:10) with the MP3 at its beginning, an earlier audio playing with Sync ON while
+  a new job runs (kept, its translation and facts shown) and then replaced by the new result by
+  itself (both paused, the video at 1:13 with its sound and speed back, Sync OFF), the floating
+  player showing the same audio, a reopened panel that resets nothing, and a start outside the
+  video reported without moving it. Autoplay is allowed
   by a browser flag in these tests, so Chrome's autoplay blocking is only unit-tested, and
   background-tab throttling is not reproduced (unit-tested only). These are not evidence of
   behaviour on the real Udemy site or the real MyDubb.
@@ -360,8 +421,14 @@ use the Azure free allowance.
 3. **Connect MyDubb** → sign in with an invitation account in the MyDubb window → **Connect
    extension** → the panel says "Connected as …". (If the window already knows your website
    session, it goes straight to Connect.)
-4. Choose the times, language, voice, speed → **Generate audio** → statuses → translation and
-   player; press play; it is at 1x and does not move the Udemy video.
+4. Use the **Video** row to read the times, fill both start times, choose language, voice and
+   speed → **Generate audio** → statuses under **Your audio** → the translation above the player;
+   when the audio loads, the video is paused at the First Sentence Start and the audio at its
+   beginning; press play; it is at 1x. While a job runs, edit the form: nothing plays by itself.
+   Generate again while listening (also with Sync on): the earlier audio plays on until the new one
+   is loaded, then the new one replaces it, paused, Sync OFF, the video at its start.
+   Check that the panel is readable at its default width, made narrower and made wide (no sideways
+   scroll), in light and dark.
 5. Close and reopen the panel while a job runs; move to another lecture while one runs (no result
    there); use a second Udemy tab; **Disconnect** (all panels clear).
 6. Floating player: with a result loaded, play a little in the panel, **Show floating player**
