@@ -67,7 +67,12 @@ player on the lecture page alike.
    audio length, **Generate audio**, and the short Azure notice. **Timing & details** explains the
    estimate. A refused request focuses the field to fix; no answer at all is reported beside
    Generate (it may have been created; never resent).
-6. **Your audio**: the job's status (errors with **Check again** where it helps). When the job
+6. **Your audio**: the job's status (errors with **Check again** where it helps). While the job is
+   **Queued**, **Translating**, **Generating speech** or **Processing audio**, a small mint spinner
+   turns beside the words (the words stay; no percentage, as the server reports none). It stops at
+   Completed or Failed, when the job is gone, when the panel gives up checking, and when the job is
+   no longer followed (another lecture, another account); **Check again** starts it with the next
+   answer. With reduced motion set in the system it is the same ring, still. When the job
    finishes, its MP3 is loaded into the tab's player by itself, paused at its beginning (nothing
    plays by itself), and the lecture video is **paused at the result's First Sentence Start**: the
    start time of that Generate (for a timed job, its first caption), never the form as it is now,
@@ -386,7 +391,10 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   (R ≈ 0.98 at 1.5x), an MP3 that does not fit, the floating player with the panel closed, a
   speed picked in the page's player, a page that puts 1x back on play (Sync sets R again and both
   play) or on every rate change (bounded, then both pause with the reason), an unmute, the end of the span and Play again, Close, two tabs, a replaced
-  video, a stopped service worker, Disconnect, reload and an SPA lecture change. The one-page layout
+  video, a stopped service worker, Disconnect, reload and an SPA lecture change. The job status spinner (`e2e/spinner.spec.ts`: the four statuses in light and dark with
+  the brand color, turning, still under reduced motion, gone at Completed and Failed; unit tests in
+  the panel controller also cover gone, gave up, Check again, lecture and account change). The
+  one-page layout
   (`e2e/layout.spec.ts`, screenshots at 320, 390 and 430 px, light and dark, with no sideways scroll
   at any of them): the three blocks in order and no tabs, the Video row above the start times, the
   speed radios with the arrow keys, the translation (selectable) before Play, editing the form and

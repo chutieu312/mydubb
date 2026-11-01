@@ -83,6 +83,9 @@ export const STATUS_TEXT: Record<string, string> = {
   failed: "Failed.",
 };
 
+/** A job still being worked on: the panel shows a spinner beside its status. */
+export const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["queued", "translating", "synthesizing", "processing"]);
+
 export const SEND_TIMEOUT_MS = 60_000;
 export const UNKNOWN_OUTCOME =
   "MyDubb did not answer, so it is not known whether the job was created. It may still be " +

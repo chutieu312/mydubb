@@ -1024,6 +1024,128 @@ describe("a late write of an older job", () => {
   });
 });
 
+describe("job status spinner", () => {
+  const working = () => $("job-status").classList.contains("working");
+  const never = () => new Promise<never>(() => undefined);
+  /** Real time: the poll waits a second between two answers. */
+  async function until(check: () => boolean, ms = 4000) {
+    const end = Date.now() + ms;
+    while (!check() && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  it.each([
+    ["queued", "Queued…"],
+    ["translating", "Translating…"],
+    ["synthesizing", "Generating speech…"],
+    ["processing", "Processing audio…"],
+  ])("shows a spinner beside %s, the status staying in words", async (status, text) => {
+    const getJob = vi.fn().mockResolvedValueOnce(job(status)).mockImplementation(never);
+    const { dubbing } = await started(undefined, fakeApi({ getJob }));
+    $<HTMLButtonElement>("generate").click();
+    await settle(6);
+    expect($("job-status").textContent).toBe(text);
+    expect(working()).toBe(true);
+    dubbing.dispose();
+  });
+
+  it("has none while sending, after an unknown outcome, or for a finished or failed job", async () => {
+    let answer!: (value: unknown) => void;
+    const sending = await started(undefined, fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) }));
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    expect($("job-status").textContent).toBe("Sending to MyDubb…");
+    expect(working()).toBe(false);
+    answer(job("queued"));
+    sending.dubbing.dispose();
+
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    const timeout = new MyDubbError(0, "timeout", "MyDubb did not answer in time.");
+    const unknown = await started(undefined, fakeApi({ createJob: vi.fn(async () => Promise.reject(timeout)) }));
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    expect($("job-status").textContent).toMatch(/unknown whether this job was created/);
+    expect(working()).toBe(false);
+    unknown.dubbing.dispose();
+
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    await started();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect($("job-status").textContent).toBe("Completed.");
+    expect(working()).toBe(false);
+
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    const failed = { ...job("failed"), error: { code: "speech_quota_exceeded", message: "The speech quota is used up." } };
+    await started(undefined, fakeApi({ getJob: vi.fn(async () => failed) }));
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect($("job-status").textContent).toBe("Failed.");
+    expect(working()).toBe(false);
+  });
+
+  it.each([
+    ["completes", async () => job("completed")],
+    ["fails", async () => ({ ...job("failed"), error: { code: "job_failed", message: "Nope." } })],
+    ["is gone", async () => Promise.reject(new MyDubbError(404, "not_found", "No such job."))],
+  ])("stops when the job %s after it was running", async (_name, second) => {
+    const getJob = vi.fn().mockResolvedValueOnce(job("translating")).mockImplementationOnce(second).mockImplementation(never);
+    const { dubbing } = await started(undefined, fakeApi({ getJob }));
+    $<HTMLButtonElement>("generate").click();
+    await settle(6);
+    expect(working()).toBe(true);
+    await until(() => !working());
+    expect(working()).toBe(false);
+    dubbing.dispose();
+  });
+
+  it("stops when the panel gives up checking, and Check again starts it with the next answer", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const timeout = new MyDubbError(0, "timeout", "MyDubb did not answer in time.");
+      const getJob = vi.fn().mockResolvedValueOnce(job("processing"));
+      for (let i = 0; i < 5; i += 1) getJob.mockRejectedValueOnce(timeout);
+      getJob.mockResolvedValueOnce(job("synthesizing")).mockImplementation(never);
+      const { dubbing } = await started(undefined, fakeApi({ getJob }));
+      $<HTMLButtonElement>("generate").click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect($("job-status").textContent).toBe("Processing audio…");
+      expect(working()).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect($("job-error").textContent).toMatch(/Stopped checking the job/);
+      expect($("job-status").textContent).toBe("Processing audio…");
+      expect(working()).toBe(false);
+      $<HTMLButtonElement>("check-again").click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect($("job-status").textContent).toBe("Generating speech…");
+      expect(working()).toBe(true);
+      dubbing.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops when the job is no longer followed (another lecture, another account)", async () => {
+    for (const change of ["lecture", "account"] as const) {
+      document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+      lesson = LESSON;
+      const getJob = vi.fn().mockResolvedValueOnce(job("queued")).mockImplementation(never);
+      const { dubbing } = await started(undefined, fakeApi({ getJob }));
+      $<HTMLButtonElement>("generate").click();
+      await settle(6);
+      expect(working(), change).toBe(true);
+      if (change === "lecture") {
+        lesson = "demo-course/2";
+        dubbing.lessonState(lesson);
+      } else {
+        dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+      }
+      expect(working(), change).toBe(false);
+      expect($("job-status").textContent, change).toBe("");
+      dubbing.dispose();
+    }
+  });
+});
+
 describe("audio download", () => {
   it("a failed or timed-out MP3 download can be retried", async () => {
     const api = fakeApi({
