@@ -46,7 +46,8 @@ next to the lecture video.
 |---|---|---|
 | The text you select on an Udemy lecture page | When you choose **Send to MyDubb** | Shown in the side panel and kept in your browser's session memory. **Sent to MyDubb only when you click Generate audio** |
 | Your choices: start times, language, voice, speed | In the panel | Sent to MyDubb with the text when you click Generate audio |
-| The lecture's address, page title and the video's time, speed and sound state | While the panel or the floating player is in use | **Stays in your browser.** Not sent to MyDubb. With **Sync with video** on, the extension also mutes the lecture video and changes its speed, and restores them when you turn Sync off |
+| The translation MyDubb returns, and the audio | When the job finishes, the panel fetches them | The translation is kept in your browser's session memory so the panel can show it again; the audio is held in memory by the extension's player and is not saved by the extension |
+| The lecture's address, page title and the video's time, speed and sound state | While the panel or the floating player is in use | **Stays in your browser.** Not sent to MyDubb. When new audio loads, the extension pauses the lecture video and moves it to where your passage starts; with **Sync with video** on it also mutes the video and changes its speed, and restores them when you turn Sync off |
 | Your MyDubb sign-in | When you choose **Connect MyDubb** | You type your password on mydubb.com, not in the extension. The extension receives a sign-in token and your account's e-mail and name, keeps them in your browser's session memory, and sends the token to MyDubb with each request |
 
 **Your text and choices are sent only when you click Generate audio.** Some other requests to
@@ -104,7 +105,7 @@ investigation, or to follow the law]`.
 ## Ending it and removing data
 
 - **Disconnect** in the extension removes the token from your browser and ends it on the server.
-- **Clear**, closing the Udemy tab, or quitting the browser removes the text from the extension.
+- **Clear**, closing the Udemy tab, or quitting the browser removes the text and the translation from the extension.
 - Uninstalling the extension removes everything it stored in your browser.
 - Translations and audio disappear from the server on their own (see above).
 - To ask about your account or job records: `[PO: how to ask, what the operator will do and

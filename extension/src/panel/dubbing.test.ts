@@ -1354,6 +1354,6 @@ describe("one page: English transcript, Translate to, Your audio", () => {
     expect($("account-detail").textContent).toBe("Lan (lan@example.com)");
     expect($("header-details").contains($("disconnect"))).toBe(true);
     expect($<HTMLButtonElement>("disconnect").hidden).toBe(false);
-    expect($("generate-hint").textContent).toBe("Nothing is sent to MyDubb until you choose Generate audio.");
+    expect($("generate-hint").textContent).toBe("Your text is sent to MyDubb only when you choose Generate audio.");
   });
 });

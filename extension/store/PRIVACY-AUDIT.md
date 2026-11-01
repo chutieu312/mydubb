@@ -1,10 +1,10 @@
 # Data audit, permission justifications and dashboard answers (DRAFT)
 
-Status: **draft prepared 2026-10-31, not confirmed by the Product Owner, nothing declared on the
-dashboard.** Based on the code at `origin/main` `cb71cd2` (extension 0.3.0) and the backend
-documents named in each row. The side panel of PR #45 is not part of this audit's facts: it only
-moves the same controls around; **re-check the permission and data rows after #45 merges**
-(see [README.md](README.md)).
+Status: **draft, not confirmed by the Product Owner, nothing declared on the dashboard.** Prepared
+2026-10-31 and re-checked against the merged one-page panel on 2026-11-01: code at `origin/main`
+`b2a7a40` (PR #45; extension 0.4.0), manifest and the backend documents named in each row. Server
+features that are **not merged** (open PRs for usage/cost records and an admin role) are not
+described; **re-audit §2 if they merge**, because they may change what the server records.
 
 "Verified" below means read in code or in this repository's documents. Anything about what a
 third party (Microsoft, Render, Neon, AWS) keeps or does is **not verified here**.
@@ -18,7 +18,8 @@ No transcript, token, e-mail address or other user data is quoted in this docume
 | **Selected transcript text** (user-selected on a `https://www.udemy.com/*` lecture page; editable in the panel) | On the **Send to MyDubb** menu click, by the content script (falls back to Chrome's `selectionText`) | **Extension only** until the user clicks **Generate audio**; then the MyDubb server (`POST /api/jobs`, field `transcript`). Never to the Udemy page | Extension: `chrome.storage.session` (browser memory, access level `TRUSTED_CONTEXTS`, not readable by content scripts) as the tab's draft. Server: see §2 | Clear button, closing the tab, browser quit (session storage), uninstalling |
 | **Start times, language, voice, speed, timing mode** (form values) | Form in the panel | MyDubb server on Generate (same request) | Extension: `storage.session`. Server: job metadata, §2 | Same as above |
 | **Udemy page facts**: lecture URL path (course slug, lecture id), page title (first 300 chars), the lecture `<video>`'s time, duration, paused, rate, muted, seekable range | By the content script while a panel is connected or an audio session is linked; stops when neither is left | **Not sent to MyDubb** (the job request has no URL, title or lecture id; checked in `frontend/src/lib/jobRequest.ts`). The panel and the floating player get them through the extension's own ports | Extension only: the lecture key is kept with the draft/job record in `storage.session`; the title is shown in the panel | Changing lecture clears the draft; closing the tab; browser quit |
-| **Video control by Sync with video** (only when the user turns it on) | Content script sets the lecture video's muted state and speed; reads position | Nothing leaves the browser | n/a (restored when Sync turns off) | Turn Sync off |
+| **Control of the lecture video**: pause and seek to the start of the passage when a new audio is loaded (no Sync needed); Play/Pause/±5 s from the panel; with **Sync with video** on (user's choice) also mute and speed | The content script sets the video's `paused`, `currentTime` and, with Sync, `muted` and `playbackRate`; reads position | Nothing leaves the browser | n/a (Sync restores mute and speed when it turns off) | Turn Sync off |
+| **Translation of the loaded audio** (text derived from the user's transcript) | Received from the server when a job completes (`GET …/result`) | n/a (received) | Extension: `chrome.storage.session` (`loaded:<tab>`), so the panel shows it after reopening; the audio's own copy lives in the player session | New result replaces it; lecture change, Disconnect, account change, closing the tab, browser quit |
 | **MyDubb account connection**: token, user id, e-mail, display name, expiry | After **Connect MyDubb**: the sign-in happens on `https://mydubb.com` in Chrome's sign-in window (`chrome.identity.launchWebAuthFlow`); the extension never sees the password or the website cookie | The token goes to the MyDubb server as `Authorization: Bearer` on `/api/jobs*`, `/api/extension/*` (`credentials: "omit"`) | Extension: `storage.session`. Server: `user_sessions` row (SHA-256 of the token, `client='extension'`), life at most 12 h (`EXTENSION_SESSION_TTL_SECONDS`) | **Disconnect** (clears storage, then ends the token on the server); password reset or administrator revocation end it on the server; browser quit clears the extension copy |
 | **Generated MP3** | Downloaded by the panel with the token | n/a (received) | Extension: memory only (a Blob in the offscreen document, one per tab), never written to storage | Lecture change, reload, tab close, Disconnect, new result chosen |
 | **Public configuration** (`GET /api/meta`: languages, voices) | On panel open, no token | MyDubb server | Not stored by the extension | n/a |
@@ -26,7 +27,7 @@ No transcript, token, e-mail address or other user data is quoted in this docume
 
 ### Requests to MyDubb that happen without a click on Generate or Connect
 
-Read from `extension/src/panel/dubbing.ts` (`loadRemote`, `restore`, `follow`, `loadAudio`). None
+Read from `extension/src/panel/dubbing.ts` (`loadRemote`, `restore`, `follow`, `loadAudio`) after PR #45. None
 carries transcript text; all reach the server with the network address (and, where noted, the
 token). The policy and the listing must not say that nothing is sent before Generate/Connect.
 
@@ -35,8 +36,10 @@ token). The policy and the listing must not say that nothing is sent before Gene
 | Side panel opens | `GET /api/meta` | Nothing but the request itself (no token) |
 | Side panel opens with a stored token | `GET /api/extension/session` | Token |
 | Panel opens, or stays open, with a job recorded for this tab and lecture (state "created") | `GET /api/jobs/{id}`, polling until the job ends, an error, a change of lecture or account, or the panel closes (up to 30 minutes) | Token, job id |
-| The followed job completes | `GET /api/jobs/{id}/result` (translation) and `GET …/result/audio` (MP3) | Token, job id |
-| **Check again** / **Load audio** buttons | The same job and result requests | Token, job id |
+| The followed job completes | `GET /api/jobs/{id}/result` (translation) and `GET …/result/audio` (MP3); the new audio then replaces the loaded one by itself | Token, job id |
+| Panel closed while a job runs, opened again later in the same tab, lecture and account | The status polling above; the result and audio are fetched when it completes (so the new audio can be loaded only at that moment) | Token, job id |
+| Panel reopened on audio that is already loaded | None (position, playback and Sync are left alone) | – |
+| **Check again** / **Load audio** buttons (Load audio after a reload or a failed download) | The same job and result requests; no new job | Token, job id |
 
 Not automatic: creating a job (`POST /api/jobs`, only on **Generate audio**), sign-in
 (`/api/extension/token`, only after **Connect MyDubb**) and `POST /api/extension/logout` (only on
@@ -76,11 +79,11 @@ policy for both. The scope is the Product Owner's decision.
 |---|---|---|
 | `contextMenus` | **Send to MyDubb** | Adds one right-click item, shown only when text is selected on a Udemy page, to send that selection to the side panel. |
 | `sidePanel` | The panel | Shows the transcript, the dubbing controls and the player in Chrome's side panel for the current tab. |
-| `storage` | Draft, job, connection | Used only as `chrome.storage.session` (memory, cleared when the browser quits): the selected text, form choices, the job being followed and the MyDubb sign-in token. |
+| `storage` | Draft, job, connection | Used only as `chrome.storage.session` (memory, cleared when the browser quits): the selected text, form choices, the job being followed, the translation of the loaded audio and the MyDubb sign-in token. |
 | `identity` | **Connect MyDubb** | `chrome.identity.launchWebAuthFlow` opens the MyDubb sign-in window so the password is typed on mydubb.com, never in the extension. |
 | `offscreen` | Audio keeps playing when the panel closes | One hidden extension page plays the generated audio (reasons AUDIO_PLAYBACK and BLOBS), so playback continues if the side panel is closed. |
 | Host `https://mydubb.com/*` | Every MyDubb call | Sends the user's own request (text and choices) to the MyDubb service and receives the translation and audio. No other host. |
-| Content script `https://www.udemy.com/*` (top frame) | Selection, video controls, floating player, Sync | Reads the selected text when the user chooses the menu item, finds the lecture video to play, pause, seek and (only if the user turns on Sync) mute and change the speed of that video, and draws the small floating audio player on the page. |
+| Content script `https://www.udemy.com/*` (top frame) | Selection, video controls, floating player, Sync | Reads the selected text when the user chooses the menu item, finds the lecture video to play, pause and seek it (it is paused and moved to the start of your passage when new audio loads) and (only if the user turns on Sync) mute and change the speed of that video, and draws the small floating audio player on the page. |
 | Remote code | n/a | **No.** All code is in the package; the extension makes no `eval`, no remotely hosted script. |
 
 No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`,
@@ -108,7 +111,7 @@ and compare each definition below with the facts. Until then every row is "pendi
 |---|---|---|---|
 | E-mail and display name of the connected account | "Personally identifiable information" (name, e-mail, any ID number) | Stored in the extension; held by the server | Matches on its face: pending dashboard confirmation |
 | MyDubb bearer token | "Authentication information" (logins, passwords, authentication cookies) | Stored in the extension, sent to the server | Matches on its face: pending |
-| Selected transcript text (and the user's edits of it) | "Website content and resources"; also possibly "User-generated content" | Read from the Udemy page, stored in the session, sent to the server and to Azure on Generate | Matches on its face: pending |
+| Selected transcript text (and the user's edits of it), and the translation received for it | "Website content and resources"; also possibly "User-generated content" | Text read from the Udemy page, stored in the session, sent to the server and to Azure on Generate; the translation is stored in the session too | Matches on its face: pending |
 | Lecture URL path (course slug, lecture id) and page title | "Web browsing activity": "information about the websites or other web resources a user requests or interacts with" | Read by the extension, kept in the browser, **not** sent to MyDubb | Meets the definition as written, and Chrome counts local handling: pending dashboard confirmation of how local-only data is declared |
 | Video state (time, duration, paused, speed, muted) of the lecture | Possibly "Website content and resources" | Read and written locally, not sent | Pending |
 | Pointer and key events on Udemy pages (a flag only: "the user touched the page"; no key, position or content recorded) | Possibly the dashboard's "User activity" | Read, used in memory, discarded, not stored or sent | Pending: confirm whether transient local use counts |

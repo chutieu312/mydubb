@@ -1,15 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "MyDubb Prototype",
-  "version": "0.3.0",
-  "description": "Prototype: send selected Udemy transcript text to a side panel, dub it with your MyDubb account and listen in the panel or a floating player.",
+  "name": "MyDubb",
+  "version": "0.4.0",
+  "description": "Turn the English transcript you select on a Udemy lecture into audio in your language and play it with the video.",
   "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": ["contextMenus", "sidePanel", "storage", "identity", "offscreen"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Open MyDubb Prototype"
+    "default_title": "Open MyDubb",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
   },
   "content_scripts": [
     {

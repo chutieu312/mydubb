@@ -1,25 +1,30 @@
-// Packs the production build (dist/) into a Chrome Web Store upload ZIP with manifest.json at the
-// root. Run `npm run build && npm run check:dist` first; this script runs check:dist again and
-// refuses anything that is not a plain production file.
+// Packs a build into a Chrome Web Store upload ZIP with manifest.json at the root.
 //
-//   node store/tools/make-zip.mjs            writes release/mydubb-extension-<version>.zip
-//   node store/tools/make-zip.mjs --release  also fails while the build is not release-ready
+//   node store/tools/make-zip.mjs            packs dist/ (the ordinary build, no key) as
+//                                            release/mydubb-extension-<version>-draft.zip: what the first DRAFT
+//                                            upload needs to get the Item ID and public key. NOT release-ready.
+//   node store/tools/make-zip.mjs --release  packs dist-release/ (`node build.mjs --release`) as
+//                                            release/mydubb-extension-<version>.zip, only when
+//                                            `check-dist --release` passes (the verified key is in it)
 //
-// The ZIP is deterministic (sorted names, fixed timestamps), so the same dist/ gives the same file.
-// It never reads or writes a private key. release/ is git-ignored.
+// Both run check-dist first, refuse anything that is not a plain production file, and read the ZIP
+// back to compare every entry with the build. The ZIP is deterministic (sorted names, fixed
+// timestamps). Nothing here reads or writes a private key. release/ is git-ignored.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { crc32, deflateRawSync } from "node:zlib";
+
+import { checkDist } from "../../check-dist.mjs";
+import { readZip, writeZip } from "./zip.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
-const dist = join(root, "dist");
-const strict = process.argv.includes("--release");
+const release = process.argv.includes("--release");
+const dist = join(root, release ? "dist-release" : "dist");
 
-const check = spawnSync(process.execPath, [join(root, "check-dist.mjs")], { cwd: root, stdio: "inherit" });
+const check = spawnSync(process.execPath, [join(root, "check-dist.mjs"), ...(release ? ["--release"] : [])], { cwd: root, stdio: "inherit" });
 if (check.status !== 0) {
-  console.error("check:dist failed; no ZIP written.");
+  console.error(`check-dist${release ? " --release" : ""} failed; no ZIP written.`);
   process.exit(1);
 }
 
@@ -29,85 +34,39 @@ function walk(dir) {
     return statSync(full).isDirectory() ? walk(full) : [full];
   });
 }
-const files = walk(dist)
-  .map((full) => relative(dist, full).split("\\").join("/"))
-  .sort();
-
-const forbidden = /(\.map$|\.test\.|(^|\/)dist-test|\.env|\.pem$|\.key$|\.md$|(^|\/)node_modules\/)/i;
-const bad = files.filter((name) => forbidden.test(name));
+const names = walk(dist).map((full) => relative(dist, full).split("\\").join("/"));
+const forbidden = /(\.map$|\.test\.|dist-test|\.env|\.pem$|\.key$|\.md$|node_modules)/i;
+const bad = names.filter((name) => forbidden.test(name));
 if (bad.length > 0) {
   console.error(`Not a production file, refusing: ${bad.join(", ")}`);
   process.exit(1);
 }
-if (!files.includes("manifest.json")) {
-  console.error("manifest.json is not at the root of dist/.");
+if (!names.includes("manifest.json")) {
+  console.error("manifest.json is not at the root of the build.");
   process.exit(1);
 }
 
-const manifest = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8"));
-const notReady = [];
-if (!manifest.icons || !manifest.icons["128"]) notReady.push("manifest has no 128 px icon");
-if (!manifest.key) notReady.push("manifest has no release key (stable ID not set up)");
-if (/prototype/i.test(`${manifest.name} ${manifest.description}`)) notReady.push('name or description still says "Prototype"');
-for (const icon of Object.values(manifest.icons ?? {})) {
-  if (!files.includes(icon)) notReady.push(`icon file missing: ${icon}`);
-}
+const entries = names.map((name) => ({ name, data: readFileSync(join(dist, name)) }));
+const manifest = JSON.parse(entries.find((e) => e.name === "manifest.json").data.toString("utf8"));
+const zip = writeZip(entries);
 
-const DOS_DATE = (1 << 5) | 1; // 1980-01-01
-const local = [];
-const central = [];
-let offset = 0;
-for (const name of files) {
-  const data = readFileSync(join(dist, name));
-  const packed = deflateRawSync(data, { level: 9 });
-  const nameBuf = Buffer.from(name, "utf8");
-  const crc = crc32(data);
-  const head = Buffer.alloc(30);
-  head.writeUInt32LE(0x04034b50, 0);
-  head.writeUInt16LE(20, 4);
-  head.writeUInt16LE(0x0800, 6); // UTF-8 names
-  head.writeUInt16LE(8, 8); // deflate
-  head.writeUInt16LE(0, 10);
-  head.writeUInt16LE(DOS_DATE, 12);
-  head.writeUInt32LE(crc, 14);
-  head.writeUInt32LE(packed.length, 18);
-  head.writeUInt32LE(data.length, 22);
-  head.writeUInt16LE(nameBuf.length, 26);
-  local.push(head, nameBuf, packed);
-
-  const cd = Buffer.alloc(46);
-  cd.writeUInt32LE(0x02014b50, 0);
-  cd.writeUInt16LE(20, 4);
-  cd.writeUInt16LE(20, 6);
-  cd.writeUInt16LE(0x0800, 8);
-  cd.writeUInt16LE(8, 10);
-  cd.writeUInt16LE(0, 12);
-  cd.writeUInt16LE(DOS_DATE, 14);
-  cd.writeUInt32LE(crc, 16);
-  cd.writeUInt32LE(packed.length, 20);
-  cd.writeUInt32LE(data.length, 24);
-  cd.writeUInt16LE(nameBuf.length, 28);
-  cd.writeUInt32LE(offset, 42);
-  central.push(cd, nameBuf);
-  offset += head.length + nameBuf.length + packed.length;
+// Read it back: same names, same bytes, manifest at the root, and the same checks on the extracted files.
+const back = readZip(zip);
+if (back.length !== entries.length || back.some((e) => !entries.find((o) => o.name === e.name && o.data.equals(e.data)))) {
+  console.error("The ZIP does not match the build it was made from.");
+  process.exit(1);
 }
-const centralSize = central.reduce((n, b) => n + b.length, 0);
-const end = Buffer.alloc(22);
-end.writeUInt32LE(0x06054b50, 0);
-end.writeUInt16LE(files.length, 8);
-end.writeUInt16LE(files.length, 10);
-end.writeUInt32LE(centralSize, 12);
-end.writeUInt32LE(offset, 16);
 
 const outDir = join(root, "release");
 mkdirSync(outDir, { recursive: true });
-const out = join(outDir, `mydubb-extension-${manifest.version}.zip`);
-writeFileSync(out, Buffer.concat([...local, ...central, end]));
+const out = join(outDir, `mydubb-extension-${manifest.version}${release ? "" : "-draft"}.zip`);
+writeFileSync(out, zip);
+console.log(`Wrote ${out} (${zip.length} bytes)\n${[...names].sort().map((f) => `  ${f}`).join("\n")}`);
 
-console.log(`Wrote ${out}\n${files.map((f) => `  ${f}`).join("\n")}`);
-if (notReady.length > 0) {
-  console.log(`\nDRAFT, NOT RELEASE-READY:\n- ${notReady.join("\n- ")}`);
-  if (strict) process.exit(1);
+// Is this package release-ready? Same conditions as check-dist --release, on the packed build.
+const { problems, missing } = checkDist({ dir: dist, origin: process.env.MYDUBB_ORIGIN || "https://mydubb.com", release: true });
+if (problems.length + missing.length > 0) {
+  console.log(`\nDRAFT, NOT RELEASE-READY:\n- ${[...problems, ...missing].join("\n- ")}`);
 } else {
-  console.log("\nRelease-ready checks passed (these cover the package only, not the dashboard steps).");
+  console.log("\nRelease conditions of check-dist --release are met. The dashboard steps (listing, privacy, review) are separate.");
 }

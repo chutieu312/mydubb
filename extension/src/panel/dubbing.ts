@@ -789,7 +789,7 @@ export class Dubbing {
     ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null;
     ui.generate.textContent = this.sendingOp !== null ? "Sending…" : "Generate audio";
     ui.generateHint.textContent = this.auth
-      ? "Nothing is sent to MyDubb until you choose Generate audio."
+      ? "Your text is sent to MyDubb only when you choose Generate audio."
       : "Connect MyDubb (top of the panel) to generate audio.";
   }
 
