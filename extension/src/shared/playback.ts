@@ -30,6 +30,8 @@ export interface PlaybackChoices {
   languageLabel: string;
   voiceLabel: string;
   speed: number;
+  /** The source span the job was made for, "00:00:00 → 00:00:23"; absent when the job did not record it. */
+  sourceRange?: string;
 }
 
 /** Who a session belongs to: only the tab's panel ever sees this. */
@@ -243,7 +245,13 @@ const isLessonKey = (v: unknown): v is string => isText(v, 250);
 const isId = (v: unknown): v is string => isText(v, 100);
 
 function isChoices(value: unknown): value is PlaybackChoices {
-  return isObject(value) && isText(value.languageLabel, 200) && isText(value.voiceLabel, 200) && isFiniteNumber(value.speed);
+  return (
+    isObject(value) &&
+    isText(value.languageLabel, 200) &&
+    isText(value.voiceLabel, 200) &&
+    isFiniteNumber(value.speed) &&
+    (value.sourceRange === undefined || isText(value.sourceRange, 100))
+  );
 }
 
 function isOwner(value: unknown): value is PlaybackOwner {
@@ -455,5 +463,23 @@ export function clampPosition(time: number, duration: number | null): number {
 
 /** "Vietnamese · Andrew Multilingual · 1.5x": the choices the file was made with. */
 export function choicesLabel(choices: PlaybackChoices): string {
-  return `${choices.languageLabel} · ${choices.voiceLabel} · ${choices.speed}x`;
+  const label = `${choices.languageLabel} · ${choices.voiceLabel} · ${choices.speed}x`;
+  return choices.sourceRange ? `${label} · ${choices.sourceRange}` : label;
+}
+
+/**
+ * The video source span of a job, "00:00:05.480 → 00:00:34": taken from the job's Sync snapshot
+ * (plain: its two start-time fields; timed: the transcript's first and last caption, milliseconds
+ * kept), never from the form and never from the start-time fields of a timed job, which only say
+ * what baseline was requested. Undefined when the job has no snapshot.
+ */
+export function sourceRangeOf(source: { start: number; end: number } | undefined): string | undefined {
+  return source ? `${clockWithMs(source.start)} → ${clockWithMs(source.end)}` : undefined;
+}
+
+function clockWithMs(seconds: number): string {
+  const ms = Math.round(seconds * 1000);
+  const pad = (n: number, width = 2) => String(n).padStart(width, "0");
+  const clock = `${pad(Math.floor(ms / 3_600_000))}:${pad(Math.floor(ms / 60_000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}`;
+  return ms % 1000 === 0 ? clock : `${clock}.${pad(ms % 1000, 3)}`;
 }

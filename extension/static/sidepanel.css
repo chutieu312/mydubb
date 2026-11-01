@@ -221,3 +221,31 @@ input.seek {
 #notices {
   padding-left: 18px;
 }
+
+.callout {
+  margin: 8px 0;
+  padding: 10px;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.callout-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.loaded-head {
+  margin: 0 0 4px;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}

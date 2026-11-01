@@ -112,11 +112,21 @@ test("closing the panel neither cancels nor resends; reopening and reloading res
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.locator("#job-choices")).toContainText("2x");
   // The audio loaded for the first job stays until the user switches to the new result.
-  await expect(panel.getByText(/new result is ready/)).toBeVisible({ timeout: 20_000 });
+  const callout = panel.locator("#result-switch");
+  await expect(callout).toBeVisible({ timeout: 20_000 });
+  await expect(callout).toContainText("New audio is ready. The player is still using an earlier result.");
+  await expect(panel.locator("#player-badge")).toBeVisible();
   expect(mydubb.gets("/api/jobs/job-2/result/audio")).toHaveLength(0);
-  await panel.getByRole("button", { name: "Use this result" }).click();
+  // Narrow panel: the callout and the loaded-audio block stay inside the viewport.
+  await panel.setViewportSize({ width: 320, height: 700 });
+  expect(await panel.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await panel.screenshot({ path: test.info().outputPath("earlier-and-new.png"), fullPage: true });
+  await callout.getByRole("button", { name: "Use new audio" }).click();
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
-  await expect(panel.locator("#player-info")).toHaveText("Loaded: Vietnamese · Andrew Multilingual · 2x");
+  await expect(panel.locator("#player-info")).toContainText("Vietnamese");
+  await expect(panel.locator("#player-info")).toContainText("2x");
+  await expect(callout).toBeHidden();
+  await expect(panel.locator("#result-using")).toBeVisible();
   expect(mydubb.posts("/api/jobs")).toHaveLength(2);
 });
 

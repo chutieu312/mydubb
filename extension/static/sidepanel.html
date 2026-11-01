@@ -117,6 +117,12 @@
         <dl id="job-choices" class="link"></dl>
         <div id="result" hidden>
           <p id="audio-status" class="status" role="status" aria-live="polite"></p>
+          <div id="result-switch" class="callout" role="group" aria-labelledby="result-switch-title" hidden>
+            <p id="result-switch-title" class="callout-title">New audio is ready. The player is still using an earlier result.</p>
+            <dl id="result-switch-info" class="link"></dl>
+            <button id="player-switch" type="button" class="primary">Use new audio</button>
+          </div>
+          <p id="result-using" class="hint" hidden>The player is using this result.</p>
           <dl id="result-durations" class="link"></dl>
           <h3>Translation</h3>
           <div id="translation" class="translation"></div>
@@ -128,7 +134,8 @@
         <h2 id="player-heading">MyDubb player</h2>
         <p class="hint">Plays the MyDubb audio; it keeps playing when this panel is closed. It moves the Udemy video only while Sync with video is on.</p>
         <div id="player" role="group" aria-labelledby="player-heading" hidden>
-          <p id="player-info" class="status"></p>
+          <p class="loaded-head"><strong>Loaded audio</strong> <span id="player-badge" class="badge" hidden>Earlier result</span></p>
+          <dl id="player-info" class="link"></dl>
           <input id="player-seek" class="seek" type="range" min="0" step="0.1" value="0" aria-label="Position in the MyDubb audio" />
           <p class="time"><span id="player-time">--:-- / --:--</span></p>
           <div class="row controls">
@@ -141,6 +148,7 @@
             <button id="player-floating" type="button">Show floating player</button>
           </div>
           <div id="sync" class="sync" role="group" aria-label="Sync with video">
+            <p class="hint">Sync applies to the loaded audio above.</p>
             <p id="sync-status" class="status" role="status" aria-live="polite"></p>
             <div class="row">
               <button id="sync-toggle" type="button" aria-pressed="false">Sync with video</button>
@@ -154,10 +162,6 @@
             </div>
             <p id="sync-notice" class="error" role="alert"></p>
           </div>
-        </div>
-        <div id="player-other" class="confirm" hidden>
-          <p id="player-other-text"></p>
-          <button id="player-switch" type="button">Use this result</button>
         </div>
         <button id="player-load" type="button" hidden>Load audio</button>
       </section>

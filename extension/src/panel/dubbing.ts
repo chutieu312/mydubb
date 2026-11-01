@@ -24,7 +24,7 @@ import { editTimestamp } from "../../../frontend/src/lib/timestampInput";
 import { formatSeconds, parseTimestamp, previewTargetDuration } from "../../../frontend/src/lib/timestamps";
 import { analyzeTranscriptTiming, captionClock, type TranscriptTiming } from "../../../frontend/src/lib/transcriptTiming";
 import { formKey, jobKey } from "../shared/messages";
-import { PLAYER_SEEK_SECONDS, choicesLabel, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
+import { PLAYER_SEEK_SECONDS, sourceRangeOf, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
 import { isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
 import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
 import { AUTH_KEY, connect, connectErrorMessage, isLive, isStoredAuth, type StoredAuth } from "./auth";
@@ -213,6 +213,7 @@ function dubbingUi() {
     playerSection: byId("player-section"),
     player: byId("player"),
     playerInfo: byId("player-info"),
+    playerBadge: byId("player-badge"),
     playerPlay: byId<HTMLButtonElement>("player-play"),
     playerBack: byId<HTMLButtonElement>("player-back"),
     playerForward: byId<HTMLButtonElement>("player-forward"),
@@ -220,9 +221,10 @@ function dubbingUi() {
     playerTime: byId("player-time"),
     playerProblem: byId("player-problem"),
     playerFloating: byId<HTMLButtonElement>("player-floating"),
-    playerOther: byId("player-other"),
-    playerOtherText: byId("player-other-text"),
+    resultSwitch: byId("result-switch"),
+    resultSwitchInfo: byId("result-switch-info"),
     playerSwitch: byId<HTMLButtonElement>("player-switch"),
+    resultUsing: byId("result-using"),
     playerLoad: byId<HTMLButtonElement>("player-load"),
     syncStatus: byId("sync-status"),
     syncToggle: byId<HTMLButtonElement>("sync-toggle"),
@@ -275,7 +277,9 @@ export class Dubbing {
   private sendingOp: string | null = null;
   private poll: AbortController | null = null;
   // The audio of the job this panel shows (once its result arrived), and a load started by hand.
-  private resultAudio: { path: string; record: JobRecord; sync: SyncSource | null } | null = null;
+  private resultAudio: { path: string; record: JobRecord; sync: SyncSource | null; mp3Seconds: number | null } | null = null;
+  /** Use new audio was pressed and the switch has not finished. */
+  private switching = false;
   private audioLoad: AbortController | null = null;
   private loadingAudio = false;
   // The session the content script was last asked to link, and whether one was shown.
@@ -924,7 +928,12 @@ export class Dubbing {
     }
     if (!current()) return;
     this.renderResult(result);
-    this.resultAudio = { path: result.audio.url, record, sync: confirmedSync(record.choices.sync, result) };
+    this.resultAudio = {
+      path: result.audio.url,
+      record,
+      sync: confirmedSync(record.choices.sync, result),
+      mp3Seconds: result.audio.duration?.mp3_decoded_seconds ?? null,
+    };
     // The tab may already have a session: this job's (panel reopened) or an earlier result's.
     await this.deps.player.ready();
     if (!current()) return;
@@ -935,8 +944,7 @@ export class Dubbing {
       return;
     }
     if (view) {
-      this.ui.audioStatus.textContent =
-        "The new result is ready. The player keeps the earlier audio until you choose Use this result.";
+      this.ui.audioStatus.textContent = "";
       this.renderPlayer();
       return;
     }
@@ -1013,7 +1021,12 @@ export class Dubbing {
           lessonKey,
           owner: { userId: auth.user.id, connectionId: auth.connectionId, jobId, operationId },
           // What the job was made with (copied at Generate), never the form as it is now.
-          choices: { languageLabel: choices.languageLabel, voiceLabel: choices.voiceLabel, speed: choices.speed },
+          choices: {
+            languageLabel: choices.languageLabel,
+            voiceLabel: choices.voiceLabel,
+            speed: choices.speed,
+            sourceRange: sourceRangeOf(choices.sync),
+          },
           sync,
         },
         blob,
@@ -1055,15 +1068,19 @@ export class Dubbing {
       this.record?.operationId === operationId;
     void this.loadAudio(auth, controller.signal, current).finally(() => {
       if (this.audioLoad === controller) this.audioLoad = null;
+      this.switching = false;
       if (!this.disposed) this.renderPlayer();
     });
   }
 
   private switchToResult(): void {
     // The earlier audio is stopped and released before the new one is loaded.
+    if (this.audioLoad || this.loadingAudio) return;
     const view = this.sessionView();
     if (view) this.deps.player.end(view.sessionId);
+    this.switching = true;
     this.loadByHand();
+    if (!this.audioLoad) this.switching = false;
   }
 
   private wirePlayer(signal: AbortSignal): void {
@@ -1164,7 +1181,12 @@ export class Dubbing {
     if (view) {
       const playing = !view.paused && !view.ended;
       const ready = view.status === "ready";
-      ui.playerInfo.textContent = `Loaded: ${choicesLabel(view.choices)}`;
+      ui.playerInfo.replaceChildren();
+      addPair(ui.playerInfo, "Language", view.choices.languageLabel);
+      addPair(ui.playerInfo, "Voice", view.choices.voiceLabel);
+      addPair(ui.playerInfo, "Speed", speedLabel(view.choices.speed));
+      addPair(ui.playerInfo, "Video source", view.choices.sourceRange ?? "Not recorded for this audio");
+      addPair(ui.playerInfo, "MP3 length", view.duration === null ? "Loading…" : `${view.duration.toFixed(3)} s`);
       ui.playerPlay.textContent = playing ? "Pause" : "Play";
       ui.playerPlay.setAttribute("aria-label", playing ? "Pause MyDubb audio" : "Play MyDubb audio");
       ui.playerPlay.disabled = view.status === "error";
@@ -1188,12 +1210,23 @@ export class Dubbing {
       this.confirmingSync = false;
     }
     const other = !!view && !!result && result.record.jobId !== view.owner.jobId;
-    ui.playerOther.hidden = !other;
-    if (view && other) {
-      ui.playerOtherText.textContent = `The player still has an earlier result (${choicesLabel(view.choices)}). Use this result stops it and loads the new audio.`;
-    }
+    ui.playerBadge.hidden = !other;
     const busy = this.loadingAudio || this.audioLoad !== null;
+    // The callout sits with the new result; it stays while the switch is under way (the old
+    // session is already released then) and is gone once the player has this result.
+    ui.resultSwitch.hidden = !(other || (this.switching && busy));
+    ui.resultUsing.hidden = !(!!view && !!result && !other);
     ui.playerSwitch.disabled = busy;
+    ui.playerSwitch.textContent = busy ? "Switching…" : "Use new audio";
+    ui.resultSwitchInfo.replaceChildren();
+    if (result) {
+      const c = result.record.choices;
+      addPair(ui.resultSwitchInfo, "Language", c.languageLabel);
+      addPair(ui.resultSwitchInfo, "Voice", c.voiceLabel);
+      addPair(ui.resultSwitchInfo, "Speed", speedLabel(c.speed));
+      addPair(ui.resultSwitchInfo, "Video source", sourceRangeOf(c.sync) ?? "Not recorded for this audio");
+      addPair(ui.resultSwitchInfo, "MP3 length", result.mp3Seconds === null ? "Not reported" : `${result.mp3Seconds.toFixed(3)} s`);
+    }
     ui.playerLoad.hidden = !result || busy || (!!view && (other || view.status !== "error"));
   }
 
@@ -1224,6 +1257,7 @@ export class Dubbing {
     this.audioLoad?.abort();
     this.audioLoad = null;
     this.resultAudio = null;
+    this.switching = false;
     if (endPlayback) this.deps.player.end();
     if (this.record) void this.forgetRecord();
     this.record = null;
