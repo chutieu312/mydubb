@@ -1,26 +1,35 @@
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
+  --bg: #f4f5f7;
+  --surface: #ffffff;
   --fg: #1d1d1f;
   --muted: #5f6368;
-  --border: #c7c7cc;
+  --border: #dfe1e6;
+  --field: #ffffff;
+  --field-border: #c4c7cf;
   --accent: #2f5bd3;
   --accent-fg: #ffffff;
+  --accent-soft: #e9eefb;
   --error: #b3261e;
-  --panel: #f5f6f8;
+  --panel: #eef0f3;
+  --radius: 10px;
   --gap: 12px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1b1c1f;
+    --bg: #151619;
+    --surface: #1f2125;
     --fg: #ececf1;
     --muted: #a5a9b1;
-    --border: #4a4d55;
+    --border: #2f3238;
+    --field: #17181b;
+    --field-border: #454952;
     --accent: #8fb0ff;
     --accent-fg: #10131a;
+    --accent-soft: #232c45;
     --error: #ffb4ab;
-    --panel: #25272c;
+    --panel: #2a2d33;
   }
 }
 
@@ -36,8 +45,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* A side panel can be made wide: the content keeps a readable width. */
 main {
-  padding: 10px 14px 24px;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 12px 14px 28px;
   display: grid;
   gap: var(--gap);
   min-width: 0;
@@ -59,18 +71,21 @@ header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 h1 {
-  font-size: 18px;
+  font-size: 15px;
+  font-weight: 700;
   margin: 0;
   flex: none;
+  color: var(--accent);
 }
 
 .account {
   margin: 0;
+  font-size: 12.5px;
   color: var(--muted);
   min-width: 0;
   white-space: nowrap;
@@ -79,7 +94,8 @@ h1 {
 }
 
 .lesson {
-  margin: 0;
+  margin: 2px 0 0;
+  font-size: 15px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -90,30 +106,40 @@ header .row:not(:has(button:not([hidden]))) {
   display: none;
 }
 
-/* ---- Tabs ---------------------------------------------------------------------------------- */
+header .status {
+  margin: 4px 0 0;
+}
+
+/* ---- Tabs (a segmented control) ------------------------------------------------------------ */
 
 .tabs {
   display: flex;
-  border-bottom: 1px solid var(--border);
-  gap: 4px;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--panel);
 }
 
 [role="tab"] {
   flex: 1 1 0;
   min-width: 0;
-  border: none;
-  border-bottom: 3px solid transparent;
-  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
-  padding: 8px 6px 6px;
+  padding: 6px 8px;
   color: var(--muted);
   font-weight: 600;
 }
 
-[role="tab"][aria-selected="true"] {
+[role="tab"]:hover {
   color: var(--fg);
-  border-bottom-color: var(--accent);
-  background: var(--panel);
+}
+
+[role="tab"][aria-selected="true"] {
+  color: var(--accent);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
 }
 
 .tabpanel {
@@ -122,28 +148,34 @@ header .row:not(:has(button:not([hidden]))) {
   min-width: 0;
 }
 
+/* Each block of a tab is a card. */
+.tabpanel > section,
+.tabpanel > .empty,
+.tabpanel > details.more {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  min-width: 0;
+  margin: 0;
+}
+
 /* ---- Common -------------------------------------------------------------------------------- */
 
 h2 {
   font-size: 14px;
+  font-weight: 600;
   margin: 0 0 6px;
 }
 
 h3 {
   font-size: 13px;
+  font-weight: 600;
   margin: 10px 0 4px;
 }
 
-section {
-  min-width: 0;
-}
-
-section + section {
-  border-top: 1px solid var(--border);
-  padding-top: var(--gap);
-}
-
 .hint {
+  font-size: 12.5px;
   color: var(--muted);
   margin: 4px 0 8px;
 }
@@ -153,10 +185,12 @@ section + section {
 }
 
 .status {
+  font-size: 13px;
   margin: 6px 0;
 }
 
 .error {
+  font-size: 13px;
   color: var(--error);
   margin: 6px 0 0;
 }
@@ -173,18 +207,19 @@ section + section {
 }
 
 .notice {
-  margin: 8px 0 0;
-  padding: 6px 10px;
-  border-left: 3px solid var(--accent);
-  background: var(--panel);
-  border-radius: 0 6px 6px 0;
+  font-size: 12.5px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
 }
 
 .link {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 2px 10px;
+  gap: 3px 12px;
   margin: 0;
+  font-size: 13px;
 }
 
 .link dt {
@@ -199,12 +234,12 @@ section + section {
 textarea {
   width: 100%;
   resize: vertical;
-  font: inherit;
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   color: inherit;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  padding: 8px 10px;
 }
 
 .row {
@@ -216,13 +251,19 @@ textarea {
 
 button {
   font: inherit;
+  font-size: 13px;
+  font-weight: 500;
   padding: 6px 12px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel);
   color: inherit;
   cursor: pointer;
   max-width: 100%;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--field-border);
 }
 
 button:disabled {
@@ -234,7 +275,19 @@ button.primary {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
+  font-weight: 600;
   min-width: 5.5em;
+}
+
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  border-color: var(--accent);
+}
+
+#generate {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 14px;
 }
 
 :focus-visible {
@@ -244,10 +297,11 @@ button.primary {
 
 .confirm {
   margin-top: 10px;
-  padding: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--panel);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font-size: 13px;
 }
 
 .confirm p {
@@ -256,37 +310,47 @@ button.primary {
 
 .time {
   font-variant-numeric: tabular-nums;
-  font-size: 16px;
+  font-size: 15px;
   margin: 4px 0;
 }
 
 /* ---- Expandable groups --------------------------------------------------------------------- */
 
 details.more {
-  margin-top: 8px;
+  margin-top: 10px;
   min-width: 0;
 }
 
 details.more > summary {
   cursor: pointer;
+  font-size: 13px;
   color: var(--muted);
   width: fit-content;
   max-width: 100%;
 }
 
+details.more > summary:hover {
+  color: var(--fg);
+}
+
 details.more[open] > summary {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 details.more > p {
+  font-size: 12.5px;
   margin: 0 0 6px;
   color: var(--muted);
 }
 
-#video-group {
-  border-top: 1px solid var(--border);
-  padding-top: var(--gap);
-  margin-top: 0;
+header details.more {
+  margin-top: 4px;
+}
+
+.tabpanel > details.more > summary {
+  font-weight: 600;
+  color: var(--fg);
+  font-size: 14px;
 }
 
 /* ---- Create audio -------------------------------------------------------------------------- */
@@ -299,24 +363,32 @@ details.more > p {
 
 .fields label {
   display: block;
-  margin-top: 6px;
+  margin: 10px 0 4px;
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--muted);
 }
 
 .pair {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 0 8px;
+  gap: 0 10px;
+}
+
+.pair label {
+  margin-top: 0;
 }
 
 input,
 select {
   font: inherit;
+  font-size: 13.5px;
   color: inherit;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 5px 8px;
+  background: var(--field);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  min-height: 34px;
   width: 100%;
   min-width: 0;
 }
@@ -327,42 +399,88 @@ select {
 
 input[type="checkbox"] {
   width: auto;
+  min-height: 0;
 }
 
 .check {
   display: flex;
   gap: 6px;
   align-items: center;
+  font-size: 13px;
+}
+
+.videobox {
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.videobox-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.videobox h3 {
+  margin: 0;
+}
+
+.videobox .time {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.videobox .status {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.videobox .row {
+  margin-top: 6px;
+}
+
+.videobox button:not(.primary) {
+  background: var(--surface);
+}
+
+#length-summary {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel);
 }
 
 /* ---- Listen -------------------------------------------------------------------------------- */
 
 .empty {
-  padding: 12px;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
+  text-align: center;
 }
 
 .empty p {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
 }
 
 input.seek {
   padding: 0;
   border: none;
+  min-height: 0;
   background: transparent;
   accent-color: var(--accent);
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .translation {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
-  background: var(--panel);
+  font-size: 13.5px;
+  background: var(--field);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: 8px;
+  padding: 8px 10px;
   max-height: 40vh;
   overflow: auto;
 }
@@ -371,39 +489,45 @@ input.seek {
   padding-left: 18px;
 }
 
-#result-durations {
-  margin-top: 6px;
+#result-durations,
+#job-choices {
+  margin-top: 8px;
 }
 
 .callout {
   margin: 8px 0;
-  padding: 10px;
-  border: 2px solid var(--accent);
-  border-radius: 6px;
-  background: var(--panel);
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
 }
 
 .callout-title {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .callout .link {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .sync {
-  margin-top: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 .badge {
   display: inline-block;
   margin-left: 6px;
   padding: 0 8px;
-  border: 1px solid var(--accent);
   border-radius: 10px;
-  font-size: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
   font-weight: 600;
+  line-height: 1.6;
   white-space: nowrap;
+  vertical-align: 1px;
 }

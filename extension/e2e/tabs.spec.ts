@@ -15,6 +15,17 @@ const selected = (panel: Page, name: string) => expect(panel.getByRole("tab", { 
 const noSideScroll = (panel: Page) => panel.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 const sessionOf = async (worker: Worker, tabId: number) => (await playerSessions(worker)).find((s) => s.tabId === tabId) ?? null;
 
+/** Screenshots for review: light at the default width, and dark in a panel dragged wide. */
+async function shoot(panel: Page, name: string) {
+  await panel.screenshot({ path: test.info().outputPath(`${name}.png`), fullPage: true });
+  await panel.emulateMedia({ colorScheme: "dark" });
+  await panel.setViewportSize({ width: 600, height: 900 });
+  await panel.screenshot({ path: test.info().outputPath(`${name}-dark-wide.png`), fullPage: true });
+  expect(await noSideScroll(panel)).toBe(true);
+  await panel.emulateMedia({ colorScheme: "light" });
+  await panel.setViewportSize(PANEL);
+}
+
 test("keyboard and focus: arrow keys switch tabs, the hidden panel is out of the tab order", async ({ context, worker, extensionId }) => {
   const { tabId } = await openLecture(context, worker, 701);
   const panel = await openPanel(context, extensionId, tabId);
@@ -62,7 +73,15 @@ test("Generate → Listen; edit the form while the job runs; the result waits; p
   await sendTranscriptSelection(page, worker, tabId);
   await connectAccount(panel, mydubb, extensionId);
   await fillTimes(panel);
-  await panel.screenshot({ path: test.info().outputPath("tab-create.png"), fullPage: true });
+  // The video's time stays in view right above the start times it helps to fill.
+  await expect(panel.locator("#video-box")).toBeVisible();
+  await expect(panel.locator("#time-duration")).toHaveText("0:30");
+  expect(
+    await panel.evaluate(
+      () => !!(document.getElementById("video-box")!.compareDocumentPosition(document.getElementById("first-start")!) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ),
+  ).toBe(true);
+  await shoot(panel, "tab-create");
   expect(await noSideScroll(panel)).toBe(true);
 
   // Refused: the form stays, with the field to fix focused and its message beside it.
@@ -101,7 +120,7 @@ test("Generate → Listen; edit the form while the job runs; the result waits; p
   await showTab(panel, "Listen");
   await expect(panel.locator("#listen-badge")).toBeHidden();
   await expect(panel.getByText(READY)).toBeVisible();
-  await panel.screenshot({ path: test.info().outputPath("tab-listen.png"), fullPage: true });
+  await shoot(panel, "tab-listen");
   expect(await noSideScroll(panel)).toBe(true);
   // The translation can be selected (and so copied).
   await panel.locator("#result-details summary").click();

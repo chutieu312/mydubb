@@ -55,7 +55,9 @@ Arrow keys, Home and End move between the tabs.
 3. **Connect MyDubb** (header): Chrome opens a MyDubb window; sign in there with your invitation
    (email and password are typed on mydubb.com, never in the extension) and choose **Connect
    extension**. **Details → Disconnect** ends it.
-4. **Create audio → Audio options**: the two start times (type digits, the colons appear; a
+4. **Create audio → Audio options**: the **Udemy video** box (always shown, right above the start
+   times, whose position it helps to read): the video's time and state, **Play/Pause**, **−5s**,
+   **+5s**. Then the two start times (type digits, the colons appear; a
    timestamped transcript fills them from its first and last caption and is dubbed in timed mode
    unless you tick **Ignore the timestamps**), **Translate to** (Vietnamese by default), **Voice**
    (Andrew/Emma), **Audio speed** (seven speeds), the expected length, the short Azure notice, then
@@ -68,9 +70,7 @@ Arrow keys, Home and End move between the tabs.
    tab's player (nothing plays by itself). A job that finishes while you are on Create audio does
    not switch tabs: the Listen tab shows **New** (or **Error**). Without a job or audio, Listen
    shows a short empty state with a **Create audio** button.
-6. **Udemy video controls** (a group at the end of Listen): **Play/Pause**, **−5s**, **+5s**, with the
-   video's real state and time.
-7. **Listen → Loaded audio** (the player): Play/Pause, −5s/+5s, a seek bar and the time, with the
+6. **Listen → Loaded audio** (the player): Play/Pause, −5s/+5s, a seek bar and the time, with the
    language, voice, speed, video source span and MP3 length the file was made with. Always 1x (the
    speed is already in the file); separate from the Udemy video controls. **Show floating player**
    puts the same player on the lecture page:
@@ -91,7 +91,7 @@ Arrow keys, Home and End move between the tabs.
    badge while it differs from the new result. The video source is the job's Sync snapshot (plain: its two start times; timed: the first/last caption, milliseconds kept), never the form and never the start-time fields of a timed job (those only set the requested baseline); audio without a snapshot says "Not recorded". Sync
    applies to the loaded audio. If the switch fails, nothing claims the new audio is in use and
    **Load audio** retries without a new job.
-8. **Sync with video** (panel and floating player, OFF by default): the first time it shows the
+7. **Sync with video** (panel and floating player, OFF by default): the first time it shows the
    video span V0 → V1, the MP3 length and the video speed it will use, and that the video is muted
    because the MyDubb audio replaces the spoken part (timing is an estimate); **Turn on sync**. Both
    pause, the video moves to the audio's position at that speed, muted; nothing plays until you
@@ -99,7 +99,7 @@ Arrow keys, Home and End move between the tabs.
    Play/Pause/seek on the Udemy video drive the audio. **Turn off sync** pauses both and gives the
    video its sound and speed back. It never turns itself on (Generate, reload, another lecture or
    result, account change).
-9. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
+8. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
    an account change stops the audio and removes the player. After a reload, **Load audio** in the
    panel downloads the same result again (it never creates a job).
 

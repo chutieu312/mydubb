@@ -561,9 +561,12 @@ function launchAuthWindow(url: string): Promise<string | undefined> {
   return chrome.identity.launchWebAuthFlow({ url, interactive: true });
 }
 
-/** A Udemy page title without the course and site parts ("Lecture | Course | Udemy"). */
+/**
+ * A Udemy page title without the site part and Udemy's "Course: " prefix
+ * ("Course: Name | Udemy" -> "Name"; "Lecture | Course | Udemy" -> "Lecture").
+ */
 function shortTitle(title: string): string {
-  const first = title.split(" | ")[0]?.trim();
+  const first = (title.split(" | ")[0] ?? "").replace(/^Course:\s*/i, "").trim();
   return first || title;
 }
 

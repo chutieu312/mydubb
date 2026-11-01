@@ -49,7 +49,7 @@
         <section aria-labelledby="draft-heading">
           <h2 id="draft-heading"><label for="transcript">Transcript selection</label></h2>
           <p class="hint" id="draft-hint">On Udemy, select transcript text, right-click, then choose “Send to MyDubb”.</p>
-          <textarea id="transcript" rows="8" spellcheck="false" aria-describedby="draft-hint draft-status transcript-error"></textarea>
+          <textarea id="transcript" rows="6" spellcheck="false" aria-describedby="draft-hint draft-status transcript-error"></textarea>
           <div class="row">
             <button id="clear" type="button">Clear</button>
           </div>
@@ -76,6 +76,22 @@
               <button id="use-transcript-times" type="button">Use the transcript times</button>
             </p>
             <label class="check"><input id="ignore-timestamps" type="checkbox" /> Ignore the timestamps (plain text)</label>
+          </div>
+          <!-- Story 1's video controls, beside the start times: the video's time helps to fill them. -->
+          <div id="video-box" class="videobox" role="group" aria-labelledby="video-heading">
+            <div class="videobox-head">
+              <h3 id="video-heading">Udemy video</h3>
+              <p class="time" aria-label="Playback position">
+                <span id="time-current">--:--</span> / <span id="time-duration">--:--</span>
+              </p>
+            </div>
+            <p id="video-status" class="status" role="status" aria-live="polite"></p>
+            <div class="row controls" role="group" aria-label="Video controls">
+              <button id="back" type="button" aria-label="Back 5 seconds" disabled>−5s</button>
+              <button id="playpause" type="button" class="primary" disabled>Play</button>
+              <button id="forward" type="button" aria-label="Forward 5 seconds" disabled>+5s</button>
+            </div>
+            <p id="video-error" class="error" role="alert"></p>
           </div>
           <div class="fields">
             <div class="pair">
@@ -190,20 +206,6 @@
           <p id="player-empty" class="hint" hidden>No audio is loaded in the player.</p>
           <button id="player-load" type="button" hidden>Load audio</button>
         </section>
-
-        <details id="video-group" class="more">
-          <summary>Udemy video controls</summary>
-          <p id="video-status" class="status" role="status" aria-live="polite"></p>
-          <p class="time" aria-label="Playback position">
-            <span id="time-current">--:--</span> / <span id="time-duration">--:--</span>
-          </p>
-          <div class="row controls" role="group" aria-label="Video controls">
-            <button id="back" type="button" aria-label="Back 5 seconds" disabled>−5s</button>
-            <button id="playpause" type="button" class="primary" disabled>Play</button>
-            <button id="forward" type="button" aria-label="Forward 5 seconds" disabled>+5s</button>
-          </div>
-          <p id="video-error" class="error" role="alert"></p>
-        </details>
       </div>
     </main>
     <script src="sidepanel.js"></script>

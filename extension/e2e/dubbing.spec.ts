@@ -84,6 +84,7 @@ test("connect, generate with the chosen options and listen in the panel", async 
   await panel.getByRole("button", { name: "Play video" }).click();
   await expect.poll(() => page.evaluate(() => window.fixture.state()!.paused)).toBe(false);
   expect((await playerSessions(worker))[0]?.paused).toBe(true);
+  await showTab(panel, "Listen");
   await panel.getByRole("button", { name: "Play MyDubb audio" }).click();
   await expect.poll(async () => (await playerSessions(worker))[0]?.paused).toBe(false);
   expect((await playerSessions(worker))[0]?.rate).toBe(1);

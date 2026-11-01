@@ -419,10 +419,9 @@ async function openGroup(panel: Page, selector: string) {
   if (!(await group.evaluate((d) => (d as HTMLDetailsElement).open))) await group.locator("summary").first().click();
 }
 
-/** Story 1's Udemy video controls: a group at the end of Listen. */
+/** Story 1's Udemy video controls: on Create audio, beside the start times they help to fill. */
 export async function videoControls(panel: Page) {
-  await showTab(panel, "Listen");
-  await openGroup(panel, "#video-group");
+  await showTab(panel, "Create audio");
 }
 
 /** Disconnect sits under the header's Details. */
