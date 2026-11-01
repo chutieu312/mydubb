@@ -165,6 +165,14 @@ Requires the session and `X-CSRF-Token`. `204`, revokes the session server-side 
 cookie. `401 not_authenticated` when the session is already invalid (treat as logged out, like the
 Access Code logout). `403 csrf_failed` leaves the session active.
 
+### `GET /api/admin/session`
+Whether the caller is a MyDubb administrator right now ([AUTHENTICATION.md](AUTHENTICATION.md#administrators)).
+It returns nothing else and lists nobody.
+- `200 { "role": "admin" }`.
+- `401 not_authenticated`: no valid website session (also for a guest, a disabled user, or any
+  request with an `Authorization` header).
+- `403 admin_required`: signed in, not an administrator.
+
 ### Guest sessions and sign-in
 With guest access on ([API.md](API.md#guest-access)), every response that establishes a session
 (`authenticated`) also ends the browser's guest session, if any, and clears its `mydubb_guest`

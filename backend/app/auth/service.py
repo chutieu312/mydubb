@@ -61,6 +61,8 @@ from app.auth.models import (
     PasswordResetEvent,
     SessionClient,
     User,
+    UserRole,
+    UserRoleEvent,
     UserSession,
 )
 
@@ -95,6 +97,10 @@ class AccountDisabled(Exception):
 class PasswordChangedDuringSignIn(Exception):
     """The account's access was revoked (password reset, administrator) after this sign-in
     started; no session is created."""
+
+
+class RoleChangeRefused(Exception):
+    """A role change that is not allowed; the message is meant for the administrator."""
 
 
 class LeaseOutcome(StrEnum):
@@ -543,6 +549,59 @@ def enable_user(db: Session, user_id: uuid.UUID) -> None:
         .values(disabled_at=None, updated_at=func.clock_timestamp())
         .execution_options(synchronize_session=False)
     )
+
+
+# -- roles ------------------------------------------------------------------------------------
+
+
+def _lock_user_for_role_change(db: Session, user_id: uuid.UUID) -> User:
+    _limit_lock_waits(db)
+    user = db.scalars(
+        select(User).where(User.id == user_id).with_for_update(),
+        execution_options={"populate_existing": True},
+    ).one_or_none()
+    if user is None:
+        raise RoleChangeRefused("no such user")
+    return user
+
+
+def _change_role(db: Session, user: User, role: UserRole, changed_by: str) -> bool:
+    """Set the role and record the change, in the caller's transaction. False: it already was."""
+    old_role = user.role
+    if old_role == role.value:
+        return False
+    now = database_now(db)
+    user.role = role.value
+    user.updated_at = now
+    db.add(
+        UserRoleEvent(
+            user_id=user.id,
+            old_role=old_role,
+            new_role=role.value,
+            changed_by=changed_by[:200],
+            changed_at=now,
+        )
+    )
+    db.flush()
+    return True
+
+
+def grant_admin(db: Session, user_id: uuid.UUID, *, confirm_email: str, changed_by: str) -> bool:
+    """Make exactly this user an administrator, if `confirm_email` is this user's current email
+    and the user is not disabled (an `enable` would otherwise bring back an administrator nobody
+    was looking at). The role applies from the user's next request. False: already one."""
+    user = _lock_user_for_role_change(db, user_id)
+    if user.email_normalized != normalize_email(confirm_email):
+        raise RoleChangeRefused("this email is not the email of that user id; nothing changed")
+    if user.disabled_at is not None:
+        raise RoleChangeRefused("this user is disabled; nothing changed")
+    return _change_role(db, user, UserRole.ADMIN, changed_by)
+
+
+def revoke_admin(db: Session, user_id: uuid.UUID, *, changed_by: str) -> bool:
+    """Make this user an ordinary user again, also while disabled. Sessions stay valid, as an
+    ordinary user's, and the next request is no longer an administrator's. False: it wasn't one."""
+    return _change_role(db, _lock_user_for_role_change(db, user_id), UserRole.USER, changed_by)
 
 
 # -- password reset ---------------------------------------------------------------------------

@@ -26,6 +26,11 @@ class SessionClient(StrEnum):
     EXTENSION = "extension"
 
 
+class UserRole(StrEnum):
+    USER = "user"
+    ADMIN = "admin"
+
+
 class User(Base):
     """A MyDubb account linked to one Amazon Cognito user.
 
@@ -37,6 +42,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("cognito_issuer", "cognito_sub", name="uq_users_cognito_identity"),
+        CheckConstraint("role IN ('user','admin')", name="role_valid"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -48,11 +54,42 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String(200))
     # Set by an administrator (scripts/auth_users.py): the user cannot sign in or use sessions.
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # MyDubb's own role (not an AWS or Cognito one). Changed only by an administrator
+    # (scripts/auth_users.py); a sign-in or any API request never writes it.
+    role: Mapped[str] = mapped_column(
+        String(10), server_default=text("'user'"), default=UserRole.USER.value
+    )
     # Sessions whose sign-in started at or before this instant are invalid (password reset).
     sessions_valid_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserRoleEvent(Base):
+    """One change of a user's role, written in the same transaction as the change.
+
+    Holds the user id and no email. `user_id` has no foreign key on purpose: the trail outlives
+    the account. `changed_by` is what the administration tool reports about whoever ran it, not
+    an authenticated identity.
+    """
+
+    __tablename__ = "user_role_events"
+    __table_args__ = (
+        CheckConstraint(
+            "old_role IN ('user','admin') AND new_role IN ('user','admin') "
+            "AND old_role <> new_role",
+            name="role_change_valid",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    old_role: Mapped[str] = mapped_column(String(10))
+    new_role: Mapped[str] = mapped_column(String(10))
+    changed_by: Mapped[str] = mapped_column(String(200))
+    # Database clock.
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class UserSession(Base):
