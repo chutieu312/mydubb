@@ -45,7 +45,8 @@ The **header** shows MyDubb and the account state (**Connect MyDubb** when not c
 box shows the lecture's short title (the full title on hover). Its **Details** holds the full title
 and id, the tab id, the page-link state, the account email and **Disconnect**. A problem with the
 link to the tab (not a lecture, reloading, tab closed) is shown there without opening Details.
-Colors are the MyDubb website's (light or dark, following the system).
+Colors are the MyDubb website's (light or dark, following the system), in the panel and in the floating
+player on the lecture page alike.
 
 1. On the lecture page, select some transcript text, right-click → **Send to MyDubb**.
    The side panel opens for that tab with the exact text in **English transcript** (line breaks

@@ -69,6 +69,12 @@ test("generate, show the floating player and keep listening on the page with the
   await expect(player).toContainText("Vietnamese · Andrew Multilingual · 1x");
   await expect(player).toContainText("0:00 / 0:30");
   expect((await sessionOf(worker, tabId))?.paused).toBe(true);
+  // For review against the side panel: the same colors and type, light and dark.
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await player.screenshot({ path: test.info().outputPath(`floating-${colorScheme}.png`) });
+  }
+  await page.emulateMedia({ colorScheme: "light" });
 
   await player.getByRole("button", { name: "Play MyDubb audio" }).click();
   await expect.poll(async () => (await sessionOf(worker, tabId))?.paused).toBe(false);
