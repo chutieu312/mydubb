@@ -54,7 +54,7 @@ most five sites).
 > - You choose the transcript text and the start times yourself; MyDubb does not read the course
 >   or transcribe video for you.
 > - Works on Udemy lecture pages only.
-> - Your selected text and choices are sent to MyDubb only when you press Generate audio, and are
+> - Your selected text and choices are sent to MyDubb when you press Generate audio, and are
 >   processed by Microsoft Azure to translate and create the voice. See the privacy policy.
 > - Sync follows the passage as a whole; it is not exact word by word. Udemy's own speed and
 >   volume labels may not show what Sync is controlling.

@@ -15,7 +15,7 @@ of that work, and the final screenshots and manifest/build integration wait for 
 | Icon and logo (SVG + PNG 16/32/48/128, preview) | yes, [branding/](branding/) | review of the look | – | no | no |
 | Listing text, getting started, limits, support text | draft, [LISTING.md](LISTING.md) | approve wording, URLs, visibility, reviewer account | enter | no | no |
 | Data audit, permission justifications, dashboard answers | draft, [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md) | confirm facts and answers | enter | no | no |
-| Privacy policy | draft, [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) | operator, contact, retention and deletion decisions, publish it | enter the URL | no | no |
+| Privacy policy | draft, extension scope + optional website appendix, [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) | scope decision, operator, contact, retention and deletion decisions, publish it | enter the URL | no | no |
 | Stable ID procedure | written, [STABLE-ID.md](STABLE-ID.md); `key-to-id` helper tested | account, fee, draft upload, public key, `EXTENSION_IDS` | upload draft, read Item ID and key | no | no |
 | Release ZIP | script works on today's build, [RELEASE-PACKAGE.md](RELEASE-PACKAGE.md); ZIP is **not release-ready** | – | upload | no | no |
 | Screenshots (1280×800), promo tiles | plan only | permitted fixture content | upload | no | no |
@@ -27,7 +27,7 @@ of that work, and the final screenshots and manifest/build integration wait for 
 | File | What |
 |---|---|
 | [LISTING.md](LISTING.md) | Name, short and detailed description, getting started, limits, support, reviewer notes |
-| [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md) | What data is read, sent, stored and removed; permission justifications; expected Privacy practices answers |
+| [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md) | What data is read, sent, stored and removed; permission justifications; what the Privacy practices tab must declare (pending dashboard confirmation) |
 | [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) | Policy text with `[PO: …]` gaps |
 | [STABLE-ID.md](STABLE-ID.md) | Account → draft upload → Item ID/public key → build → ID check; effect on `EXTENSION_IDS` and sessions |
 | [RELEASE-PACKAGE.md](RELEASE-PACKAGE.md) | Chrome's image sizes, screenshot plan and checklist, how to rebuild the ZIP |
@@ -38,7 +38,7 @@ of that work, and the final screenshots and manifest/build integration wait for 
 
 1. Decide who operates MyDubb (individual or organisation) and give the name, the support e-mail
    and a privacy contact.
-2. Decide where the privacy policy and a support/home page are published, and what is promised
+2. Decide the policy scope (extension only, or website too) and where it and a support/home page are published, and what is promised
    about deleting data (none is implemented today; see PRIVACY-AUDIT §2).
 3. Review the icon in `branding/preview.png`.
 4. Register the Chrome Web Store developer account (fee, verified e-mail) when ready, then upload

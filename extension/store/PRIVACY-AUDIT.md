@@ -24,6 +24,24 @@ No transcript, token, e-mail address or other user data is quoted in this docume
 | **Public configuration** (`GET /api/meta`: languages, voices) | On panel open, no token | MyDubb server | Not stored by the extension | n/a |
 | **Ordinary request data** (IP address, `Origin`, time) | Inherent in every request to the MyDubb server | MyDubb server and its host | The server's access log prints the client address (documented in `docs/GUEST_ACCESS.md`); how long Render keeps logs is **not verified** | Not controlled by the extension |
 
+### Requests to MyDubb that happen without a click on Generate or Connect
+
+Read from `extension/src/panel/dubbing.ts` (`loadRemote`, `restore`, `follow`, `loadAudio`). None
+carries transcript text; all reach the server with the network address (and, where noted, the
+token). The policy and the listing must not say that nothing is sent before Generate/Connect.
+
+| Trigger | Request | Carries |
+|---|---|---|
+| Side panel opens | `GET /api/meta` | Nothing but the request itself (no token) |
+| Side panel opens with a stored token | `GET /api/extension/session` | Token |
+| Panel opens, or stays open, with a job recorded for this tab and lecture (state "created") | `GET /api/jobs/{id}`, polling until the job ends, an error, a change of lecture or account, or the panel closes (up to 30 minutes) | Token, job id |
+| The followed job completes | `GET /api/jobs/{id}/result` (translation) and `GET …/result/audio` (MP3) | Token, job id |
+| **Check again** / **Load audio** buttons | The same job and result requests | Token, job id |
+
+Not automatic: creating a job (`POST /api/jobs`, only on **Generate audio**), sign-in
+(`/api/extension/token`, only after **Connect MyDubb**) and `POST /api/extension/logout` (only on
+**Disconnect**).
+
 The content script also listens for pointer and key events on the Udemy page, **only to know
 whether the user touched the page** (it decides whether a changed video speed is the user's); it
 records and sends nothing about them.
@@ -46,8 +64,11 @@ records and sends nothing about them.
 
 The MyDubb website: the Studio form, "Try as guest", **YouTube caption import** (Supadata), website
 sign-in and its session cookie. None of it is in the extension: guests cannot connect it and the
-extension has no YouTube import. The privacy policy covers the website too, so its text must stay
-accurate for both; this draft only describes the website where the extension depends on it.
+extension has no YouTube import. The policy draft is scoped to the extension and the service
+requests it makes, and points to a separate website policy; a website appendix (guest session,
+cookies, hashed network quota, YouTube/Supadata) is written in
+[PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) for the case that the Product Owner wants one
+policy for both. The scope is the Product Owner's decision.
 
 ## 4. Permission and host justifications (text for the dashboard)
 
@@ -70,38 +91,49 @@ No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downl
 > Turn the English transcript text a user selects on an Udemy lecture page into audio in another
 > language with the user's own MyDubb account, and play it next to the lecture video.
 
-## 6. Privacy practices tab: expected answers
+## 6. Privacy practices tab: what the facts require (pending confirmation on the dashboard)
 
-The dashboard's own labels and certification wording **were not available to read** (Chrome's
-public pages do not list them); confirm each line on the live dashboard before answering. The
-data categories below are the ones in Chrome's "user data" FAQ.
+**These are not choices.** The declaration must match what the extension and server really do;
+the Product Owner confirms the facts (§1, §2) and then makes the declaration. Chrome's pages say
+"handle" means "collecting, transmitting, using, or sharing user data", that it applies "even when
+data is processed or stored locally on a user's device", and that dashboard disclosures must stay
+consistent with the privacy policy and the real behaviour (Chrome Web Store User Data FAQ).
 
-| Dashboard item | Expected answer | Reason |
-|---|---|---|
-| Single purpose | §5 | |
-| Permission justifications | §4 | |
-| Remote code | No | §4 |
-| Personally identifiable information | **Check** | E-mail and display name of the connected account are stored in the extension and held by the server |
-| Authentication information | **Check** | The bearer token |
-| Website content and resources | **Check** | The selected Udemy transcript text is read, stored in the session and sent to the server |
-| Web browsing activity | **Product Owner to decide; leaning Check.** The lecture URL path and page title are read and kept in the browser only. Chrome's FAQ counts local handling as "handle"; ticking it costs nothing if the policy says "stays in your browser" |
-| Health, financial/payment, personal communications, location, form data, user activity (clicks/keystrokes) | Do not check | Not read. (Page events only gate a local decision; nothing is recorded) |
-| Certifications (not sold; not used outside the single purpose; not used for creditworthiness) | Certify only after the Product Owner has read §2 and the policy | Wording to be read on the dashboard |
-| Privacy policy URL | **Needs the Product Owner's published URL** | Not published |
-| Limited Use statement | Put this sentence in the published policy: "The use of information received by the MyDubb extension adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements." | Chrome requires the statement on a website of the extension (or one click from its homepage) |
+**Pending confirmation:** the exact names, definitions and certification wording of the
+dashboard's checkboxes were **not readable** in Chrome's public pages (they list nine examples of
+user data, not the dashboard's own labels). Before declaring, open the live Privacy practices tab
+and compare each definition below with the facts. Until then every row is "pending".
 
-**Do not answer "no data collected".** The extension transmits the selected text and the account
-token to the MyDubb service, and a policy is required whenever user data is handled (Chrome's
-Privacy Policies and User Data FAQ pages).
+| Fact in this extension (§1) | Chrome's wording it must be compared with | Handled how | Status |
+|---|---|---|---|
+| E-mail and display name of the connected account | "Personally identifiable information" (name, e-mail, any ID number) | Stored in the extension; held by the server | Matches on its face: pending dashboard confirmation |
+| MyDubb bearer token | "Authentication information" (logins, passwords, authentication cookies) | Stored in the extension, sent to the server | Matches on its face: pending |
+| Selected transcript text (and the user's edits of it) | "Website content and resources"; also possibly "User-generated content" | Read from the Udemy page, stored in the session, sent to the server and to Azure on Generate | Matches on its face: pending |
+| Lecture URL path (course slug, lecture id) and page title | "Web browsing activity": "information about the websites or other web resources a user requests or interacts with" | Read by the extension, kept in the browser, **not** sent to MyDubb | Meets the definition as written, and Chrome counts local handling: pending dashboard confirmation of how local-only data is declared |
+| Video state (time, duration, paused, speed, muted) of the lecture | Possibly "Website content and resources" | Read and written locally, not sent | Pending |
+| Pointer and key events on Udemy pages (a flag only: "the user touched the page"; no key, position or content recorded) | Possibly the dashboard's "User activity" | Read, used in memory, discarded, not stored or sent | Pending: confirm whether transient local use counts |
+| Network address of every request (server access log) | Possibly the dashboard's "Location" or "PII", if its definition includes the IP address | Received and logged by the server | Pending: check the dashboard definition |
+| Health, financial/payment, personal communications | No such data is read | – | Expected not applicable; confirm |
+| Remote code | None (all code is in the package) | – | Expected "No" |
+| Single purpose, permission justifications | §5, §4 | – | Text ready; PO confirms |
+| Certifications (the dashboard's statements on not selling data, not using it outside the single purpose, not using it for creditworthiness) | Wording pending | – | Facts in §2 and the policy must be confirmed true by the PO before certifying |
+| Privacy policy URL | Required when data is handled | – | **Pending PO**: not published; scope decision in [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) |
+| Limited Use statement | Must be on a site of the extension or one click from its homepage | – | Sentence is in the policy draft; PO publishes |
 
-## 7. What the Product Owner must provide
+**Do not answer "no data collected".** The extension transmits the selected text and the token to
+the MyDubb service, and a policy is required whenever user data is handled.
+
+## 7. What the Product Owner must confirm or provide
 
 - Operator of MyDubb for the policy and the dashboard (an individual or an organisation): name,
   and whether the dashboard publisher is trader or non-trader.
 - Support e-mail (verified by the dashboard) and a **contact for privacy questions**.
-- Where the policy is published (URL) and the homepage/support URL for the listing.
-- How a user asks for data to be deleted, and what the operator will actually do (§2 says no
-  process exists today); whether to implement the proposed 7-day job-metadata cleanup first.
-- Whether the production result lifetime is still the 1 hour default.
-- Whether to tick "Web browsing activity" (§6).
+- Where the policy is published (URL), its scope (extension only, or website too) and the
+  homepage/support URL for the listing.
+- That the facts in §1 and §2 are true for production: result lifetime (code default 1 hour),
+  no analytics, which website features are on (guest, YouTube import).
+- How a user asks for data to be deleted and what the operator will actually do (§2: no process
+  exists today). Whether to build the proposed 7-day job-metadata cleanup first. The policy must
+  say only what exists.
 - Confirmation of the Microsoft Azure data handling the operator relies on (not verified here).
+- After reading the live dashboard labels: the final declarations, made on the facts above.
