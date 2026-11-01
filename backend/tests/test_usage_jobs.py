@@ -6,6 +6,7 @@ as before, and a failing usage write never turns a good job into a failed one.
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import Callable
 
@@ -33,7 +34,18 @@ KEY = "usage-integration-key-0123456789"
 SECRET_TEXT = "Spring Boot uses Dependency Injection"
 
 
-def summary(engine: Engine, job_id: str) -> dict:
+def summary(engine: Engine, job_id: str, timeout: float = 15.0) -> dict:
+    """The job's summary once its ending is recorded (written just after the job completes)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as conn:
+            done = conn.execute(
+                text("SELECT finished_at FROM job_usage WHERE job_id = :id"),
+                {"id": uuid.UUID(job_id)},
+            ).scalar_one_or_none()
+        if done is not None:
+            break
+        time.sleep(0.05)
     with engine.connect() as conn:
         row = conn.execute(
             text("SELECT * FROM job_usage WHERE job_id = :id"), {"id": uuid.UUID(job_id)}
@@ -235,6 +247,9 @@ def test_usage_write_errors_do_not_fail_a_good_job_and_leave_a_safe_warning(
     assert job["status"] == "completed"
     assert client.get(f"/api/jobs/{job['id']}/result").status_code == 200
 
+    deadline = time.monotonic() + 15
+    while "usage is incomplete" not in caplog.text and time.monotonic() < deadline:
+        time.sleep(0.05)  # the ending is recorded just after the job completes
     log = caplog.text
     assert "usage was not written (RuntimeError)" in log
     assert "usage is incomplete" in log

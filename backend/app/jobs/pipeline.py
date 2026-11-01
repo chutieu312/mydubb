@@ -188,11 +188,14 @@ class JobPipeline:
             logger.exception("Job %s failed unexpectedly", job.job_id)
             self._fail(job.job_id, "internal_error", "Processing failed due to an internal error.")
         finally:
-            self._end_usage(collector, token, outcome, error_code)
             try:
                 if work_dir is not None:
                     shutil.rmtree(work_dir, ignore_errors=True)
             finally:
+                # After the work files are gone, so the usage writes never delay what the job
+                # already did; still before the job stops being tracked, so a shutdown drain
+                # waits for the record. Never raises.
+                self._end_usage(collector, token, outcome, error_code)
                 # Always stop tracking: a job left active in the database without a worker
                 # then stops receiving heartbeats and is interrupted by the liveness check.
                 with self._lock:

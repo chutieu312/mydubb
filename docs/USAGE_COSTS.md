@@ -27,7 +27,9 @@ Two tables (migration `0020`), written by the pipeline and read by the report:
   baseline, target (`baseline / speed`) and measured final audio seconds, source characters,
   timed block count, the audio-stage wall time (FFmpeg with the ffmpeg processor) and MP3 size,
   `outcome` (completed / failed / superseded) with the error code, and bookkeeping
-  (`attempts_expected`, `write_errors`, `method_version`).
+  (`attempts_expected`, `write_errors`, `method_version`). The ending is written right after the job's
+  terminal status becomes visible and after its work files are removed, so a report run in that
+  instant can show the job as not ended.
 * `job_usage_attempts`: one row per request sent to a provider, keyed `(job_id, seq)`: service
   (translator / speech), `provider_kind` (**azure** or **mock**), outcome (`ok`, `http_error`,
   `timeout`, `network_error`, `cancelled`, `unusable_response`, `failed`), HTTP status, error code,
