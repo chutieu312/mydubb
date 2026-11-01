@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 
 from app.access.service import delete_stale_sessions
 from app.auth.service import delete_stale_auth_rows, resolve_stale_password_resets
@@ -11,6 +12,7 @@ from app.guest.imports import release_stale_imports
 from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
 from app.services import AppServices
+from app.usage.store import delete_usage_older_than, limit_waits
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +117,7 @@ def run_cleanup(services: AppServices) -> None:
         guest_rows = delete_stale_rows(db, _guest_retention(services))
     if settled:
         logger.warning("Settled %d guest quota place(s) of jobs that had ended", settled)
+    _purge_usage(services)
     if removed or sessions or auth_rows or guest_rows:
         logger.info(
             "Cleanup removed %d result(s), %d stale session(s), %d auth row(s) and %d guest row(s)",
@@ -123,6 +126,21 @@ def run_cleanup(services: AppServices) -> None:
             auth_rows,
             guest_rows,
         )
+
+
+def _purge_usage(services: AppServices) -> None:
+    """Retention of the usage tables, in its own transaction: a failure only skips this purge
+    (and the next cleanup tries again); jobs and every other table are never touched."""
+    cutoff = datetime.now(UTC) - timedelta(days=services.settings.usage_retention_days)
+    try:
+        with session_scope(services.session_factory) as db:
+            limit_waits(db, services.settings.usage_write_timeout_seconds)
+            summaries, attempts = delete_usage_older_than(db, cutoff)
+    except Exception as exc:
+        logger.warning("Usage retention cleanup failed (%s)", type(exc).__name__)
+        return
+    if summaries or attempts:
+        logger.info("Usage cleanup removed %d job record(s), %d attempt(s)", summaries, attempts)
 
 
 def _guest_retention(services: AppServices) -> GuestPolicy:

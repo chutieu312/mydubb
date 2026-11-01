@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
 from app.processing_errors import ProcessingError
 from app.translation.base import TranslationResult
+from app.usage import recording as usage
 
 ILLUSTRATIVE_NOTICE = (
     "[Development mock mode - illustrative content, NOT a real Vietnamese translation]"
@@ -38,6 +39,13 @@ _PREFIXES = {
 }
 
 
+def _attempt(chars: int, items: int) -> usage.Attempt:
+    """The usage record of a mock call: sent text is counted, nothing is billed."""
+    attempt = usage.attempt("translator", "translate", kind="mock", items=items)
+    attempt.sent(chars, "code_points_of_source_text")
+    return attempt
+
+
 class MockTranslationProvider:
     """Deterministic stand-in for Azure Translator. Makes no network calls."""
 
@@ -51,7 +59,8 @@ class MockTranslationProvider:
     def translate(
         self, text: str, language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
     ) -> TranslationResult:
-        self._start()
+        with _attempt(len(text), 1):
+            self._start()
         prefix = _PREFIXES[language]
         lines = [f"{prefix}{line}" for line in text.split("\n")]
         text = "\n".join([_NOTICES[language], *lines])
@@ -60,7 +69,8 @@ class MockTranslationProvider:
     def translate_lines(
         self, lines: Sequence[str], language: TargetLanguage = DEFAULT_TARGET_LANGUAGE
     ) -> TranslationResult:
-        self._start()
+        with _attempt(sum(len(line) for line in lines), len(lines)):
+            self._start()
         prefix = _PREFIXES[language]
         translated = tuple(f"{prefix}{line}" for line in lines)
         text = "\n".join([_NOTICES[language], *translated])

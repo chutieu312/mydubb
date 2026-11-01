@@ -684,6 +684,15 @@ deploy built before it is no longer a supported Render rollback target; check wi
 command (`revoke-admin`, [AUTHENTICATION.md](AUTHENTICATION.md#administrators)), not a code
 rollback.
 
+The usage-records pull request adds migration `0020` (tables `job_usage` and `job_usage_attempts`;
+expand-only, no foreign key, the previous version never reads or writes them). It follows
+`0012_user_roles`; `alembic heads` must list one revision (a test checks it), because a database
+with two heads cannot `upgrade head`. Its downgrade drops the two tables and every recorded usage
+figure, and leaves the admin roles and accounts alone. Once it is deployed, every deploy built before it is no
+longer a supported Render rollback target; check with `docker/rollback-target-check.sh <commit>
+0020`. Recording can be turned off with `USAGE_RECORDING_ENABLED=false` (no code rollback needed);
+the report is a local command, never an API ([USAGE_COSTS.md](USAGE_COSTS.md)).
+
 **Before rolling back** (read-only checks):
 
 1. Read the production revision: Neon SQL Editor → `SELECT version_num FROM alembic_version;`

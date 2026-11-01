@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "currency": "USD",
+  "_comment": "Reference pay-as-you-go list prices for converting recorded usage; NOT an invoice. The services currently run on the Free (F0) tier. The single place where prices live: reports read this file, usage rows never hold a price. Add a new entry (never edit an old one) when Microsoft changes a price; the entry whose effective_from is the latest not after the usage date applies.",
+  "prices": [
+    {
+      "service": "translator",
+      "sku": "S1",
+      "meter": "S1 Characters",
+      "region": "westus2",
+      "unit": "1M characters",
+      "price": "10.00",
+      "effective_from": "2025-05-01",
+      "checked_on": "2026-11-01",
+      "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName eq 'Foundry Tools' and contains(productName,'Translator') and armRegionName eq 'westus2' (Azure Retail Prices API, meterName 'S1 Characters')"
+    },
+    {
+      "service": "speech",
+      "sku": "S1",
+      "meter": "S1 Neural Text To Speech Characters",
+      "region": "westus2",
+      "unit": "1M characters",
+      "price": "15.00",
+      "effective_from": "2024-02-01",
+      "checked_on": "2026-11-01",
+      "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName eq 'Foundry Tools' and armRegionName eq 'westus2' and meterName eq 'S1 Neural Text To Speech Characters' (Azure Retail Prices API)"
+    }
+  ],
+  "free_allowances": [
+    {
+      "service": "translator",
+      "sku": "F0",
+      "amount": 2000000,
+      "unit": "characters per month",
+      "checked_on": "2026-11-01",
+      "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/translator/"
+    },
+    {
+      "service": "speech",
+      "sku": "F0",
+      "amount": 500000,
+      "unit": "characters per month",
+      "checked_on": "2026-11-01",
+      "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/speech-services/"
+    }
+  ]
+}
