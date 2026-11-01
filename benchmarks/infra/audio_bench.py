@@ -26,6 +26,10 @@ import wave
 from pathlib import Path
 
 sys.path.append("/backend_src")  # product scripts (synthetic transcript); /app stays first
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # supervise.py, checks.py (python -I)
+
+from checks import validate_run  # noqa: E402
+from supervise import DiskGuard, hard_stop, kill_by_name, supervise  # noqa: E402
 
 import app.main  # noqa: E402,F401  (imports every model so the mappers resolve, as the app does)
 from app.audio import ffmpeg as ffmpeg_module  # noqa: E402
@@ -48,20 +52,10 @@ from scripts.timed_benchmark import RATE, _clip, synthetic_transcript  # noqa: E
 # name -> words of the synthetic transcript (150 words per minute in its timestamps).
 WORKLOADS = {"short": 150, "guest_limit": 1000, "long": 3000}
 SPEECH_OVER_BASELINE = 1.2  # plain mode: speech is 20% longer than the target (needs a tempo-up)
-MAX_TEMP_BYTES = 3 * 1024**3  # abort a run beyond this (disk guard)
+MAX_TEMP_MB = 3072  # disk guard (a periodic check, not a quota; see supervise.py)
 RUN_TIMEOUT_SECONDS = 900
-
-
-def tree_size(root: Path) -> int:
-    total = 0
-    for dirpath, _dirs, files in os.walk(root):
-        for name in files:
-            try:
-                total += os.path.getsize(os.path.join(dirpath, name))
-            except OSError:
-                pass
-    return total
-
+STOP_GRACE_SECONDS = 15
+SCHEMA = 2  # record layout; schema 1 (first PR commit) had weaker validation
 
 def read_rss_kb() -> dict[int, tuple[str, int]]:
     out = {}
@@ -91,19 +85,16 @@ def cgroup_value(name: str, key: str | None = None) -> int | None:
 
 
 class Sampler(threading.Thread):
-    """Samples process RSS (python vs ffmpeg/ffprobe) and temp-dir size every `period` seconds."""
+    """Samples process RSS (python vs ffmpeg/ffprobe) every `period` seconds."""
 
-    def __init__(self, temp_roots: list[Path], period: float = 0.05) -> None:
+    def __init__(self, period: float = 0.05) -> None:
         super().__init__(daemon=True)
-        self.roots, self.period, self.stop_flag = temp_roots, period, threading.Event()
+        self.period, self.stop_flag = period, threading.Event()
         self.peak_python_kb = self.peak_ffmpeg_kb = self.peak_total_kb = 0
         self.peak_ffmpeg_procs = 0
-        self.peak_disk = 0
-        self.aborted = False
 
     def run(self) -> None:
         me = os.getpid()
-        tick = 0
         while not self.stop_flag.is_set():
             procs = read_rss_kb()
             py = procs.get(me, ("", 0))[1]
@@ -112,12 +103,6 @@ class Sampler(threading.Thread):
             self.peak_ffmpeg_kb = max(self.peak_ffmpeg_kb, sum(ff))
             self.peak_ffmpeg_procs = max(self.peak_ffmpeg_procs, len(ff))
             self.peak_total_kb = max(self.peak_total_kb, py + sum(ff))
-            tick += 1
-            if tick % 4 == 0:  # disk walk is dearer than /proc: every 200 ms
-                size = sum(tree_size(r) for r in self.roots)
-                self.peak_disk = max(self.peak_disk, size)
-                if size > MAX_TEMP_BYTES:
-                    self.aborted = True
             time.sleep(self.period)
 
 
@@ -291,36 +276,49 @@ def one_run(args, fx, session_factory, store, tmp_root, run_no) -> dict:
                     timed=fx.timed if fx.mode == "timed" else None,
                 )
             )
-    sampler = Sampler([tmp_root, Path(store._root)])  # noqa: SLF001 (measure the store's disk too)
+    sampler = Sampler()
+    guard = DiskGuard([tmp_root, Path(store._root)], args.max_temp_mb * 1024**2)  # noqa: SLF001
     walls = [0.0] * len(inputs)
+    errors: list[str] = []
 
     def work(i):
         started = time.perf_counter()
-        pipeline.run(inputs[i])
+        try:
+            pipeline.run(inputs[i])
+        except BaseException as exc:  # noqa: BLE001 (recorded; the run is then invalid)
+            errors.append(type(exc).__name__)
         walls[i] = time.perf_counter() - started
 
-    cpu0, mem_events0 = cgroup_value("cpu.stat", "usage_usec"), cgroup_value("memory.events", "oom_kill")
+    cpu0 = cgroup_value("cpu.stat", "usage_usec")
+    oom0 = cgroup_value("memory.events", "oom_kill")
     self_cpu0 = time.process_time()
     sampler.start()
+    guard.start()
     started = time.perf_counter()
-    threads = [threading.Thread(target=work, args=(i,)) for i in range(len(inputs))]
+    threads = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(len(inputs))]
     for t in threads:
         t.start()
-    deadline = started + RUN_TIMEOUT_SECONDS
-    for t in threads:
-        t.join(max(0.0, deadline - time.perf_counter()))
-        if sampler.aborted:
-            audio.close()
+    # The deadline and the disk guard are checked every 50 ms while the jobs run; a trip calls
+    # audio.close() (kills FFmpeg, later calls fail) and then waits a bounded grace period.
+    outcome = supervise(
+        threads,
+        timeout_s=args.run_timeout,
+        tripped=guard.is_tripped,
+        stop=audio.close,
+        grace_s=args.stop_grace,
+    )
     wall = time.perf_counter() - started
-    timed_out = any(t.is_alive() for t in threads)
-    if timed_out:
-        audio.close()
+    guard.finish()
     sampler.stop_flag.set()
     sampler.join()
     cpu1 = cgroup_value("cpu.stat", "usage_usec")
+    oom1 = cgroup_value("memory.events", "oom_kill")
     ffmpeg_module.run_tool = original
+    # Nothing of this run may keep running during cleanup: kill any tool that survived.
+    stray = kill_by_name(("ffmpeg", "ffprobe"))
+    stuck_threads = outcome.stuck
 
-    statuses, out_bytes, report_ok = [], [], []
+    statuses, out_bytes, samples = [], [], []
     with session_scope(session_factory) as db:
         for job_id in job_ids:
             job = db.get(Job, job_id)
@@ -330,12 +328,15 @@ def one_run(args, fx, session_factory, store, tmp_root, run_no) -> dict:
         if result is not None:
             out_bytes.append(result.audio_path.stat().st_size)
             rep = result.duration_report or {}
-            report_ok.append(rep.get("mp3_decoded_samples") == rep.get("target_samples"))
+            samples.append(
+                {"decoded": rep.get("mp3_decoded_samples"), "target": rep.get("target_samples")}
+            )
             store.delete(job_id)
     leftovers = [p.name for p in tmp_root.iterdir()] if tmp_root.exists() else []
     cpu_s = (cpu1 - cpu0) / 1e6 if cpu0 is not None and cpu1 is not None else None
-    return {
+    record = {
         "type": "run",
+        "schema": SCHEMA,
         "workload": args.workload,
         "mode": args.mode,
         "concurrency": args.concurrency,
@@ -346,25 +347,33 @@ def one_run(args, fx, session_factory, store, tmp_root, run_no) -> dict:
         "wall_s": round(wall, 3),
         "job_wall_s": [round(w, 3) for w in walls],
         "stage_s_summed_over_jobs": {k: round(v, 3) for k, v in stages.items()},
-        "ffmpeg_tools": {k: {"starts": v[0], "seconds_summed": round(v[1], 3)} for k, v in tool_counts.items()},
+        "ffmpeg_tools": {
+            k: {"starts": v[0], "seconds_summed": round(v[1], 3)} for k, v in tool_counts.items()
+        },
         "status": statuses,
-        "timed_out": timed_out,
-        "disk_guard_aborted": sampler.aborted,
+        "stop_reason": outcome.reason,  # None, "timeout" or "disk_guard"
+        "timed_out": outcome.reason == "timeout",
+        "disk_guard_aborted": outcome.reason == "disk_guard",
+        "stuck_threads": stuck_threads,
+        "errors": errors,
+        "stray_processes": stray,
+        "disk_guard_limit_mb": args.max_temp_mb,
+        "disk_guard_note": "periodic check (200 ms), not a filesystem quota: may overshoot",
         "output_bytes": out_bytes,
-        "mp3_matches_target_samples": report_ok,
+        "mp3_samples": samples,
         "peak_rss_python_mb": round(sampler.peak_python_kb / 1024, 1),
         "peak_rss_ffmpeg_mb": round(sampler.peak_ffmpeg_kb / 1024, 1),
         "peak_ffmpeg_procs": sampler.peak_ffmpeg_procs,
         "peak_rss_total_mb": round(sampler.peak_total_kb / 1024, 1),
-        "peak_temp_disk_mb": round(sampler.peak_disk / 1024**2, 1),
+        "peak_temp_disk_mb": round(guard.peak / 1024**2, 1),
         "container_cpu_seconds": round(cpu_s, 3) if cpu_s is not None else None,
         "python_cpu_seconds": round(time.process_time() - self_cpu0, 3),
         "fixture_input_mb": round(fx.input_bytes / 1024**2, 1),
         "work_dirs_left": leftovers,
-        "oom_kill_events_delta": (
-            (cgroup_value("memory.events", "oom_kill") or 0) - (mem_events0 or 0)
-        ),
+        "oom_kill_events_delta": (oom1 - oom0) if oom0 is not None and oom1 is not None else None,
     }
+    record["invalid_reasons"] = validate_run(record, args.concurrency)
+    return record
 
 
 def main() -> int:
@@ -374,38 +383,89 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--repeats", type=int, default=4)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--run-timeout", type=float, default=RUN_TIMEOUT_SECONDS)
+    parser.add_argument("--stop-grace", type=float, default=STOP_GRACE_SECONDS)
+    parser.add_argument("--max-temp-mb", type=int, default=MAX_TEMP_MB)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
-    settings = load_settings()
-    engine = create_db_engine(settings.sqlalchemy_url, 10)
-    session_factory = create_session_factory(engine)
-    base = Path(tempfile.mkdtemp(prefix="bench-"))
-    os.environ["TMPDIR"] = str(base / "tmp")
-    tmp_root = base / "tmp"
-    tmp_root.mkdir()
-    tempfile.tempdir = str(tmp_root)  # job work dirs land here and are measured
-    store = LocalFileResultStore(base / "results")
-    fixtures_dir = base / "fixtures"
-    fixtures_dir.mkdir()
     out = open(args.out, "a", buffering=1)
+    base = Path(tempfile.mkdtemp(prefix="bench-"))
+    failures: list[str] = []
+    runs_done = 0
+    stuck = False
+    engine = None
     try:
+        settings = load_settings()
+        engine = create_db_engine(settings.sqlalchemy_url, 10)
+        session_factory = create_session_factory(engine)
+        os.environ["TMPDIR"] = str(base / "tmp")
+        tmp_root = base / "tmp"
+        tmp_root.mkdir()
+        tempfile.tempdir = str(tmp_root)  # job work dirs land here and are measured
+        store = LocalFileResultStore(base / "results")
+        fixtures_dir = base / "fixtures"
+        fixtures_dir.mkdir()
         started = time.perf_counter()
         fx = Fixtures(fixtures_dir, args.mode, WORKLOADS[args.workload], args.seed)
-        out.write(json.dumps({"type": "fixture", "workload": args.workload, "mode": args.mode,
-                              "build_s": round(time.perf_counter() - started, 1)}) + "\n")
+        out.write(
+            json.dumps(
+                {
+                    "type": "fixture",
+                    "workload": args.workload,
+                    "mode": args.mode,
+                    "build_s": round(time.perf_counter() - started, 1),
+                }
+            )
+            + "\n"
+        )
         rss_idle = read_rss_kb()[os.getpid()][1] / 1024
         for run_no in range(1, args.repeats + 1):
             result = one_run(args, fx, session_factory, store, tmp_root, run_no)
             result["harness_rss_before_run_mb"] = round(rss_idle, 1)
             out.write(json.dumps(result) + "\n")
-            if result["timed_out"] or result["disk_guard_aborted"]:
+            runs_done += 1
+            if result["invalid_reasons"]:
+                failures.append(f"run {run_no}: " + "; ".join(result["invalid_reasons"]))
+            if result["stuck_threads"]:
+                stuck = True
                 break
+            if result["stop_reason"] is not None:
+                break  # timeout or disk guard: no further runs of this case
+    except BaseException as exc:  # noqa: BLE001
+        # Only the exception type is recorded: its text can carry connection details.
+        out.write(json.dumps({"type": "error", "error": type(exc).__name__}) + "\n")
+        failures.append(f"exception {type(exc).__name__}")
     finally:
-        out.close()
-        engine.dispose()
+        if engine is not None and not stuck:
+            engine.dispose()
+    if runs_done != args.repeats:
+        failures.append(f"{runs_done} of {args.repeats} runs completed")
+    if not stuck:
         shutil.rmtree(base, ignore_errors=True)
-    return 0
+    cleanup_ok = not base.exists()
+    if not cleanup_ok:
+        failures.append("temporary directory not removed")
+    out.write(
+        json.dumps(
+            {
+                "type": "summary",
+                "schema": SCHEMA,
+                "ok": not failures,
+                "failures": failures,
+                "expected_runs": args.repeats,
+                "runs_done": runs_done,
+                "cleanup_ok": cleanup_ok,
+            }
+        )
+        + "\n"
+    )
+    out.close()
+    if stuck:
+        # Work is still running in threads that cannot be stopped: end the process now (also
+        # kills FFmpeg) instead of cleaning up underneath it.
+        hard_stop(3)
+    return 0 if not failures else 1
 
 
 if __name__ == "__main__":

@@ -4,10 +4,14 @@ A repeatable, one-off assessment of how the application uses resources when idle
 processes audio, plus a conditional Render/Neon cost estimate. It is **not** a monitor and it
 never touches production.
 
-- **Measured commit:** `cb71cd2` (`main` on 2026-11-01). Later code (Admin role, per-job usage)
-  is not covered; rerun the scripts after it lands.
+- **Measured commit:** `cb71cd2` (`main` on 2026-11-01): the app image used for every number
+  below was built from it. Later code (Admin role, per-job usage) is not covered; rerun the
+  scripts after it lands. The PR branch also contains newer `main` commits and the review fixes
+  to the scripts; none of that was measured, and no old number is attributed to it.
 - **Raw results:** [benchmarks/infra/results/cb71cd2/](../benchmarks/infra/results/cb71cd2/)
-  (JSON lines per case, `idle.json`, `audio-summary.md`).
+  (JSON lines per case, `idle.json`, `audio-summary.md`). These were written by the **first
+  version of the harness (schema 1)**, whose validation was weaker than the current one (see
+  "Harness versions"). They are unchanged; `summarize.py` labels them `legacy-v1`.
 - **Scripts:** [benchmarks/infra/](../benchmarks/infra/). Product code, schema, pipeline,
   heartbeat, recovery and pool settings are unchanged.
 
@@ -27,17 +31,53 @@ billing or scale-to-zero behavior**.
 
 ## How to rerun
 
-Needs Docker (Linux engine) and bash. Everything is named `mydubb-infra-bench-*`; the scripts
-remove their containers and network on exit.
+Needs Docker (Linux engine), bash and Python 3 on the host (result checks and tables). Each run
+has a run id (`BENCH_RUN_ID`, generated if absent); its containers and network are named
+`mydubb-infra-bench-<run id>-*` and labelled, and the script removes **only** resources with that
+label on exit. A second start with a run id still in use, or into a non-empty results directory,
+is refused before anything is changed. The default results directory is
+`benchmarks/infra/results/<commit>/run-<run id>/`.
 
 ```bash
 bash benchmarks/infra/run-idle.sh 660                 # idle DB activity, 11 minutes
 bash benchmarks/infra/run-audio.sh matrix             # standard audio matrix (about 25 minutes)
 bash benchmarks/infra/run-audio.sh cpu0.5-mem512m guest_limit plain 2 3   # one case
-python -I benchmarks/infra/summarize.py benchmarks/infra/results/<commit>
+python -I benchmarks/infra/summarize.py benchmarks/infra/results/<commit>/run-<id>
 ```
 
-The image is built from the repo `Dockerfile` (`mydubb-infra-bench:<commit>`).
+Exit status: `run-audio.sh` and `run-idle.sh` return 0 only if everything expected happened. A
+case fails when the container exits nonzero, is OOM-killed, times out, leaves no output, has fewer
+runs/jobs/outputs than expected, a job did not complete, the decoded MP3 sample count is missing or
+differs from the target, or cleanup left something behind. The matrix continues after a failed
+case (to collect diagnostics) and exits nonzero at the end. `summarize.py` lists failed or
+incomplete cases as `FAILED` and keeps them out of all statistics (it also exits nonzero).
+Startup steps (PostgreSQL, migration, app readiness) have finite deadlines
+(`BENCH_DB_TIMEOUT`, `BENCH_MIGRATE_TIMEOUT`, `BENCH_APP_TIMEOUT`, `BENCH_CASE_TIMEOUT`); a
+container that stops early is detected at once and its last log lines are printed with
+connection strings and credentials masked.
+
+Tests of the scripts (no benchmark is run; every wait is bounded):
+
+```bash
+python -I -m unittest discover -s benchmarks/infra/tests -p "test_harness.py"   # deadline, disk guard, validation
+bash benchmarks/infra/tests/test_scripts.sh            # startup deadlines, isolation, exit codes (Docker, fake harness)
+```
+
+The image is built from the repo `Dockerfile` (`mydubb-infra-bench:<commit>`; set `BENCH_IMAGE`
+to reuse an image, for example to keep measuring `cb71cd2`).
+
+### Harness versions
+
+- **Schema 1** (first PR commit): the results in `results/cb71cd2/`. Success was "job completed
+  and the two sample fields compare equal"; a missing field compared equal to a missing field,
+  failures did not change the exit code, and the deadline and disk guard were only looked at
+  after waiting for the worker threads.
+- **Schema 2** (review fixes): the checks above, a supervising loop that looks at the deadline and
+  the disk guard every 50 ms while jobs run and stops them (FFmpeg is killed; stuck work ends the
+  process), exit codes, run ids. The **measurement method is unchanged** (same sampling, same
+  workloads, same fixtures). The full matrix was **not** rerun; only the smoke checks listed under
+  "Verification of the review fixes" ran with schema 2, so the tables below remain schema 1
+  numbers. Schema 2 also records the decoded and target sample counts themselves.
 
 ## Test environment [M]
 
@@ -129,8 +169,14 @@ Python process plus all `ffmpeg`/`ffprobe` processes, sampled every 50 ms; the P
 the whole harness (it includes the application imports, comparable to the idle app's 104 MB
 RSS above, plus a few MB of database/result handling). CPU = container cgroup `cpu.stat` delta
 (Python + FFmpeg, all threads). Peak temp disk = job work directories plus the result store,
-polled every 200 ms. Success requires job status `completed` and decoded MP3 samples equal to
-the target samples. Guards: 900 s run timeout, 3 GiB temp-disk abort, OOM state read from Docker.
+polled every 200 ms. A run is valid only if every job is `completed`, the decoded MP3 sample
+count equals the target (both present), outputs exist, no work directory or FFmpeg process is
+left and no OOM kill was recorded. Guards: 900 s run timeout and a 3 GiB temp-disk limit, both
+checked every 50 ms by the supervising loop while jobs run; a trip kills FFmpeg and waits a bounded
+grace period (15 s), and work that still does not end makes the process exit. **The disk guard is
+a periodic size check (200 ms), not a filesystem quota:** the limit can be exceeded by whatever is
+written within one period (a single large file copy can overshoot by tens of MB) before the run is
+stopped.
 
 ### Results [M]
 
@@ -174,9 +220,14 @@ Reading the numbers:
   and wall time scales with the CPU quota (0.5 CPU ≈ 3–4x slower than unlimited, 2 concurrent jobs
   ≈ 2.3x slower than one). With a 0.1 CPU quota a 6.6-minute job took about 2 minutes. A 20-minute
   job at 0.1 CPU is **not measured**; extrapolating 17.6 CPU-s / 0.1 gives roughly 3 minutes [estimate, U].
-- Memory stays below 310 MB in every case (limit 512 MB), so no OOM was observed. No test pushed
-  toward OOM on purpose. Each FFmpeg process adds about 50 MB; timed mode starts more of them at
-  the same time (up to 198 MB of FFmpeg RSS for two 20-minute jobs).
+- The summed RSS of the benchmark Python process and FFmpeg stayed below 310 MB in every case, and
+  no OOM kill occurred **in the workloads measured**. That is not evidence that 512 MB is enough
+  for production: the figure is process RSS only, not the container's whole memory. The idle app
+  alone showed 154 MB of cgroup memory against 104 MB RSS (page cache, kernel and other memory
+  that RSS does not include; cgroup peak was not recorded), and the harness runs without the web
+  server, the liveness loops, real Azure responses or web traffic. No test pushed toward OOM on
+  purpose. Each FFmpeg process adds about 50 MB; timed mode starts more of them at the same time
+  (up to 198 MB of FFmpeg RSS for two 20-minute jobs).
 - Peak temp disk grows with audio length and concurrency: 489 MB for two 20-minute plain jobs,
   because the lossless speech WAV (about 69 MB for the 24 minutes of plain speech) and the
   tempo-adjusted and decoded copies live in the work dir together. Finished MP3s add 0.71 MB per minute
@@ -190,7 +241,24 @@ jobs, see `scripts/timed_benchmark.py` part (b) for the simulated limiter wait);
 and the pronunciation detector; many concurrent web requests during processing; the liveness
 loop under a 0.1 CPU quota while FFmpeg runs (a starved heartbeat could in theory let the 90 s
 stale check fire; this was not observed because the harness runs the pipeline without the web
-server); real Render disk size and I/O.
+server); real Render disk size and I/O; memory beyond process RSS (cgroup peak, page cache).
+
+### Verification of the review fixes
+
+Run after the fixes, on the PR branch, using the `cb71cd2` image (so the measured code is the
+same): unit tests (`test_harness.py`), `test_scripts.sh` (startup deadlines with a never-ready and
+an early-exit container including credential masking, `run-idle.sh` with an app that exits at
+once, run isolation, results-directory refusal, nine exit-code cases and a two-case matrix with
+one failure), and three small real-pipeline smoke runs (not statistics):
+
+| Smoke run | Result |
+|---|---|
+| short plain, 2 jobs, 3 runs | passed; decoded = target = 1,416,000 samples in every job; no leftovers; wall 1.5-2.7 s (the schema 1 median was 1.1 s: a smoke run on a busy machine, not a new measurement) |
+| guest_limit plain with `--max-temp-mb 5` | stopped by the disk guard after 0.47 s (limit 5 MB, peak seen 30 MB because a large file copy overshoots a periodic check); case FAILED, exit 1, no FFmpeg left |
+| guest_limit plain with `--run-timeout 0.4` | stopped at the deadline (0.46 s); case FAILED, exit 1 |
+
+These are conditional evidence that the scripts behave as described; they say nothing new
+about performance.
 
 ## 3. Cost estimate (conditional)
 
@@ -227,12 +295,12 @@ mid-month (published rule), and the database would be suspended until the next p
 upgrade. Neon on Launch costs about $20/month if it is awake all the time, by this model.
 At 0.5 CU the awake case doubles. This is arithmetic from published rates, not a bill.
 
-### Render options (resource fit from the measurements; prices [U])
+### Render options (conditional resource fit, not proven production capacity; prices [U])
 
 | Option | Fits the measured profile? | Behavior / risk |
 |---|---|---|
-| Free (0.1 CPU, 512 MB) | Memory yes (≤ 310 MB measured); a 6.6-minute job took about 2 minutes under a 0.1 CPU quota; longer jobs several minutes [M, partly estimated] | Spins down after 15 minutes idle; about one minute cold start for the next visitor; results are lost on spin-down/restart; not for production per Render; 750 h/month cap. Idle spin-down is what lets Neon sleep |
-| Starter (0.5 CPU, 512 MB) | Memory yes; 0.5 CPU gave 12 s / 35 s for 6.6 / 20 minutes alone, 27 s / 82 s with two jobs | Always on: no cold start, but then Neon is awake all month (about $20 Neon Launch by the model, or Free exhausted). Still no persistent disk requirement while results stay short-lived. Price: not found |
+| Free (0.1 CPU, 512 MB) | Conditional: measured RSS ≤ 310 MB, but see the memory caveat above; a 6.6-minute job took about 2 minutes under a 0.1 CPU quota; longer jobs several minutes [M, partly estimated] | Spins down after 15 minutes idle; about one minute cold start for the next visitor; results are lost on spin-down/restart; not for production per Render; 750 h/month cap. Idle spin-down is what lets Neon sleep |
+| Starter (0.5 CPU, 512 MB) | Conditional (same memory caveat); 0.5 CPU gave 12 s / 35 s for 6.6 / 20 minutes alone, 27 s / 82 s with two jobs | Always on: no cold start, but then Neon is awake all month (about $20 Neon Launch by the model, or Free exhausted). Still no persistent disk requirement while results stay short-lived. Price: not found |
 | Standard (1 CPU, 2 GB) | Headroom for 2 concurrent long timed jobs (300 MB) and ~2x faster than 0.5 CPU if the quota scaling holds [U] | Price: not found |
 
 No claim is made about how many users or jobs any plan will carry: the benchmark has no
