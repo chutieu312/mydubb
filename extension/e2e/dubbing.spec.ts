@@ -118,25 +118,12 @@ test("closing the panel neither cancels nor resends; reopening and reloading res
   await panel.getByRole("radio", { name: "2x", exact: true }).check();
   await panel.getByRole("button", { name: "Generate audio" }).click();
   await expect(panel.locator("#job-choices")).toContainText("2x");
-  // The audio loaded for the first job stays until the user switches to the new result.
-  const callout = panel.locator("#result-switch");
-  await expect(callout).toBeVisible({ timeout: 20_000 });
-  await expect(callout).toContainText("New audio ready");
-  await expect(panel.locator("#player-badge")).toHaveText("Earlier result");
-  // The translation shown is the loaded audio's, not the waiting result's.
-  await expect(panel.locator("#translation")).toHaveText("Bản dịch <b>job-1</b>");
-  expect(mydubb.gets("/api/jobs/job-2/result/audio")).toHaveLength(0);
-  // Narrow panel: the callout and the loaded-audio block stay inside the viewport.
-  await panel.setViewportSize({ width: 320, height: 700 });
-  expect(await panel.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await panel.screenshot({ path: test.info().outputPath("earlier-and-new.png"), fullPage: true });
-  await callout.getByRole("button", { name: "Use new audio" }).click();
-  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
-  await expect(panel.locator("#player-info")).toContainText("Vietnamese");
-  await expect(panel.locator("#player-info")).toContainText("2x");
+  // The new result replaces the first audio by itself once its MP3 is here: paused, its own data.
+  await expect(panel.locator("#player-info")).toContainText("2x", { timeout: 20_000 });
   await expect(panel.locator("#translation")).toHaveText("Bản dịch <b>job-2</b>");
-  await expect(callout).toBeHidden();
-  await expect(panel.locator("#result-using")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Use new audio" })).toHaveCount(0);
+  expect(mydubb.gets("/api/jobs/job-2/result/audio")).toHaveLength(1);
+  expect((await playerSessions(worker))[0]?.paused).toBe(true);
   expect(mydubb.posts("/api/jobs")).toHaveLength(2);
 });
 

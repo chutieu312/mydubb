@@ -143,6 +143,9 @@ let transcript = "";
 let lesson: string | null | undefined = LESSON;
 let player: FakePlayer;
 let links: string[];
+// Where the panel asked the page to pause the video, and what the page answers.
+let placed: [string, number][];
+let placeAnswer: () => Promise<string | null>;
 
 function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
   const deps: DubbingDeps = {
@@ -163,6 +166,10 @@ function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
     currentLesson: () => lesson,
     transcript: () => transcript,
     linkPlayback: (key) => links.push(key),
+    placeVideo: (key, at) => {
+      placed.push([key, at]);
+      return placeAnswer();
+    },
   });
   return { dubbing, storage, api };
 }
@@ -202,6 +209,8 @@ beforeEach(() => {
   lesson = LESSON;
   player = new FakePlayer();
   links = [];
+  placed = [];
+  placeAnswer = async () => null;
 });
 
 afterEach(() => {
@@ -355,8 +364,10 @@ describe("job and result", () => {
     expect($("player-floating").textContent).toBe("Hide floating player");
   });
 
-  describe("a new result while the player holds an earlier one", () => {
+  describe("each finished result is loaded in place of the earlier audio", () => {
     const text = (id: string) => $(id).textContent;
+    const mp3 = () => new Blob(["mp3"], { type: "audio/mpeg" });
+    const SYNC_ON = { ...NO_SYNC, status: "playing", confirmed: true } as unknown as PanelPlayerView["sync"];
     const twoJobs = (extra: Partial<Record<keyof MyDubbApi, unknown>> = {}) =>
       fakeApi({
         createJob: vi
@@ -377,75 +388,219 @@ describe("job and result", () => {
         ...extra,
       });
 
-    /** Job 1 loaded at 1x over 00:00:00 → 00:00:10, then job 2 generated over 00:00:00 → 00:00:23 at 1.5x. */
-    async function earlierAndNew(api = twoJobs()) {
-      await started(undefined, api);
+    /** Job 1 loaded (1x, 00:00:00 → 00:00:10) and playing, then job 2 generated (1.5x, 00:00:00 → 00:00:23). */
+    async function earlierAndNew(api = twoJobs(), storage?: ReturnType<typeof fakeStorage>) {
+      const made = await started(storage, api);
       typeTime("first-start", "000000");
       typeTime("last-start", "000010");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
-      player.set({ ...player.view!, paused: false, currentTime: 42, duration: 10 });
+      player.set({ ...player.view!, paused: false, currentTime: 4, duration: 10 });
       typeTime("last-start", "000023");
       choose("speed", "1.5");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
-      return api;
+      return { ...made, api };
     }
 
-    it("keeps the earlier audio and shows the new result with its Use new audio button beside it", async () => {
-      const api = await earlierAndNew();
-      expect(player.opened).toHaveLength(1);
-      expect(player.ended).toEqual([]);
-      expect(api.getAudio).toHaveBeenCalledTimes(1);
-      const callout = $("result-switch");
-      expect(callout.hidden).toBe(false);
-      expect(text("result-switch-title")).toBe("New audio ready");
-      expect(text("result-switch-info")).toBe("Vietnamese · Andrew Multilingual · 1.5xVideo 00:00:00 → 00:00:23 MP3 15.333 s");
-      // The button is inside the callout, which is inside the new result.
-      expect(callout.contains($("player-switch"))).toBe(true);
-      expect($("result").contains(callout)).toBe(true);
-      expect($("player-switch").textContent).toBe("Use new audio");
-      // The loaded audio keeps its own snapshot: other speed, span and length.
-      expect(text("player-info")).toBe("Vietnamese · Andrew Multilingual · 1xVideo 00:00:00 → 00:00:10 MP3 10.000 s");
-      expect($("player-badge").hidden).toBe(false);
-      expect(text("player-badge")).toBe("Earlier result");
-      expect($("result-using").hidden).toBe(true);
+    it("the first and every next result are loaded by themselves: audio, translation and facts together, paused", async () => {
+      const { api } = await earlierAndNew();
+      expect(api.createJob).toHaveBeenCalledTimes(2);
+      expect(api.getAudio).toHaveBeenCalledTimes(2);
+      expect(player.opened.map((o) => o.request.owner.jobId)).toEqual(["job-1", "job-2"]);
+      expect(player.opened[1]?.request.choices).toMatchObject({ speed: 1.5, sourceRange: "00:00:00 → 00:00:23" });
+      expect(player.view?.owner.jobId).toBe("job-2");
+      expect(player.view?.paused).toBe(true);
+      expect(player.commands).toEqual([]);
+      expect(player.syncs).toEqual([]);
+      expect(text("player-info")).toContain("1.5x");
+      expect(text("player-info")).toContain("Video 00:00:00 → 00:00:23");
+      expect(text("translation")).toBe("Bản dịch job-2");
+      // No manual switch any more.
+      expect(document.getElementById("player-switch")).toBeNull();
+      expect(document.getElementById("result-switch")).toBeNull();
+      expect(document.getElementById("player-badge")).toBeNull();
+      expect($("job-note").hidden).toBe(true);
+      expect($<HTMLButtonElement>("player-load").hidden).toBe(true);
+      // The video is placed at each result's own start.
+      expect(placed).toEqual([
+        [LESSON, 0],
+        [LESSON, 0],
+      ]);
     });
 
-    it("shows the loaded audio's translation, not the waiting result's; Use new audio switches both", async () => {
-      await earlierAndNew();
+    it("while the new job runs and its MP3 downloads, the earlier audio stays loaded and playing, with its own facts", async () => {
+      let deliver!: (blob: Blob) => void;
+      const api = twoJobs({
+        getAudio: vi
+          .fn()
+          .mockResolvedValueOnce(mp3())
+          .mockImplementationOnce(() => new Promise((resolve) => (deliver = resolve))),
+      });
+      await earlierAndNew(api);
+      expect(player.view?.owner.jobId).toBe("job-1");
+      expect(player.view?.paused).toBe(false);
       expect(text("translation")).toBe("Bản dịch job-1");
-      expect(text("translation-heading")).toBe("Translation · Vietnamese");
-      $<HTMLButtonElement>("player-switch").click();
+      expect(text("player-info")).toContain("00:00:00 → 00:00:10");
+      expect(text("player-info")).not.toContain("00:00:23");
+      expect($("job-note").hidden).toBe(false);
+      expect(text("audio-status")).toBe("Loading the audio…");
+      deliver(mp3());
       await settle(12);
       expect(player.view?.owner.jobId).toBe("job-2");
+      expect(player.view?.paused).toBe(true);
       expect(text("translation")).toBe("Bản dịch job-2");
-      expect(text("player-info")).toContain("00:00:00 → 00:00:23");
-      expect(player.commands).toEqual([]);
+      expect($("job-note").hidden).toBe(true);
     });
 
-    it("a reopened panel still shows the earlier audio's translation while the new result waits", async () => {
-      const api = twoJobs();
-      const storage = fakeStorage({ [AUTH_KEY]: AUTH });
-      const first = await started(storage, api);
-      typeTime("first-start", "000000");
-      typeTime("last-start", "000010");
+    it("an earlier audio playing with Sync ON is replaced: the new one paused, Sync OFF, the video at its start", async () => {
+      await started(undefined, twoJobs());
+      typeTime("first-start", "000010");
+      typeTime("last-start", "000056");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
-      typeTime("last-start", "000023");
+      player.set({ ...player.view!, paused: false, currentTime: 4, sync: SYNC_ON });
+      expect($("sync-toggle").getAttribute("aria-pressed")).toBe("true");
+      typeTime("first-start", "000113");
+      typeTime("last-start", "000200");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
+      expect(player.view?.owner.jobId).toBe("job-2");
+      expect(player.view?.paused).toBe(true);
+      expect(player.view?.currentTime).toBe(0);
+      expect($("sync-toggle").getAttribute("aria-pressed")).toBe("false");
+      expect(player.syncs).toEqual([]);
+      expect(player.commands).toEqual([]);
+      expect(placed.at(-1)).toEqual([LESSON, 73]);
+      expect(text("video-place")).toBe("Video paused at 1:13, where this audio starts.");
+    });
+
+    it("places the video at the result's own start (from its Generate), not at what the form says now", async () => {
+      let finish!: (value: unknown) => void;
+      await started(undefined, fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) }));
+      typeTime("first-start", "000113");
+      typeTime("last-start", "000300");
+      $<HTMLButtonElement>("generate").click();
+      await settle(6);
+      typeTime("first-start", "000005");
+      finish(job("completed"));
+      await settle(12);
+      expect(placed).toEqual([[LESSON, 73]]);
+      expect(text("video-place")).toBe("Video paused at 1:13, where this audio starts.");
+    });
+
+    it("says when the video could not be placed, and never that it was", async () => {
+      placeAnswer = async () => "The video is not ready yet. Wait for it to load.";
+      await started();
+      typeTime("first-start", "000010");
+      typeTime("last-start", "000610");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(player.view?.paused).toBe(true);
+      expect(text("video-place")).toBe("The video was not moved to 0:10: The video is not ready yet. Wait for it to load.");
+    });
+
+    it("a failed download keeps the earlier audio and its translation; Load audio retries without a new job", async () => {
+      const api = twoJobs({
+        getAudio: vi
+          .fn()
+          .mockResolvedValueOnce(mp3())
+          .mockRejectedValueOnce(new MyDubbError(0, "timeout", "MyDubb did not answer in time."))
+          .mockResolvedValueOnce(mp3()),
+      });
+      await earlierAndNew(api);
+      expect(player.view?.owner.jobId).toBe("job-1");
+      expect(player.view?.paused).toBe(false);
       expect(text("translation")).toBe("Bản dịch job-1");
-      first.dubbing.dispose();
+      expect(text("audio-status")).toMatch(/could not be loaded/);
+      expect($("job-note").hidden).toBe(false);
+      expect($<HTMLButtonElement>("player-load").hidden).toBe(false);
+      expect(placed).toHaveLength(1);
+      $<HTMLButtonElement>("player-load").click();
+      await settle(12);
+      expect(api.createJob).toHaveBeenCalledTimes(2);
+      expect(player.view?.owner.jobId).toBe("job-2");
+      expect(text("translation")).toBe("Bản dịch job-2");
+      expect(placed).toHaveLength(2);
+    });
+
+    it("a failed new job keeps the earlier audio and its translation", async () => {
+      const failed = { id: "job-2", status: "failed", error: { code: "speech_quota_exceeded", message: "The speech quota is used up." } };
+      const api = twoJobs({
+        getJob: vi.fn(async (_token: string, id: string) => (id === "job-2" ? failed : { id, status: "completed" })),
+      });
+      await earlierAndNew(api);
+      expect(player.opened).toHaveLength(1);
+      expect(player.view?.owner.jobId).toBe("job-1");
+      expect(text("translation")).toBe("Bản dịch job-1");
+      expect(text("job-error")).toMatch(/speech quota is used up/);
+      expect($("job-note").hidden).toBe(false);
+    });
+
+    it("a reopened panel whose new download failed shows the earlier audio's stored translation", async () => {
+      const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+      const failing = new MyDubbError(0, "timeout", "MyDubb did not answer in time.");
+      const api = twoJobs({ getAudio: vi.fn().mockResolvedValueOnce(mp3()).mockRejectedValue(failing) });
+      const { dubbing } = await earlierAndNew(api, storage);
+      dubbing.dispose();
       expect(storage.data[`loaded:${TAB}`]).toMatchObject({ jobId: "job-1", text: "Bản dịch job-1", tag: "ar", dir: "rtl" });
 
       document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
       await started(storage, api);
       await settle(12);
-      expect(api.getAudio).toHaveBeenCalledTimes(1);
-      expect($("result-switch").hidden).toBe(false);
+      expect(player.view?.owner.jobId).toBe("job-1");
       expect(text("translation")).toBe("Bản dịch job-1");
       expect($("translation").dir).toBe("rtl");
+      expect(api.createJob).toHaveBeenCalledTimes(2);
+    });
+
+    it("loading an earlier result again (after a release) places the video at that result's own start", async () => {
+      const { api } = await started();
+      typeTime("first-start", "000030");
+      typeTime("last-start", "000100");
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(placed).toEqual([[LESSON, 30]]);
+      player.set(null); // the tab reloaded: the session is gone
+      typeTime("first-start", "000005");
+      $<HTMLButtonElement>("player-load").click();
+      await settle(12);
+      expect(placed).toEqual([
+        [LESSON, 30],
+        [LESSON, 30],
+      ]);
+      expect(api.createJob).toHaveBeenCalledTimes(1);
+    });
+
+    it("a late download after a new Generate, a lecture change or an account change neither loads nor places", async () => {
+      for (const change of ["generate", "lecture", "account"] as const) {
+        document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+        player = new FakePlayer();
+        placed = [];
+        lesson = LESSON;
+        let deliver!: (blob: Blob) => void;
+        const api = twoJobs({ getAudio: vi.fn(() => new Promise((resolve) => (deliver = resolve))) });
+        const { dubbing } = await started(undefined, api);
+        typeTime("first-start", "000010");
+        typeTime("last-start", "000020");
+        $<HTMLButtonElement>("generate").click();
+        await settle(12);
+        if (change === "generate") {
+          api.getJob.mockReturnValue(new Promise(() => undefined));
+          $<HTMLButtonElement>("generate").click();
+        } else if (change === "lecture") {
+          lesson = "demo-course/2";
+          dubbing.lessonState(lesson);
+        } else {
+          dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+        }
+        await settle(6);
+        deliver(mp3());
+        await settle(12);
+        expect(player.view, change).toBeNull();
+        expect(placed, change).toEqual([]);
+        dubbing.dispose();
+      }
     });
 
     it("tells two jobs with the same language, voice and speed apart by span and length", async () => {
@@ -456,65 +611,16 @@ describe("job and result", () => {
       typeTime("last-start", "000015");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
-      player.set({ ...player.view!, duration: 10 });
+      expect(text("player-info")).toContain("00:00:00 → 00:00:15");
       typeTime("last-start", "000023");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
       expect(text("player-info")).toContain("1.5x");
-      expect(text("result-switch-info")).toContain("1.5x");
-      expect(text("player-info")).toContain("00:00:00 → 00:00:15");
-      expect(text("result-switch-info")).toContain("00:00:00 → 00:00:23");
-      expect(text("player-info")).toContain("10.000 s");
-      expect(text("result-switch-info")).toContain("15.333 s");
-    });
-
-    it("Use new audio only downloads and switches: no new job, paused, Sync off, new data", async () => {
-      const api = await earlierAndNew();
-      $<HTMLButtonElement>("player-switch").click();
-      expect($<HTMLButtonElement>("player-switch").disabled).toBe(true);
-      expect($<HTMLButtonElement>("player-switch").textContent).toBe("Switching…");
-      $<HTMLButtonElement>("player-switch").click(); // double click: ignored
-      await settle(12);
-      expect(player.ended).toEqual(["session-1"]);
-      expect(player.opened).toHaveLength(2);
-      expect(api.getAudio).toHaveBeenCalledTimes(2);
-      expect(api.createJob).toHaveBeenCalledTimes(2);
-      expect(player.opened[1]?.request.owner.jobId).toBe("job-2");
-      expect(player.opened[1]?.request.choices).toMatchObject({ speed: 1.5, sourceRange: "00:00:00 → 00:00:23" });
-      expect(player.commands).toEqual([]);
-      expect(player.syncs).toEqual([]);
-      expect(player.view?.paused).toBe(true);
       expect(text("player-info")).toContain("00:00:00 → 00:00:23");
-      expect($("result-switch").hidden).toBe(true);
-      expect($("player-badge").hidden).toBe(true);
-      expect($("result-using").hidden).toBe(false);
-      expect(text("result-using")).toBe("The player is using this result.");
+      expect(text("player-info")).not.toContain("00:00:15");
     });
 
-    it("a failed switch does not claim the new audio is in use, and Load audio retries without a job", async () => {
-      const api = twoJobs({
-        getAudio: vi
-          .fn()
-          .mockResolvedValueOnce(new Blob(["mp3"], { type: "audio/mpeg" }))
-          .mockRejectedValueOnce(new MyDubbError(0, "timeout", "MyDubb did not answer in time."))
-          .mockResolvedValueOnce(new Blob(["mp3"], { type: "audio/mpeg" })),
-      });
-      await earlierAndNew(api);
-      $<HTMLButtonElement>("player-switch").click();
-      await settle(12);
-      expect(text("audio-status")).toMatch(/could not be loaded/);
-      expect($("result-using").hidden).toBe(true);
-      expect($("result-switch").hidden).toBe(true);
-      expect($<HTMLButtonElement>("player-load").hidden).toBe(false);
-      $<HTMLButtonElement>("player-load").click();
-      await settle(12);
-      expect(player.opened).toHaveLength(2);
-      expect(player.opened[1]?.request.owner.jobId).toBe("job-2");
-      expect(api.createJob).toHaveBeenCalledTimes(2);
-      expect($("result-using").hidden).toBe(false);
-    });
-
-    it("a timed job with overridden start times shows the captions' span (milliseconds kept), not the override", async () => {
+    it("a timed job shows and uses the captions' span (milliseconds kept), not the overridden fields", async () => {
       transcript = "0:05.480\nFirst caption.\n0:34.250\nSecond caption.";
       const api = twoJobs();
       await started(undefined, api);
@@ -525,14 +631,16 @@ describe("job and result", () => {
       expect(player.opened[0]?.request.choices.sourceRange).toBe("00:00:05.480 → 00:00:34.250");
       expect(text("player-info")).toContain("Video 00:00:05.480 → 00:00:34.250");
       expect(text("player-info")).not.toContain("00:00:56");
-      // The form changing later changes nothing about the loaded audio or the next result's label.
+      // The video is placed where the captions start.
+      expect(placed).toEqual([[LESSON, 5.48]]);
+      expect(text("video-place")).toBe("Video paused at 0:05.480, where this audio starts.");
+      // The form changing later changes nothing about the next result's span either.
       typeTime("first-start", "000100");
       typeTime("last-start", "000200");
       $<HTMLButtonElement>("generate").click();
       await settle(12);
-      expect(text("result-switch-info")).toContain("Video 00:00:05.480 → 00:00:34.250");
-      expect(text("result-switch-info")).not.toContain("00:01:00");
       expect(text("player-info")).toContain("Video 00:00:05.480 → 00:00:34.250");
+      expect(text("player-info")).not.toContain("00:01:00");
     });
 
     it("a job without a Sync snapshot does not borrow its start-time fields for the source", async () => {
@@ -547,6 +655,7 @@ describe("job and result", () => {
       await settle(12);
       // Plain here (timestamps ignored): the two fields are the source.
       expect(player.opened[0]?.request.choices.sourceRange).toBe("00:00:10 → 00:00:56");
+      expect(placed).toEqual([[LESSON, 10]]);
     });
 
     it("an audio without a recorded span says so instead of borrowing the form's", async () => {
@@ -608,6 +717,8 @@ describe("job and result", () => {
     expect(player.ended).toEqual([]);
     expect($("player-play").textContent).toBe("Pause");
     expect(playerTime()).toBe("0:33 / 3:00");
+    // Reopening is not loading again: the video is left where it is.
+    expect(placed).toEqual([]);
   });
 
   it("ends a session of another account connection or lecture instead of showing it", async () => {
@@ -1078,7 +1189,7 @@ describe("one page: English transcript, Translate to, Your audio", () => {
     await started();
     expect(document.querySelector("[role=tablist], [role=tab], [role=tabpanel]")).toBeNull();
     const headings = [...document.querySelectorAll("section > h2, section > .card-head > h2")].map((h) => h.textContent?.trim());
-    expect(headings).toEqual(["English transcript", "Translate to", "Your audio Earlier result"]);
+    expect(headings).toEqual(["English transcript", "Translate to", "Your audio"]);
     // The video row sits between the transcript and the two start times.
     const order = ["transcript", "video-box", "first-start", "last-start", "target-language", "speed", "generate", "player-section"].map($);
     for (let i = 1; i < order.length; i += 1) {

@@ -29,6 +29,13 @@ describe("validators", () => {
     expect(isCommandMessage({ ...base, command: "seek" })).toBe(false);
     expect(isCommandMessage({ ...base, command: "play", delta: 5 })).toBe(false);
     expect(isCommandMessage({ ...base, command: "volume" })).toBe(false);
+    expect(isCommandMessage({ ...base, command: "place", at: 73 })).toBe(true);
+    expect(isCommandMessage({ ...base, command: "place", at: 0 })).toBe(true);
+    expect(isCommandMessage({ ...base, command: "place", at: -1 })).toBe(false);
+    expect(isCommandMessage({ ...base, command: "place", at: 24 * 3600 + 1 })).toBe(false);
+    expect(isCommandMessage({ ...base, command: "place" })).toBe(false);
+    expect(isCommandMessage({ ...base, command: "place", at: 5, delta: 5 })).toBe(false);
+    expect(isCommandMessage({ ...base, command: "seek", delta: 5, at: 5 })).toBe(false);
     expect(isCommandMessage({ ...base, command: "play", lessonKey: "" })).toBe(false);
     expect(isCommandMessage(null)).toBe(false);
   });

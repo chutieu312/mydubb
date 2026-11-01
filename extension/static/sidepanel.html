@@ -140,7 +140,7 @@
       <!-- 3. The job, the audio in the player, its translation, Sync and the floating player. -->
       <section class="card audio-card" aria-labelledby="player-heading">
         <div class="card-head">
-          <h2 id="player-heading">Your audio <span id="player-badge" class="badge" hidden>Earlier result</span></h2>
+          <h2 id="player-heading">Your audio</h2>
           <p id="player-state" class="small"></p>
         </div>
 
@@ -151,22 +151,18 @@
 
         <div id="result-section" hidden>
           <p id="job-status" class="status" role="status" aria-live="polite"></p>
+          <p id="job-note" class="hint" hidden>Your earlier audio stays below until the new one is loaded.</p>
           <p id="job-error" class="error" role="alert"></p>
           <button id="check-again" type="button" hidden>Check again</button>
           <div id="result" hidden>
             <p id="audio-status" class="status" role="status" aria-live="polite"></p>
-            <div id="result-switch" class="new-result" role="group" aria-labelledby="result-switch-title" hidden>
-              <p id="result-switch-title" class="new-title">New audio ready</p>
-              <div id="result-switch-info" class="new-meta"></div>
-              <button id="player-switch" type="button" class="cta">Use new audio</button>
-            </div>
-            <p id="result-using" class="hint" hidden>The player is using this result.</p>
           </div>
         </div>
 
         <div id="player-section" hidden>
           <div id="player" role="group" aria-labelledby="player-heading" hidden>
             <div id="player-info"></div>
+            <p id="video-place" class="status" role="status" aria-live="polite"></p>
             <div class="translation-block">
               <div class="card-head">
                 <h3 id="translation-heading">Translation</h3>
@@ -210,7 +206,7 @@
         </div>
 
         <details id="result-details" class="more" hidden>
-          <summary>Job details</summary>
+          <summary>Latest job details</summary>
           <dl id="job-choices" class="link"></dl>
           <dl id="result-durations" class="link"></dl>
           <ul id="notices" class="hint"></ul>

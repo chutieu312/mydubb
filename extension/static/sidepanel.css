@@ -179,9 +179,11 @@ h1 {
   min-width: 0;
 }
 
+/* The three block titles stand out; everything else stays compact. */
 h2 {
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 600;
+  letter-spacing: -0.2px;
 }
 
 h3 {
@@ -554,7 +556,8 @@ details.more > ul {
 }
 
 /* The job's progress and the audio's state: short lines under the heading. */
-#result-section .status {
+#result-section .status,
+#video-place {
   font-size: 12px;
   color: var(--muted);
   margin-top: 4px;

@@ -35,12 +35,15 @@ const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
 const SAVE_DEBOUNCE_MS = 250;
 const SEEK_SECONDS = 5;
+// How long a "place" command may wait for the tab's answer.
+const PLACE_TIMEOUT_MS = 5000;
 
 const COMMAND_ERRORS: Record<CommandError, string> = {
   "no-video": "No lecture video is attached.",
   stale: "The lecture or video changed before the command ran, so nothing was done. Check the panel and try again.",
   "not-ready": "The video is not ready yet. Wait for it to load.",
   "not-seekable": "The video cannot be seeked yet.",
+  "out-of-range": "That time is outside the video.",
   "play-blocked": "Chrome blocked playback. Click play once in the Udemy player, then use the panel again.",
   "play-interrupted": "Playback was interrupted (the video was paused or changed).",
   "play-failed": "The video could not start playing.",
@@ -93,6 +96,8 @@ class Panel {
   private draft: DraftRecord | null = null;
   private awaitingConfirm: PendingSelection | null = null;
   private nextRequestId = 1;
+  // "place" commands waiting for the page's answer, by request id.
+  private readonly placing = new Map<number, (result: CommandResult) => void>();
   private readonly cleanup = new AbortController();
   private readonly dubbing: Dubbing;
   private readonly audioChannel = new BroadcastChannel(AUDIO_CHANNEL);
@@ -124,6 +129,7 @@ class Panel {
         currentLesson: () => this.currentLesson(),
         transcript: () => ui.transcript.value,
         linkPlayback: (lessonKey) => this.linkPlayback(lessonKey),
+        placeVideo: (lessonKey, at) => this.placeVideo(lessonKey, at),
       },
     );
   }
@@ -207,7 +213,9 @@ class Panel {
         this.applyState(message.state);
         if (first) this.dubbing.pageConnected();
       } else {
-        this.applyResult(message);
+        const placed = this.placing.get(message.requestId);
+        if (placed) placed(message);
+        else this.applyResult(message);
       }
     });
     port.onDisconnect.addListener(() => {
@@ -217,6 +225,7 @@ class Panel {
   }
 
   private onDisconnect(): void {
+    for (const answer of [...this.placing.values()]) answer({ type: "result", requestId: -1, ok: false, error: "no-video" });
     const hadState = this.receivedState;
     this.port = null;
     this.state = null;
@@ -379,6 +388,33 @@ class Panel {
     } catch {
       this.setVideoError("The Udemy tab is not connected.");
     }
+  }
+
+  /**
+   * Pauses the lecture video at `at` seconds (where a newly loaded audio starts). Resolves with
+   * null once the page did it, or with why it did not: never reported as done otherwise.
+   */
+  private placeVideo(lessonKey: string, at: number): Promise<string | null> {
+    const port = this.port;
+    const video = this.state?.video;
+    if (!port || this.state?.lesson?.key !== lessonKey) return Promise.resolve("The Udemy tab is not connected to this lecture.");
+    if (video?.status !== "ready") return Promise.resolve(COMMAND_ERRORS["not-ready"]);
+    const requestId = this.nextRequestId++;
+    return new Promise((resolve) => {
+      const done = (text: string | null) => {
+        window.clearTimeout(timer);
+        this.placing.delete(requestId);
+        resolve(text);
+      };
+      const timer = window.setTimeout(() => done("The Udemy tab did not answer."), PLACE_TIMEOUT_MS);
+      this.placing.set(requestId, (result) => done(result.ok ? null : (COMMAND_ERRORS[result.error ?? "invalid"] ?? COMMAND_ERRORS.invalid)));
+      const message: CommandMessage = { type: "command", requestId, command: "place", at, lessonKey, videoId: video.id };
+      try {
+        port.postMessage(message);
+      } catch {
+        done("The Udemy tab is not connected.");
+      }
+    });
   }
 
   /** Over the tab port: the page links itself to the playback session of this lecture. */

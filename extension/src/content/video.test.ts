@@ -61,6 +61,22 @@ describe("AttachedVideo", () => {
     expect(v.media.currentTime).toBe(15);
   });
 
+  it("place pauses the video at an exact position, refused (never clamped) outside its range", () => {
+    const v = fakeVideo(document, { paused: false, currentTime: 40, seekable: [[0, 100]] });
+    const attached = new AttachedVideo(v, 1, () => undefined);
+    expect(attached.place(73)).toBeNull();
+    expect(v.media.paused).toBe(true);
+    expect(v.media.currentTime).toBe(73);
+    expect(attached.place(0)).toBeNull();
+    expect(v.media.currentTime).toBe(0);
+    v.media.currentTime = 12;
+    expect(attached.place(101)).toBe("out-of-range");
+    expect(v.media.currentTime).toBe(12);
+    expect(new AttachedVideo(fakeVideo(document, { readyState: 0 }), 1, () => undefined).place(5)).toBe("not-ready");
+    const live = fakeVideo(document, { seekable: [], duration: Infinity });
+    expect(new AttachedVideo(live, 1, () => undefined).place(5)).toBe("not-seekable");
+  });
+
   it("refuses to seek before metadata or without a range", () => {
     expect(new AttachedVideo(fakeVideo(document, { readyState: 0 }), 1, () => undefined).seekBy(5)).toBe("not-ready");
     const live = fakeVideo(document, { seekable: [], duration: Infinity });

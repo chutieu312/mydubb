@@ -63,9 +63,9 @@ async function measuredDrift(page: Page, worker: Worker, tabId: number, start: n
 test("plain job: turn Sync on, play both from the panel, measure drift, ±5 s, pause, turn off restores the video", async ({ context, worker, extensionId, mydubb }) => {
   test.setTimeout(90_000);
   const { page, tabId, panel } = await plainResult(context, worker, extensionId, mydubb, 601);
-  // Off by default; nothing moved.
+  // Off by default; the loaded audio only paused the video at its start (0:10), sound and speed untouched.
   await expect(panel.locator("#sync-status")).toHaveText("OFF");
-  expect(await video(page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 0 });
+  expect(await video(page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 10 });
 
   // The first time: what will happen, then a confirmation.
   await panel.getByRole("button", { name: "Sync with video" }).click();
@@ -292,8 +292,8 @@ test("two tabs: playing B pauses A's audio and A's synced video; only own tab's 
   await expect.poll(async () => (await sessionOf(worker, a.tabId))!.paused).toBe(true);
   await expect.poll(async () => (await video(a.page)).paused).toBe(true);
   await expect(a.panel.getByText("Paused: MyDubb audio started in another tab.")).toBeVisible();
-  // B is not synced: its video was never touched.
-  expect(await video(b.page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 0 });
+  // B is not synced: its video was only paused at its start when its audio loaded, never driven.
+  expect(await video(b.page)).toMatchObject({ paused: true, muted: false, rate: 1, currentTime: 10 });
 });
 
 test("video replaced, lecture change, reload and disconnect end Sync and give the old video back", async ({ context, worker, extensionId, mydubb }) => {

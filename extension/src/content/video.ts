@@ -159,6 +159,18 @@ export class AttachedVideo {
     return null;
   }
 
+  /** Pauses the video at `at` seconds; refused, never clamped, outside the playable range. */
+  place(at: number): CommandError | null {
+    const v = this.video;
+    if (v.readyState < HTMLMediaElement.HAVE_METADATA) return "not-ready";
+    const bounds = seekBounds(v);
+    if (!bounds) return "not-seekable";
+    if (at < bounds[0] || at > bounds[1]) return "out-of-range";
+    v.pause();
+    v.currentTime = at;
+    return null;
+  }
+
   seekBy(delta: number): CommandError | null {
     const v = this.video;
     if (v.readyState < HTMLMediaElement.HAVE_METADATA) return "not-ready";

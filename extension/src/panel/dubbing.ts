@@ -25,7 +25,7 @@ import { formatSeconds, parseTimestamp, previewTargetDuration } from "../../../f
 import { analyzeTranscriptTiming, captionClock, type TranscriptTiming } from "../../../frontend/src/lib/transcriptTiming";
 import { formKey, jobKey, loadedKey } from "../shared/messages";
 import { PLAYER_SEEK_SECONDS, sourceRangeOf, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
-import { isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
+import { clockLabel, isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
 import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
 import { AUTH_KEY, connect, connectErrorMessage, isLive, isStoredAuth, type StoredAuth } from "./auth";
 import { formatTime, type CurrentLesson } from "./draft";
@@ -173,6 +173,8 @@ export interface DubbingHost {
   transcript(): string;
   /** Asks the tab's content script to link its page to the playback session of that lecture. */
   linkPlayback(lessonKey: string): void;
+  /** Pauses the lecture video at `at` seconds; null once done, otherwise why it was not done. */
+  placeVideo(lessonKey: string, at: number): Promise<string | null>;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -221,7 +223,6 @@ function dubbingUi() {
     playerSection: byId("player-section"),
     player: byId("player"),
     playerInfo: byId("player-info"),
-    playerBadge: byId("player-badge"),
     playerState: byId("player-state"),
     playerPlay: byId<HTMLButtonElement>("player-play"),
     playerBack: byId<HTMLButtonElement>("player-back"),
@@ -231,10 +232,8 @@ function dubbingUi() {
     playerDuration: byId("player-duration"),
     playerProblem: byId("player-problem"),
     playerFloating: byId<HTMLButtonElement>("player-floating"),
-    resultSwitch: byId("result-switch"),
-    resultSwitchInfo: byId("result-switch-info"),
-    playerSwitch: byId<HTMLButtonElement>("player-switch"),
-    resultUsing: byId("result-using"),
+    jobNote: byId("job-note"),
+    videoPlace: byId("video-place"),
     playerLoad: byId<HTMLButtonElement>("player-load"),
     playerEmpty: byId("player-empty"),
     syncStatus: byId("sync-status"),
@@ -349,8 +348,6 @@ export class Dubbing {
   // The translation of the audio last loaded into the player: an earlier result stays readable
   // while a newer one waits for Use new audio (also after the panel is reopened).
   private loaded: TranslationText | null = null;
-  /** Use new audio was pressed and the switch has not finished. */
-  private switching = false;
   private audioLoad: AbortController | null = null;
   private loadingAudio = false;
   // The session the content script was last asked to link, and whether one was shown.
@@ -1063,7 +1060,8 @@ export class Dubbing {
       mp3Seconds: result.audio.duration?.mp3_decoded_seconds ?? null,
       translation: { jobId, text: result.translation.text, tag: language.tag ?? null, dir: language.dir ?? "auto" },
     };
-    // The tab may already have a session: this job's (panel reopened) or an earlier result's.
+    // The tab may already have a session: this job's (panel reopened: kept as it is, position,
+    // playback and Sync included) or an earlier result's (replaced once the new MP3 is here).
     await this.deps.player.ready();
     if (!current()) return;
     const view = this.sessionView();
@@ -1071,11 +1069,6 @@ export class Dubbing {
       this.rememberLoaded(this.resultAudio.translation);
       this.ui.audioStatus.textContent = AUDIO_READY;
       this.checkPlayer();
-      return;
-    }
-    if (view) {
-      this.ui.audioStatus.textContent = "";
-      this.renderPlayer();
       return;
     }
     await this.loadAudio(auth, signal, current);
@@ -1119,7 +1112,12 @@ export class Dubbing {
 
   // ---- Audio (the tab's playback session) ---------------------------------------------------
 
-  /** Downloads the shown result's MP3 with the token and opens it as the tab's session. */
+  /**
+   * Downloads the shown result's MP3 with the token and opens it as the tab's session. An earlier
+   * session stays usable during the download; the player replaces it only once the new MP3 has
+   * arrived (and releases its Sync: video paused, mute and rate given back). The new audio starts
+   * paused at its beginning, Sync OFF, and the video is paused where this result starts.
+   */
   private async loadAudio(auth: StoredAuth, signal: AbortSignal, current: () => boolean): Promise<void> {
     const target = this.resultAudio;
     const lessonKey = target?.record.lessonKey ?? this.host.currentLesson();
@@ -1172,10 +1170,32 @@ export class Dubbing {
       }
       this.rememberLoaded(target.translation);
       ui.audioStatus.textContent = AUDIO_READY;
+      void this.placeVideo(target.record, lessonKey, current);
     } finally {
       this.loadingAudio = false;
       if (!this.disposed) this.checkPlayer();
     }
+  }
+
+  /**
+   * Pauses the video where the loaded result starts: its own Generate snapshot (the Sync span's
+   * start, else its first start time), never the form. Said only once the page confirmed it.
+   */
+  private async placeVideo(record: JobRecord, lessonKey: string, current: () => boolean): Promise<void> {
+    const ui = this.ui;
+    const at = record.choices.sync?.start ?? parseTimestamp(record.choices.firstStart);
+    if (at === null) {
+      ui.videoPlace.textContent = "The start of this audio was not recorded, so the video was not moved.";
+      return;
+    }
+    const label = clockLabel(at);
+    ui.videoPlace.textContent = `Moving the video to ${label}…`;
+    const problem = await this.host.placeVideo(lessonKey, at);
+    if (!current() || this.disposed) return;
+    ui.videoPlace.textContent =
+      problem === null
+        ? `Video paused at ${label}, where this audio starts.`
+        : `The video was not moved to ${label}: ${problem}`;
   }
 
   /** The translation of the audio now in the player, kept for this tab. */
@@ -1185,7 +1205,7 @@ export class Dubbing {
     void this.deps.storage.set({ [loadedKey(this.deps.tabId)]: text });
   }
 
-  /** Load audio / Use this result: the same download again, never a new job. */
+  /** Load audio: the same download again (and the video placed again), never a new job. */
   private loadByHand(): void {
     const auth = this.auth;
     const target = this.resultAudio;
@@ -1203,19 +1223,8 @@ export class Dubbing {
       this.record?.operationId === operationId;
     void this.loadAudio(auth, controller.signal, current).finally(() => {
       if (this.audioLoad === controller) this.audioLoad = null;
-      this.switching = false;
       if (!this.disposed) this.renderPlayer();
     });
-  }
-
-  private switchToResult(): void {
-    // The earlier audio is stopped and released before the new one is loaded.
-    if (this.audioLoad || this.loadingAudio) return;
-    const view = this.sessionView();
-    if (view) this.deps.player.end(view.sessionId);
-    this.switching = true;
-    this.loadByHand();
-    if (!this.audioLoad) this.switching = false;
   }
 
   private wirePlayer(signal: AbortSignal): void {
@@ -1261,7 +1270,6 @@ export class Dubbing {
       this.renderPlayer();
       ui.syncToggle.focus();
     });
-    on(ui.playerSwitch, "click", () => this.switchToResult());
     on(ui.playerLoad, "click", () => this.loadByHand());
   }
 
@@ -1346,27 +1354,10 @@ export class Dubbing {
       ui.playerState.textContent = "";
       ui.translation.textContent = "";
     }
-    const other = !!view && !!result && result.record.jobId !== view.owner.jobId;
-    ui.playerBadge.hidden = !other;
     const busy = this.loadingAudio || this.audioLoad !== null;
-    // The callout sits with the new result; it stays while the switch is under way (the old
-    // session is already released then) and is gone once the player has this result.
-    ui.resultSwitch.hidden = !(other || (this.switching && busy));
-    ui.resultUsing.hidden = !(!!view && !!result && !other);
-    ui.playerSwitch.disabled = busy;
-    ui.playerSwitch.textContent = busy ? "Switching…" : "Use new audio";
-    if (result) {
-      const c = result.record.choices;
-      renderAudioInfo(
-        ui.resultSwitchInfo,
-        c,
-        sourceRangeOf(c.sync),
-        result.mp3Seconds === null ? "length not reported" : `${result.mp3Seconds.toFixed(3)} s`,
-      );
-    } else {
-      ui.resultSwitchInfo.replaceChildren();
-    }
-    ui.playerLoad.hidden = !result || busy || (!!view && (other || view.status !== "error"));
+    // The latest result is not in the player (not loaded, failed or released): Load audio.
+    const notLoaded = !!result && (!view || result.record.jobId !== view.owner.jobId || view.status === "error");
+    ui.playerLoad.hidden = !notLoaded || busy;
     this.renderListen();
   }
 
@@ -1386,7 +1377,12 @@ export class Dubbing {
 
   /** Your audio without a job, a result or loaded audio: a short empty state instead of idle controls. */
   private renderListen(): void {
-    this.ui.listenEmpty.hidden = this.record !== null || this.resultAudio !== null || this.sessionView() !== null;
+    const view = this.sessionView();
+    const record = this.record;
+    this.ui.listenEmpty.hidden = record !== null || this.resultAudio !== null || view !== null;
+    // The latest job is not the audio in the player (running, downloading or failed): said so,
+    // and its details stay in Latest job details, never next to the loaded audio's.
+    this.ui.jobNote.hidden = !view || !record || record.jobId === view.owner.jobId;
   }
 
   private renderSync(view: PanelPlayerView): void {
@@ -1416,7 +1412,6 @@ export class Dubbing {
     this.audioLoad?.abort();
     this.audioLoad = null;
     this.resultAudio = null;
-    this.switching = false;
     if (endPlayback) {
       this.deps.player.end();
       this.loaded = null;
@@ -1426,6 +1421,7 @@ export class Dubbing {
     this.record = null;
     this.sendingOp = null;
     const ui = this.ui;
+    if (endPlayback) ui.videoPlace.textContent = "";
     ui.jobStatus.textContent = "";
     ui.notices.replaceChildren();
     ui.durations.replaceChildren();
