@@ -258,6 +258,16 @@ class Settings(BaseSettings):
     result_storage_dir: Path = Path(tempfile.gettempdir()) / "mydubb-results"
     cleanup_interval_seconds: int = Field(default=300, ge=5)
 
+    # Per-job usage records (docs/USAGE_COSTS.md). Recording never changes a job; turning it off
+    # only stops new rows. Rows older than the retention are deleted by the periodic cleanup
+    # (usage tables only).
+    usage_recording_enabled: bool = True
+    usage_retention_days: int = Field(default=180, ge=7, le=3650)
+    # Longest a usage database transaction may wait for a lock or run (enforced by PostgreSQL for
+    # that transaction only; nothing else changes). A write that exceeds it is abandoned and the
+    # usage is marked incomplete; the job goes on.
+    usage_write_timeout_seconds: float = Field(default=3.0, ge=0.2, le=30)
+
     # Resource guard for request bodies (protects a small single instance's memory).
     max_request_body_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
 

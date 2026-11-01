@@ -556,6 +556,33 @@ details.more > ul {
 }
 
 /* The job's progress and the audio's state: short lines under the heading. */
+/* A spinner beside the status of a job that is queued or being processed. */
+.status.working::before {
+  content: "";
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 8px;
+  vertical-align: -1px;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: job-spin 0.8s linear infinite;
+}
+
+@keyframes job-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Reduced motion: the same ring, still (a quarter of it marked), no rotation. */
+@media (prefers-reduced-motion: reduce) {
+  .status.working::before {
+    animation: none;
+  }
+}
+
 #result-section .status,
 #video-place {
   font-size: 12px;

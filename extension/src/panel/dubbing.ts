@@ -30,6 +30,7 @@ import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
 import { AUTH_KEY, connect, connectErrorMessage, isLive, isStoredAuth, type StoredAuth } from "./auth";
 import { formatTime, type CurrentLesson } from "./draft";
 import {
+  ACTIVE_STATUSES,
   SEND_TIMEOUT_MS,
   STATUS_TEXT,
   UNKNOWN_OUTCOME,
@@ -920,7 +921,7 @@ export class Dubbing {
     ui.listenNotice.textContent = "";
     this.renderGenerate();
     this.renderRecord();
-    ui.jobStatus.textContent = "Sending to MyDubb…";
+    this.setJobStatus("Sending to MyDubb…");
     const authGen = this.authGen;
     const lessonGen = this.lessonGen;
     const current = () =>
@@ -1008,7 +1009,7 @@ export class Dubbing {
    */
   private showUnknownOutcome(): void {
     this.ui.formError.textContent = UNKNOWN_OUTCOME;
-    this.ui.jobStatus.textContent = "No answer from MyDubb: unknown whether this job was created.";
+    this.setJobStatus("No answer from MyDubb: unknown whether this job was created.");
     this.setJobError("");
   }
 
@@ -1040,6 +1041,9 @@ export class Dubbing {
       now: this.deps.now,
     }).then(async (outcome) => {
       if (!current()) return;
+      // The panel stopped watching this job (done, failed, gone, given up): no spinner whatever
+      // the last status said. Check again starts it again with the next answer.
+      this.ui.jobStatus.classList.remove("working");
       switch (outcome.kind) {
         case "aborted":
           return;
@@ -1069,7 +1073,16 @@ export class Dubbing {
   }
 
   private showStatus(job: Job): void {
-    this.ui.jobStatus.textContent = STATUS_TEXT[job.status] ?? `Status: ${job.status}`;
+    this.setJobStatus(STATUS_TEXT[job.status] ?? `Status: ${job.status}`, ACTIVE_STATUSES.has(job.status));
+  }
+
+  /**
+   * The job's status line. `working` puts a spinner beside it (a CSS class; the text stays the
+   * whole message): only while the job is queued or being processed and the panel is watching it.
+   */
+  private setJobStatus(text: string, working = false): void {
+    this.ui.jobStatus.textContent = text;
+    this.ui.jobStatus.classList.toggle("working", working);
   }
 
   private async loadResult(auth: StoredAuth, record: JobRecord, signal: AbortSignal, current: () => boolean): Promise<void> {
@@ -1476,7 +1489,7 @@ export class Dubbing {
     this.sendingOp = null;
     const ui = this.ui;
     if (endPlayback) ui.videoPlace.textContent = "";
-    ui.jobStatus.textContent = "";
+    this.setJobStatus("");
     ui.notices.replaceChildren();
     ui.durations.replaceChildren();
     ui.audioStatus.textContent = "";

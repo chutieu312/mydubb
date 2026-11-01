@@ -37,6 +37,7 @@ providers hold.
    | E-mail, display name, Cognito `sub`, disabled flag, role | `users` | – (this is the row) |
    | Website and extension sessions (token hashes; `client` is `web` or `extension`), extension sign-in codes | `user_sessions`, `extension_auth_codes` | **Yes**, `ON DELETE CASCADE` (migrations 0005, 0011) |
    | Job metadata (status, language, voice, times, speed, text length, providers, error, owner) | `jobs` | **No**: `jobs.user_id` is `ON DELETE SET NULL`, so the rows stay but lose the owner. They must be deleted on purpose if the user asks for it |
+   | Usage records per job and per provider request (no text, no user id; keyed by job id) | `job_usage`, `job_usage_attempts` | **No**: no foreign key (migration 0020), so they stay when the job or user row goes. They are deleted by the server after `USAGE_RETENTION_DAYS` (code default 180). Linkable to the user only while the `jobs` row exists |
    | Role changes (user id, old/new role, time, operator login) | `user_role_events` | **No**: the table has no foreign key (migration 0012), so the rows stay and keep the user id (no e-mail) |
    | Technical terms found in translations | glossary candidates | Not linked to a user, job or text, so they cannot be found or removed per user |
    | Password and sign-in | Amazon Cognito user pool | Separate: removed in Cognito, not by deleting the MyDubb row |

@@ -80,6 +80,11 @@ publishing]`
   which providers were used, any error and which account made it) in its database. **It is not
   deleted automatically today.** `[PO: update this sentence if the proposed clean-up is built]`
   The record does not contain your text.
+- MyDubb also keeps a **usage record** of each job (the client, language, voice, speed, which
+  providers were used, how many characters were sent, durations, size of the audio, the outcome
+  and any error code) to measure use and cost. It does not contain your text or your account,
+  but it carries the job's id. The code deletes these records automatically after
+  `[PO: confirm the production value; the code default is 180 days]`.
 - MyDubb also keeps a list of English technical terms it found in translations, **without** the
   text, the job or the account they came from.
 - Ordinary server logs record technical request details such as the network address. MyDubb's own

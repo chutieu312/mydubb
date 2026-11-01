@@ -2,10 +2,10 @@
 
 Status: **draft, not confirmed by the Product Owner, nothing declared on the dashboard.** Prepared
 2026-10-31 and re-checked against the merged one-page panel on 2026-11-01: code at `origin/main`
-`b2a7a40` (PR #45; extension 0.4.0), manifest and the backend documents named in each row. Server
-features that are **not merged** (the open PR for usage/cost records) are not described;
-**re-audit §2 if it merges**, because it may change what the server records. The admin role (PR #47)
-is merged and listed in §2; it does not touch the extension.
+`86c6ca4` (PR #45 panel; PR #47 admin role; PR #48 usage and reference-cost records, merged after
+the first audit and now covered in §2; PR #50 spinner, which only changes how a working job's
+status looks), extension 0.4.0, manifest and the backend documents named in each row. The admin
+role and the usage records do not touch the extension.
 
 "Verified" below means read in code or in this repository's documents. Anything about what a
 third party (Microsoft, Render, Neon, AWS) keeps or does is **not verified here**.
@@ -58,6 +58,7 @@ records and sends nothing about them.
 | Sent to Microsoft Azure | **Yes.** The transcript text goes to **Azure Translator**; the translated text goes to **Azure Speech** to make the voice. The panel says "Your text is processed by Microsoft Azure". What Microsoft keeps, and for how long, is governed by Microsoft's terms and is **not verified here** |
 | Translation text and MP3 | Local disk of the server, deleted `RESULT_TTL_SECONDS` after completion (**default 1 hour**; the value set on production was not re-checked for this audit); expired results are refused (`410 result_expired`) |
 | Job metadata (status, voice, target language, timestamps, baseline duration, speed, character count, provider names, error, owning user id) | PostgreSQL (Neon, AWS us-west-2 per `docs/DEPLOYMENT.md`). **No automatic deletion today.** A 7-day retention is only a proposal, not implemented (`docs/context.md` §6) |
+| Usage record per job (PR #48; `docs/USAGE_COSTS.md`, migration 0020): the client (`web` or `extension`), the kind of access, language, voice, speed, timing mode, provider names, durations, **number of characters** sent, number of blocks, MP3 size, outcome and error code, and one row per request sent to a provider (service, outcome, HTTP status, items, timing, characters sent) | PostgreSQL tables `job_usage`, `job_usage_attempts`. **Not stored there:** transcript, translation, SSML, keys, tokens, addresses, URLs, user or session ids, e-mail. No foreign key to `jobs`: the rows outlive the job row and are **not removed when the job or the user row is**. They hold the job id, so while the `jobs` row exists they can be linked to its owner. **Deleted automatically** after `USAGE_RETENTION_DAYS` (code default **180**, range 7-3650) by the server's clean-up; production value not checked |
 | English terms found in the translation ("glossary candidates": term, kind, counts, first/last seen) | PostgreSQL, **no automatic deletion**; no transcript, translation, job or user is stored with a term (`docs/ARCHITECTURE.md`). They are derived from user text |
 | Account | Invitation accounts only, e-mail/password via Amazon Cognito behind MyDubb's own sign-in; the `users` table keeps issuer, `sub`, e-mail, display name, disabled flag and, since migration 0012 (PR #47, merged), a `role` (`user` or `admin`, set only by an operator tool; no API and no extension action writes it); no password; no automatic deletion. `user_role_events` records each role change (user id, old/new role, time, operator login name) without an e-mail and outlives the account |
 | Logs | Application logs hold counts, status codes and ids, never transcript text or translations (`docs/ARCHITECTURE.md`); the uvicorn access log has client addresses (above) |

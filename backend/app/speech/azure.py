@@ -58,6 +58,8 @@ from app.speech.rate_limit import RateLimiterClosed, RequestRateLimiter
 from app.speech.ssml import build_ssml_from_spans
 from app.speech.voices import Voice
 from app.translation.glossary import Glossary, TermMatcher
+from app.usage import metering
+from app.usage import recording as usage
 
 logger = logging.getLogger(__name__)
 
@@ -259,12 +261,9 @@ class AzureSpeechProvider:
         timeout = httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
         with httpx.Client(timeout=timeout, transport=self._transport) as client:
             for number, request in enumerate(requests):
-                try:
-                    self._limiter.acquire()
-                except RateLimiterClosed:
-                    raise _failure("speech_cancelled") from None
+                self._acquire(len(request.pieces))
                 response = scratch / f"request-{number:05d}.wav"
-                self._synthesize_chunk(client, request.ssml(voice), response)
+                self._synthesize_chunk(client, request.ssml(voice), response, len(request.pieces))
                 self._validate_chunk(response, request.chars)
                 try:
                     pieces, report = split_response(response, request, scratch, f"r{number:05d}")
@@ -290,17 +289,26 @@ class AzureSpeechProvider:
         timeout = httpx.Timeout(self._timeout, connect=min(10.0, self._timeout))
         with httpx.Client(timeout=timeout, transport=self._transport) as client:
             for index, (chunk, spans) in enumerate(chunks):
-                try:
-                    self._limiter.acquire()
-                except RateLimiterClosed:
-                    raise _failure("speech_cancelled") from None
+                self._acquire(1)
                 target = scratch / f"chunk-{index:05d}.wav"
                 self._synthesize_chunk(client, build_ssml_from_spans(spans, voice), target)
                 self._validate_chunk(target, len(chunk))
                 files.append(target)
         return files
 
-    def _synthesize_chunk(self, client: httpx.Client, ssml: str, target: Path) -> None:
+    def _acquire(self, items: int) -> None:
+        """Wait for the request-rate limiter; closed at shutdown, before anything is sent."""
+        try:
+            self._limiter.acquire()
+        except RateLimiterClosed:
+            # Never sent, so nothing was spent; still a distinct outcome in the usage record.
+            with usage.attempt("speech", "synthesize", items=items) as attempt:
+                attempt.outcome = "cancelled"
+            raise _failure("speech_cancelled") from None
+
+    def _synthesize_chunk(
+        self, client: httpx.Client, ssml: str, target: Path, items: int = 1
+    ) -> None:
         headers = {
             "Ocp-Apim-Subscription-Key": self._key.get_secret_value(),
             "Content-Type": "application/ssml+xml",
@@ -308,28 +316,42 @@ class AzureSpeechProvider:
             "User-Agent": USER_AGENT,
         }
         started = time.monotonic()
-        try:
-            with client.stream(
-                "POST", self._url, headers=headers, content=ssml.encode("utf-8")
-            ) as response:
-                status = response.status_code
-                request_id = response.headers.get("X-RequestId", "")
-                if status == 200:
-                    self._save_body(response, target, started)
-        except httpx.TimeoutException:
-            logger.warning("Azure Speech request timed out")
-            raise _failure("speech_timeout") from None
-        except httpx.TransportError as exc:
-            logger.warning("Azure Speech request failed: %s", type(exc).__name__)
-            raise _failure("speech_network_error") from None
-        except httpx.HTTPError as exc:
-            logger.warning("Azure Speech request failed: %s", type(exc).__name__)
-            raise _failure("speech_service_error") from None
-        except OSError as exc:
-            logger.warning("Azure Speech audio could not be stored: %s", type(exc).__name__)
-            raise _failure("speech_audio_failed") from None
-        if status != 200:
-            raise self._status_error(status, request_id)
+        with usage.attempt("speech", "synthesize", items=items) as attempt:
+            sent, billable = metering.speech_billable(ssml)
+            attempt.sent(sent, metering.SPEECH_SENT_UNIT)
+            attempt.estimate(billable, metering.SPEECH_METHOD)
+            try:
+                with client.stream(
+                    "POST", self._url, headers=headers, content=ssml.encode("utf-8")
+                ) as response:
+                    status = response.status_code
+                    request_id = response.headers.get("X-RequestId", "")
+                    attempt.http_status = status
+                    if status == 200:
+                        self._save_body(response, target, started)
+            except httpx.TimeoutException:
+                logger.warning("Azure Speech request timed out")
+                attempt.outcome = "timeout"
+                raise _failure("speech_timeout") from None
+            except httpx.TransportError as exc:
+                logger.warning("Azure Speech request failed: %s", type(exc).__name__)
+                attempt.outcome = "network_error"
+                raise _failure("speech_network_error") from None
+            except httpx.HTTPError as exc:
+                logger.warning("Azure Speech request failed: %s", type(exc).__name__)
+                attempt.outcome = "network_error"
+                raise _failure("speech_service_error") from None
+            except OSError as exc:
+                logger.warning("Azure Speech audio could not be stored: %s", type(exc).__name__)
+                attempt.outcome = "unusable_response"
+                raise _failure("speech_audio_failed") from None
+            except ProcessingError:
+                attempt.outcome = "unusable_response"
+                raise
+            if status != 200:
+                attempt.outcome = "http_error"
+                raise self._status_error(status, request_id)
+            attempt.outcome = "ok"
 
     def _save_body(self, response: httpx.Response, target: Path, started: float) -> None:
         """Stream the audio to disk within the total time and size limits."""

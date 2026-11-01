@@ -32,6 +32,7 @@ from app.services import AppServices
 from app.storage.result_store import StoredResult
 from app.transcript.timestamps import parse_timestamp, target_duration_seconds
 from app.transcript.words import count_words
+from app.usage.recording import UsageContext
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -174,10 +175,22 @@ def create_job(
         baseline_seconds=job.target_duration_seconds,
         speed=body.speed,
         timed=body.timed,
+        usage_context=_usage_context(principal),
     )
     services.pipeline.start(slot, job_input)
     response.headers["Location"] = f"/api/jobs/{job.id}"
     return JobResponse.from_job(job)
+
+
+def _usage_context(principal: Principal) -> UsageContext:
+    """Fixed labels for the usage record; no identity leaves this function."""
+    if principal.guest:
+        access = "guest"
+    elif principal.user is not None:
+        access = "invitation"
+    else:
+        access = "access_code"
+    return UsageContext(client="extension" if principal.bearer else "web", access=access)
 
 
 def _check_guest_words(body: CreateJobRequest, guest: GuestAccess) -> None:

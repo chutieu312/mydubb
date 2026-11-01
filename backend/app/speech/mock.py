@@ -8,8 +8,16 @@ from app.processing_errors import ProcessingError
 from app.speech.base import SpeechAudio, TimedSpeechAudio
 from app.speech.voices import Voice
 from app.translation.glossary import TermMatcher
+from app.usage import recording as usage
 
 FIXTURE_MP3 = Path(__file__).resolve().parent.parent / "audio" / "fixtures" / "mock_audio.mp3"
+
+
+def _attempt(chars: int, items: int) -> usage.Attempt:
+    """The usage record of a mock call: sent text is counted, nothing is billed."""
+    attempt = usage.attempt("speech", "synthesize", kind="mock", items=items)
+    attempt.sent(chars, "code_points_of_source_text")
+    return attempt
 
 
 class MockSpeechProvider:
@@ -35,7 +43,9 @@ class MockSpeechProvider:
         terms: TermMatcher | None = None,
         language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> SpeechAudio:
-        return SpeechAudio(path=self._fixture(work_dir), is_fixture=True)
+        with _attempt(len(text), 1):
+            fixture = self._fixture(work_dir)
+        return SpeechAudio(path=fixture, is_fixture=True)
 
     def synthesize_blocks(
         self,
@@ -46,9 +56,9 @@ class MockSpeechProvider:
         language: TargetLanguage = DEFAULT_TARGET_LANGUAGE,
     ) -> TimedSpeechAudio:
         """The same fixture: no clip per block, so nothing is placed on a timeline."""
-        return TimedSpeechAudio(
-            clips=(), is_fixture=True, requests=0, fixture_path=self._fixture(work_dir)
-        )
+        with _attempt(sum(len(text) for text in texts), len(texts)):
+            fixture = self._fixture(work_dir)
+        return TimedSpeechAudio(clips=(), is_fixture=True, requests=0, fixture_path=fixture)
 
     def _fixture(self, work_dir: Path) -> Path:
         time.sleep(self._delay)

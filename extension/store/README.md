@@ -68,6 +68,7 @@ policy. Everything below is still a `[PO: …]` marker or a pending item. None i
 | Marker | Where to look |
 |---|---|
 | Result lifetime on production (policy "What MyDubb does with your text"; code default 1 hour) | `result_ttl_seconds` in the public `GET /api/meta`, or the Render environment page |
+| Usage-record retention on production (policy, same section; code default 180 days, PR #48) | `USAGE_RETENTION_DAYS` in the Render environment page |
 | Eight output languages and both voices on production (listing, screenshots note) | `GET /api/meta` |
 | Render region and Neon region (policy "Who receives data") | `render.yaml` says `oregon`; `docs/DEPLOYMENT.md` says Neon AWS us-west-2; confirm in the two dashboards |
 | Azure settings the operator relies on (policy, Microsoft line) | Azure portal and the Render environment (`AZURE_*_REGION`); the Microsoft terms link is a public page |

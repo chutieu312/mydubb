@@ -161,6 +161,7 @@ background worker is involved; this fits the single-instance design.
 | Guest sessions (token hash, CSRF token, keyed hash of the client network, times) | PostgreSQL `guest_sessions` | Absolute 24 h lifetime; deleted by cleanup once expired or ended and older than the session-start window (1 h); their jobs keep metadata with `guest_session_id = NULL` |
 | Guest quota places (job, guest session, keyed network hash, state, times) | PostgreSQL `guest_job_quota` | `reserved` rows are never deleted (their job settles them); `used`/`released` rows are deleted by cleanup once they left the network window (24 h). See [GUEST_ACCESS.md](GUEST_ACCESS.md) |
 | Guest import operations (guest session, keyed network hash, state, instance id, heartbeat, times; no link or captions) | PostgreSQL `guest_import_quota` | `reserved` rows are never deleted by cleanup (the import or recovery settles them); `used`/`released` rows are deleted by cleanup once they left the network window (24 h) |
+| Usage records (job summary + one row per provider request: counts, sizes, timings, fixed labels; no text, SSML, key, address or user id) | PostgreSQL `job_usage`, `job_usage_attempts` | Deleted by cleanup after `USAGE_RETENTION_DAYS` (default 180); no foreign key to `jobs`, so a job row's lifecycle never deletes them and their cleanup never deletes a job. See [USAGE_COSTS.md](USAGE_COSTS.md) |
 | Glossary candidates (term, key, kind, job count, first/last seen, review status) | PostgreSQL `glossary_candidates` | No automatic deletion and no retention of its own; independent of results, jobs and sessions (no foreign key). No transcript, translation, excerpt, job or session is stored with a term |
 
 Cleanup runs at startup and every `CLEANUP_INTERVAL_SECONDS` (in a thread): removes expired
@@ -168,7 +169,7 @@ or unreadable result directories, abandoned `.staging-*` directories, stale sess
 finished sign-in steps and old password-reset events; it also records password resets whose
 outcome was never written (database error, crash) as `unknown` and revokes for them (fail closed),
 settles guest quota places of jobs that already ended, and removes old guest rows (guest
-imports included).
+imports included), and usage records older than `USAGE_RETENTION_DAYS` (usage tables only).
 Reads also check expiry, so an expired result is never served even between cleanup runs.
 
 Result publication and cleanup are race-safe within the single process:

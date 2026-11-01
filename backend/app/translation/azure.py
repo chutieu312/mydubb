@@ -52,6 +52,8 @@ from app.translation.segmenter import (
     plan_translation,
     utf16_length,
 )
+from app.usage import metering
+from app.usage import recording as usage
 
 logger = logging.getLogger(__name__)
 
@@ -193,35 +195,50 @@ class AzureTranslationProvider:
             "textType": "html",
         }
         started = time.monotonic()
-        try:
-            with client.stream(
-                "POST",
-                self._url,
-                params=params,
-                headers=headers,
-                json=[{"Text": markup} for markup in markups],
-            ) as response:
-                body = self._read_body(response, started)
-                status = response.status_code
-                request_id = response.headers.get("X-RequestId", "")
-                metered = response.headers.get("X-metered-usage", "")
-        except httpx.TimeoutException:
-            logger.warning("Azure Translator request timed out")
-            raise _failure("translation_timeout") from None
-        except httpx.TransportError as exc:
-            logger.warning("Azure Translator request failed: %s", type(exc).__name__)
-            raise _failure("translation_network_error") from None
-        except httpx.HTTPError as exc:
-            logger.warning("Azure Translator request failed: %s", type(exc).__name__)
-            raise _failure("translation_service_error") from None
-        if status != 200:
-            raise self._status_error(status, body, request_id)
+        with usage.attempt("translator", "translate", items=len(markups)) as attempt:
+            sent_chars = sum(utf16_length(m) for m in markups)
+            attempt.sent(sent_chars, metering.TRANSLATOR_SENT_UNIT)
+            try:
+                with client.stream(
+                    "POST",
+                    self._url,
+                    params=params,
+                    headers=headers,
+                    json=[{"Text": markup} for markup in markups],
+                ) as response:
+                    status = response.status_code
+                    request_id = response.headers.get("X-RequestId", "")
+                    metered = response.headers.get("X-metered-usage", "")
+                    attempt.http_status = status
+                    charged = metering.parse_metered_usage(metered)
+                    if charged is not None:
+                        attempt.actual(charged, metering.TRANSLATOR_METHOD)
+                    body = self._read_body(response, started)
+            except httpx.TimeoutException:
+                logger.warning("Azure Translator request timed out")
+                attempt.outcome = "timeout"
+                raise _failure("translation_timeout") from None
+            except httpx.TransportError as exc:
+                logger.warning("Azure Translator request failed: %s", type(exc).__name__)
+                attempt.outcome = "network_error"
+                raise _failure("translation_network_error") from None
+            except httpx.HTTPError as exc:
+                logger.warning("Azure Translator request failed: %s", type(exc).__name__)
+                attempt.outcome = "network_error"
+                raise _failure("translation_service_error") from None
+            except ProcessingError:
+                attempt.outcome = "unusable_response"
+                raise
+            if status != 200:
+                attempt.outcome = "http_error"
+                raise self._status_error(status, body, request_id)
+            attempt.outcome = "ok"
         # Sizes only. `metered` is the number of characters Microsoft charged, which shows how
         # much the no-translate markup adds to the billed usage.
         logger.info(
             "Azure Translator request ok: elements=%d sent_chars=%d metered_chars=%s",
             len(markups),
-            sum(utf16_length(m) for m in markups),
+            sent_chars,
             metered if metered.isdigit() else "-",
         )
         return body
