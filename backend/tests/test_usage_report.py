@@ -388,3 +388,85 @@ def test_csv_files_hold_only_numbers_labels_and_ids():
     rows = list(csv.DictReader(io.StringIO(jobs.getvalue())))
     assert len(rows) == 7
     assert {row["complete"] for row in rows} == {"yes", "no"}
+
+
+# --- one snapshot for the whole report ------------------------------------------------------------
+
+
+def _commit_during_attempts_query(engine: Engine, job_id: uuid.UUID, attempts_for: uuid.UUID):
+    """Another connection commits a new job, and one more attempt of an existing job, right
+    when the report's attempts query starts (after its summaries query has run)."""
+    from sqlalchemy import event
+
+    fired = []
+
+    def before(conn, cursor, statement, parameters, context, executemany):
+        if "FROM job_usage_attempts" in statement and not fired:
+            fired.append(True)
+            factory = sessionmaker(bind=engine)
+            with session_scope(factory) as db:
+                store.upsert_summary(db, job_id, summary_values(T + timedelta(hours=1)))
+                store.insert_attempts(
+                    db,
+                    [
+                        {"job_id": job_id, **attempt_values(1, "translator", 77, T)},
+                        {"job_id": attempts_for, **attempt_values(3, "speech", 55, T)},
+                    ],
+                )
+
+    event.listen(engine, "before_cursor_execute", before)
+    return lambda: event.remove(engine, "before_cursor_execute", before)
+
+
+def test_a_job_committed_between_the_queries_is_in_neither_of_them(db_engine):
+    existing = add_job(db_engine)
+    new_job_id = uuid.uuid4()
+    stop = _commit_during_attempts_query(db_engine, new_job_id, existing)
+    try:
+        r = report(db_engine)
+    finally:
+        stop()
+    # The snapshot has the job that existed at the start, with the attempts it had then.
+    assert [j.usage.job_id for j in r.jobs] == [existing]
+    assert [a.seq for a in r.jobs[0].attempts] == [1, 2]
+    assert r.jobs[0].complete
+    # A report run afterwards sees everything that was committed meanwhile.
+    later = report(db_engine)
+    assert {j.usage.job_id for j in later.jobs} == {existing, new_job_id}
+
+
+def test_without_the_snapshot_the_same_commit_breaks_the_report(db_engine, monkeypatch):
+    """Control: the old behaviour (read committed) fails on exactly this interleaving."""
+    from app.usage import report as report_module
+
+    monkeypatch.setattr(
+        report_module,
+        "_snapshot",
+        lambda db: db.execute(text("SET TRANSACTION READ ONLY")),
+    )
+    existing = add_job(db_engine)
+    stop = _commit_during_attempts_query(db_engine, uuid.uuid4(), existing)
+    try:
+        with pytest.raises(KeyError):
+            report(db_engine)
+    finally:
+        stop()
+
+
+def test_the_report_runs_in_a_repeatable_read_read_only_transaction(db_engine):
+    seen = {}
+    from sqlalchemy import event
+
+    def before(conn, cursor, statement, parameters, context, executemany):
+        if "FROM job_usage_attempts" in statement:
+            cursor.execute("SHOW transaction_isolation")
+            seen["isolation"] = cursor.fetchone()[0]
+            cursor.execute("SHOW transaction_read_only")
+            seen["read_only"] = cursor.fetchone()[0]
+
+    event.listen(db_engine, "before_cursor_execute", before)
+    try:
+        report(db_engine)
+    finally:
+        event.remove(db_engine, "before_cursor_execute", before)
+    assert seen == {"isolation": "repeatable read", "read_only": "on"}

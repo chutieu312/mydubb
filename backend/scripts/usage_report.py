@@ -2,7 +2,8 @@
 
 Run from `backend/`. The database comes from `DATABASE_URL` in the environment or the git-ignored
 `backend/.env`, never from the command line, and is never printed. The whole run is one
-`READ ONLY` transaction: it cannot create a job, change a row or call Azure, Cognito or Supadata.
+`REPEATABLE READ, READ ONLY` transaction (one consistent snapshot): it cannot create a job,
+change a row or call Azure, Cognito or Supadata.
 
     uv run python -m scripts.usage_report --since 2026-10-01 --until 2026-11-01
     uv run python -m scripts.usage_report --since 2026-10-01 --language japanese --csv jobs.csv
@@ -26,7 +27,7 @@ import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -71,7 +72,6 @@ def run(argv: Sequence[str], factory: sessionmaker[Session] | None, out=None) ->
         filters = _filters(args)
         with factory() as db:
             try:
-                db.execute(text("SET TRANSACTION READ ONLY"))
                 report = build_report(db, filters, prices)
             finally:
                 db.rollback()

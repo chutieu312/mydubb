@@ -224,3 +224,28 @@ def test_without_the_server_side_limit_the_same_lock_does_hold_the_write(db_engi
     assert waited >= 1.5, waited  # held until the lock went away, far beyond TIMEOUT
     with db_engine.connect() as conn:  # and then the write simply succeeded
         assert conn.execute(text("SELECT count(*) FROM job_usage")).scalar_one() == 1
+
+
+def test_the_worst_case_delay_of_usage_writes_is_three_timeouts(db_engine):
+    """Start fails (1), the last try at the pending rows fails (2), the summary fails (3)."""
+    usage = collector(db_engine, uuid.uuid4())
+    with locked_usage_tables(db_engine):
+        started = time.monotonic()
+        usage.begin()
+        usage.add_attempt(attempt_row())
+        usage.finish("completed", None)
+        total = time.monotonic() - started
+    assert 3 * TIMEOUT * 0.8 <= total < 3 * TIMEOUT + 1.5, total
+
+
+def test_a_failure_in_the_middle_of_the_job_costs_the_same_three_timeouts(db_engine):
+    """Start succeeds; one attempt write fails (1); then the retry (2) and the summary (3)."""
+    usage = collector(db_engine, uuid.uuid4())
+    usage.begin()
+    with locked_usage_tables(db_engine):
+        started = time.monotonic()
+        usage.add_attempt(attempt_row())
+        usage.add_attempt(attempt_row())  # suspended: no further wait
+        usage.finish("completed", None)
+        total = time.monotonic() - started
+    assert 3 * TIMEOUT * 0.8 <= total < 3 * TIMEOUT + 1.5, total

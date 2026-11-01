@@ -25,7 +25,7 @@ from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TextIO
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
 
 from app.jobs.models import Job
@@ -148,7 +148,19 @@ class Report:
         return totals
 
 
+def _snapshot(db: Session) -> None:
+    """One consistent, read-only view for every query of the report.
+
+    REPEATABLE READ gives all the queries the snapshot taken at the first one, so a job that is
+    committed (or an attempt added, or a summary completed) while the report runs is seen by none
+    of them: the summaries and their attempts always belong together. It must be the first
+    statement of the transaction, so `build_report` needs a session that has not run a query yet.
+    """
+    db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+
+
 def build_report(db: Session, filters: Filters, prices: PriceBook | None = None) -> Report:
+    _snapshot(db)
     prices = prices or default_price_book()
     conditions = _usage_conditions(filters)
     rows = db.execute(

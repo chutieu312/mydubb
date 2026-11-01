@@ -67,8 +67,10 @@ every target language, voice and speed.
   query that still runs; the transaction is rolled back). A write that times out is logged by
   exception type only (the message can quote SQL), writing stops after the first failure (no
   timeout per remaining request), the pending rows get one last try when the job ends (bounded the
-  same way, so the job is delayed by at most about twice the timeout, and by the timeout once if a
-  write fails mid-job), and the summary records `write_errors` and `attempts_expected` so the
+  same way). Each of the three possible waits is at most one timeout (one statement each), so
+  the job is delayed by at most **three timeouts** in total (9 s by default): the start fails, the
+  last try at the pending rows fails, the summary fails; or one attempt write fails mid-job and
+  then the same last two. A tested bound, not an average, and the summary records `write_errors` and `attempts_expected` so the
   report can show what is missing. Rows that never get written are simply absent: the report then
   shows the job as incomplete (or, if even the summary is lost, under "jobs without a usage
   record").
@@ -169,6 +171,10 @@ uv run python -m scripts.usage_report --synthetic        # made-up data, no data
 **Rounding.** Characters are integers. Money is `Decimal`: characters x price / 1,000,000 is
 exact, sums are exact. Only the text summary rounds, to 4 decimals, half up; the CSV keeps every
 digit. Seconds are shown to 3 decimals. All times are UTC (`...Z`).
+
+**Consistency.** The whole report is one `REPEATABLE READ, READ ONLY` transaction, so all its
+queries (summaries, attempts, jobs without a record) see the same snapshot: a job finished or
+added while the report runs is in none of them, never in one and not another.
 
 **Completeness.** A job is *incomplete* with one or more reasons: `no_ending_recorded` (crash or
 restart), `attempts_missing` (fewer rows than `attempts_expected`, or a hole in `seq`),
