@@ -93,7 +93,7 @@ times**).
   site in the extension.
 - Text you select, not an automatic transcript; no speech-to-text.
 - Closing the panel while a job runs: the new audio is loaded when you open the panel again.
-- Audio is made per request and kept on the server for a short time (default 1 hour); a reload
+- Audio is made per request and kept on the server for a short time (1 hour on production, 2026-11-01); a reload
   needs **Load audio**, and after that time a new Generate. No MP3 download button and no job list.
 - Sync is approximate and can drift or switch itself off (for example if the video speed is
   changed). It was tested on a test page, **not yet on the real Udemy player**.
@@ -118,7 +118,8 @@ dashboard field). `[PO: decision]`
 
 ## To confirm before use
 
-- Production offers all eight output languages and both voices (the code defines them; production
-  was not re-checked here). If not, change "eight output languages".
-- The sample screenshots show the test server's voice label ("Andrew Multilingual"); production's
-  label comes from `GET /api/meta`.
+- Verified 2026-11-01 from production's `GET /api/meta`: all eight output languages and both
+  voices (Andrew Multilingual, Emma Multilingual) are offered, so "eight output languages" and
+  "two voices" stand. Re-check on the day the listing is entered.
+- The sample screenshots show the same voice label as production ("Andrew Multilingual"); the
+  test server lists two languages, production eight.

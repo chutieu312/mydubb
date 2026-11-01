@@ -61,21 +61,37 @@ A new result loads by itself; there is no "Use new audio" step and no tabs.
 ## Placeholders still in the drafts (2026-11-01)
 
 Filled from the Product Owner: operator Can Nguyen, contact support@mydubb.com, extension-only
-policy. Everything below is still a `[PO: …]` marker or a pending item. None is filled with a guess.
+policy. Group A below was checked read-only on 2026-11-01; whatever could not be read, and
+everything in group B, is still a `[PO: …]` marker or a pending item. None is filled with a guess.
 
-**A. Can be checked by a read-only look (not done yet; the answer is a fact, not a decision)**
+**A. Read-only checks (done 2026-11-01; details and sources in [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md) §8)**
 
-| Marker | Where to look |
+Verified, and now written into the drafts without a marker:
+
+| Fact | Source |
 |---|---|
-| Result lifetime on production (policy "What MyDubb does with your text"; code default 1 hour) | `result_ttl_seconds` in the public `GET /api/meta`, or the Render environment page |
-| Usage-record retention on production (policy, same section; code default 180 days, PR #48) | `USAGE_RETENTION_DAYS` in the Render environment page |
-| Eight output languages and both voices on production (listing, screenshots note) | `GET /api/meta` |
-| Render region and Neon region (policy "Who receives data") | `render.yaml` says `oregon`; `docs/DEPLOYMENT.md` says Neon AWS us-west-2; confirm in the two dashboards |
-| Azure settings the operator relies on (policy, Microsoft line) | Azure portal and the Render environment (`AZURE_*_REGION`); the Microsoft terms link is a public page |
-| How long the host keeps access logs (policy, "Ordinary server logs") | Render's documentation and plan |
-| No analytics or telemetry in the extension (policy) | Searched `extension/src` and `extension/static` on 2026-11-01: none found. Re-check before publishing; production and the website were not examined |
-| Which website features are on, and the website's cookies (Appendix A only, for the website policy) | Render environment (`GUEST_ACCESS_ENABLED` defaults to `false`), a look at the live site; Supadata's terms are a public page |
-| Dashboard labels on the Privacy practices tab | Readable only after a developer account exists |
+| Results are deleted 3,600 s after the job (policy) | Production `GET /api/meta` |
+| Eight output languages and two voices are live (listing) | `/api/meta` |
+| Sign-up is off, so access is by invitation (policy "Your account") | `/api/meta` |
+| Microsoft: text translation and real-time text to speech do not store the text or the audio (policy quotes the two Microsoft pages) | Microsoft Learn, read 2026-11-01 |
+| The four Store screenshots match the current UI (byte-identical after regenerating) | `npm run store:shots` |
+| #48–#50 add nothing the extension sends, stores or asks permission for; usage records hold no user id but share the job id with the job record (policy and audit say so) | Code and schema |
+| Guest access and YouTube import are **on** in production (affects the website policy, not this one) | `/api/meta` |
+
+Blocked, because this environment has no access (marker kept; nothing guessed):
+
+| Marker | Needs |
+|---|---|
+| `USAGE_RETENTION_DAYS` (and `USAGE_RECORDING_ENABLED`) on production; code default 180 days | Render environment page |
+| Render and Neon regions (`render.yaml`: `oregon`; `docs/DEPLOYMENT.md`: Neon AWS us-west-2) | Render and Neon dashboards |
+| Regions and settings of MyDubb's Azure resources | Render environment, Azure portal |
+| How long the host keeps access logs | Render dashboard and plan documentation |
+| The website's own cookies and analytics (website policy only) | A look at the live site |
+| Dashboard labels on the Privacy practices tab | A developer account |
+| Re-reading the Microsoft pages on the day of publication | Anyone, at that time |
+
+Searched `extension/src` and `extension/static`: no analytics or telemetry code (the "no
+analytics" marker stays until the Product Owner confirms nothing will be added).
 
 **B. Needs the Product Owner's decision**
 

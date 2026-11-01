@@ -55,10 +55,10 @@ records and sends nothing about them.
 | Step | Verified fact (source) |
 |---|---|
 | Transcript text | Held in worker memory until the job finishes; not written to the database (`docs/ARCHITECTURE.md` "Data retention") |
-| Sent to Microsoft Azure | **Yes.** The transcript text goes to **Azure Translator**; the translated text goes to **Azure Speech** to make the voice. The panel says "Your text is processed by Microsoft Azure". What Microsoft keeps, and for how long, is governed by Microsoft's terms and is **not verified here** |
-| Translation text and MP3 | Local disk of the server, deleted `RESULT_TTL_SECONDS` after completion (**default 1 hour**; the value set on production was not re-checked for this audit); expired results are refused (`410 result_expired`) |
+| Sent to Microsoft Azure | **Yes.** The transcript text goes to **Azure Translator**; the translated text goes to **Azure Speech** to make the voice. The panel says "Your text is processed by Microsoft Azure". The backend calls text translation (`POST …/translate`, v3.0) and real-time text to speech (`…tts.speech.microsoft.com/cognitiveservices/v1`), not document translation or batch synthesis. Microsoft's pages for exactly those services state that they do not store the text or the generated audio (quotes and sources in §8). What Microsoft does beyond that (location, abuse monitoring) is not stated there and is **not verified here**; MyDubb's own Azure resource settings could not be read |
+| Translation text and MP3 | Local disk of the server, deleted `RESULT_TTL_SECONDS` after completion (**3,600 s on production**, reported by the public `GET /api/meta` on 2026-11-01; code default also 1 hour); expired results are refused (`410 result_expired`) |
 | Job metadata (status, voice, target language, timestamps, baseline duration, speed, character count, provider names, error, owning user id) | PostgreSQL (Neon, AWS us-west-2 per `docs/DEPLOYMENT.md`). **No automatic deletion today.** A 7-day retention is only a proposal, not implemented (`docs/context.md` §6) |
-| Usage record per job (PR #48; `docs/USAGE_COSTS.md`, migration 0020): the client (`web` or `extension`), the kind of access, language, voice, speed, timing mode, provider names, durations, **number of characters** sent, number of blocks, MP3 size, outcome and error code, and one row per request sent to a provider (service, outcome, HTTP status, items, timing, characters sent) | PostgreSQL tables `job_usage`, `job_usage_attempts`. **Not stored there:** transcript, translation, SSML, keys, tokens, addresses, URLs, user or session ids, e-mail. No foreign key to `jobs`: the rows outlive the job row and are **not removed when the job or the user row is**. They hold the job id, so while the `jobs` row exists they can be linked to its owner. **Deleted automatically** after `USAGE_RETENTION_DAYS` (code default **180**, range 7-3650) by the server's clean-up; production value not checked |
+| Usage record per job (PR #48; `docs/USAGE_COSTS.md`, migration 0020): the client (`web` or `extension`), the kind of access, language, voice, speed, timing mode, provider names, durations, **number of characters** sent, number of blocks, MP3 size, outcome and error code, and one row per request sent to a provider (service, outcome, HTTP status, items, timing, characters sent) | PostgreSQL tables `job_usage`, `job_usage_attempts`. **Not stored there:** transcript, translation, SSML, keys, tokens, addresses, URLs, user or session ids, e-mail. No foreign key to `jobs`: the rows outlive the job row and are **not removed when the job or the user row is**. **Linkability (checked in the schema and the code, not only the foreign key):** `job_usage` has the same `job_id` as the `jobs` row, and `jobs.user_id` names the owning account, so anyone who can read the database can join the two; the join stops when the account is deleted (`user_id` becomes NULL) but the usage row then still holds the time, client, access kind, language, voice, speed, character count and outcome of that job, which can also be matched to the same fields of the surviving `jobs` row. No user, session or network identifier is written into `job_usage*` (`backend/app/usage/models.py`; the context passed in is only the fixed labels `client` and `access`, `jobs/router.py`). The `client` label tells whether the job came from the extension (`principal.bearer`). Recording can be switched off by the `USAGE_RECORDING_ENABLED` setting (default on; production value could not be read). **Deleted automatically** after `USAGE_RETENTION_DAYS` (code default **180**, range 7-3650) by the server's clean-up; production value not checked |
 | English terms found in the translation ("glossary candidates": term, kind, counts, first/last seen) | PostgreSQL, **no automatic deletion**; no transcript, translation, job or user is stored with a term (`docs/ARCHITECTURE.md`). They are derived from user text |
 | Account | Invitation accounts only, e-mail/password via Amazon Cognito behind MyDubb's own sign-in; the `users` table keeps issuer, `sub`, e-mail, display name, disabled flag and, since migration 0012 (PR #47, merged), a `role` (`user` or `admin`, set only by an operator tool; no API and no extension action writes it); no password; no automatic deletion. `user_role_events` records each role change (user id, old/new role, time, operator login name) without an e-mail and outlives the account |
 | Logs | Application logs hold counts, status codes and ids, never transcript text or translations (`docs/ARCHITECTURE.md`); the uvicorn access log has client addresses (above) |
@@ -144,5 +144,59 @@ the MyDubb service, and a policy is required whenever user data is handled.
   exists today). Users are told only to write to support@mydubb.com; a proposed intake process is
   in [DATA-REQUESTS.md](DATA-REQUESTS.md). Whether to build the proposed 7-day job-metadata
   cleanup first. The policy must say only what exists.
-- Confirmation of the Microsoft Azure data handling the operator relies on (not verified here).
+- Whether the operator relies on the Microsoft statements in §8, and the regions and settings of
+  MyDubb's own Azure resources (not readable from here).
 - After reading the live dashboard labels: the final declarations, made on the facts above.
+
+## 8. Read-only verification, 2026-11-01
+
+Method: one public `GET https://mydubb.com/api/meta` (no account, no job), read-only calls to
+GitHub (workflow runs and variable names), and Microsoft's public pages. Nothing was created,
+changed or deployed. **No Render, Neon, Azure or hosting-log access exists in this environment**
+(no Render API key or CLI, no Neon or Azure access; `RENDER_API_KEY` is a GitHub secret that
+cannot be read), so those items are listed as not read, not guessed.
+
+**Read and confirmed**
+
+| Fact | Source |
+|---|---|
+| Production runs Azure providers with FFmpeg (`provider_mode` azure, `mock_mode` false, translation azure, speech azure, audio ffmpeg) | `/api/meta` |
+| Eight output languages: Vietnamese, Chinese Mandarin (Simplified), Hindi, Spanish (Spain), Arabic (Modern Standard), French (France), Russian, Japanese. Two voices: Andrew Multilingual, Emma Multilingual | `/api/meta` |
+| Results live `result_ttl_seconds` = **3600** | `/api/meta` |
+| Sign-up is off (`self_registration` false), password reset on, auth mode Cognito | `/api/meta` |
+| Guest access **enabled** (5 jobs/session, 20/network per 86,400 s, 1,000 words, 600 s, session 86,400 s, 5 imports/session, 20/network) and YouTube import **enabled** (Supadata): website features are live | `/api/meta` |
+| `/api/meta` returns **no** usage-retention, usage-recording or log setting | `/api/meta` |
+| The commit that added the usage records (`0c7a0b0`, #48) and the one after the benchmark (`86c6ca4`) were deployed: "Deploy to Render" and "Production smoke check" succeeded | GitHub Actions runs 41347929701 and 41353266464. This shows the deploy job ended well, not what Render runs; Render itself was not read |
+| mydubb.com is served by Render behind a Cloudflare edge (headers `x-render-origin-server: Render`, `server: cloudflare`). The edge location (LAX) says nothing about where the application or database runs | Response headers |
+| The Store screenshots are byte-identical after regenerating from the merged code (#45–#50); the voice label "Andrew Multilingual" is the production label. The test server lists two languages, production eight | `npm run store:shots`, compared by hash |
+| The extension code changed by #48–#50 (spinner: `dubbing.ts`, `jobs.ts`, `sidepanel.css`) adds no request, storage key, permission or host. #48 adds nothing the extension sends or reads | `git diff` of `extension/` |
+
+**Microsoft, from the official pages (read 2026-11-01; the pages show no visible date; their
+metadata gives `ms.date` 2026-04-01 and 2026-02-25)**
+
+- Translator, [Data, privacy, and security for Azure Translator in Foundry Tools](https://learn.microsoft.com/en-us/legal/cognitive-services/translator/data-privacy-security):
+  "Translator doesn’t persist customer data submitted for translation:"; "Text translation
+  processes customer data at REST and doesn’t store customer data." (Document translation, which
+  MyDubb does not use, "temporarily stores customer data while processing".)
+- Text to speech, [Data, privacy, and security for text to speech](https://learn.microsoft.com/en-us/legal/cognitive-services/speech-service/text-to-speech/data-privacy-security):
+  "Microsoft doesn't retain or store the text that you provide with the real-time synthesis text
+  to speech API."; "Microsoft doesn't store audio or video content generated with the real-time
+  synthesis API." (Long Audio and batch synthesis, which MyDubb does not use, store scripts and
+  output.)
+- **Not stated on either page:** where the processing takes place, whether human review or abuse
+  monitoring applies to prebuilt real-time input, and any opt-out. The policy may therefore use
+  only the quotes above, attributed to Microsoft, and must not add promises about those points.
+  The statements describe Microsoft's services in general, not the settings of MyDubb's Azure
+  resources.
+
+**Not read (blocked: no access)**
+
+| Item | Where it would be read |
+|---|---|
+| `USAGE_RETENTION_DAYS` and `USAGE_RECORDING_ENABLED` on production | Render service environment |
+| `RESULT_TTL_SECONDS` as an environment value (the effective value is confirmed above) | Render service environment |
+| Render service region (`render.yaml` says `oregon`) and Neon region (`docs/DEPLOYMENT.md` says AWS us-west-2) | Render and Neon dashboards |
+| `AZURE_TRANSLATOR_REGION`, `AZURE_SPEECH_REGION`, the resources' network and data settings | Render environment, Azure portal |
+| Access-log retention of the host | Render dashboard and plan documentation |
+| Whether the production database has the usage tables (migration 0020) | Database or Render deploy logs |
+| Whether the website sets other cookies or loads analytics | Looking at the live site in a browser (not done; `/api/meta` cannot show it) |

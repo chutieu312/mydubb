@@ -72,19 +72,31 @@ publishing]`
 - MyDubb translates your text and creates the audio using **Microsoft Azure** services (Translator
   for the translation, Speech for the voice). Your text, and then its translation, are therefore
   **sent to Microsoft**. Microsoft's own terms and privacy statement govern what Microsoft does
-  with it. `[PO: link to the Microsoft terms you rely on, and confirm the Azure settings]`
+  with it. Microsoft's documentation says of the services MyDubb calls (text translation and
+  real-time text to speech): Translator "doesn’t persist customer data submitted for
+  translation" and text translation "doesn’t store customer data"; for text to speech,
+  "Microsoft doesn't retain or store the text that you provide with the real-time synthesis text
+  to speech API" and "doesn't store audio or video content generated with the real-time
+  synthesis API" ([Translator](https://learn.microsoft.com/en-us/legal/cognitive-services/translator/data-privacy-security),
+  [text to speech](https://learn.microsoft.com/en-us/legal/cognitive-services/speech-service/text-to-speech/data-privacy-security),
+  read `[PO: re-read on the day of publication]`). These are Microsoft's statements, not
+  MyDubb's promises; those pages say nothing about where the processing takes place, and MyDubb
+  adds no promise about what Microsoft does. `[PO: confirm the regions and settings of MyDubb's
+  Azure resources; they could not be read]`
 - The transcript is held in the server's memory while the job runs. The translation and the MP3
-  are stored on MyDubb's server and deleted `[PO: confirm the production value; the code default
-  is 1 hour]` after the job completes.
+  are stored on MyDubb's server and deleted one hour after the job completes (the lifetime MyDubb
+  itself reports for results).
 - MyDubb keeps a **record of each job** (status, voice, language, times, speed, text length,
   which providers were used, any error and which account made it) in its database. **It is not
   deleted automatically today.** `[PO: update this sentence if the proposed clean-up is built]`
   The record does not contain your text.
 - MyDubb also keeps a **usage record** of each job (the client, language, voice, speed, which
   providers were used, how many characters were sent, durations, size of the audio, the outcome
-  and any error code) to measure use and cost. It does not contain your text or your account,
-  but it carries the job's id. The code deletes these records automatically after
-  `[PO: confirm the production value; the code default is 180 days]`.
+  and any error code) to measure use and cost. It does not contain your text, your name, your
+  e-mail or your account's id, but it carries the job's id, so whoever can read MyDubb's
+  database can match it to the job record and, through that, to the account that made the job.
+  The code deletes these records automatically after `[PO: the production value could not be
+  read; the code default is 180 days]`.
 - MyDubb also keeps a list of English technical terms it found in translations, **without** the
   text, the job or the account they came from.
 - Ordinary server logs record technical request details such as the network address. MyDubb's own
@@ -151,9 +163,11 @@ Policy, including the Limited Use requirements.
 # Appendix A: MyDubb website (NOT part of the extension policy; source for a separate website policy)
 
 Written from `docs/GUEST_ACCESS.md`, `docs/AUTH_API.md`, `docs/API.md` and `docs/ARCHITECTURE.md`,
-not from production. Whether each feature is **switched on in production** was not verified here
-(guest use is off by default, `GUEST_ACCESS_ENABLED=false`): `[PO: state which are on]`. Remove
-what is off. Nothing here promises more than the code does.
+not from production. The public `GET https://mydubb.com/api/meta` (read 2026-11-01) reports
+**guest access enabled** and **YouTube caption import enabled (Supadata)**, so both sections
+below describe features that are on; the same answer reports sign-up off and password reset on.
+Cookies, analytics and the web server's log retention were not verified. Nothing here promises
+more than the code does.
 
 ## Cookies
 
@@ -174,8 +188,9 @@ analytics or other cookies]`
   itself, with the guest session and with each guest job. Limits in the code today: 5 jobs per
   guest session, 20 per network per sliding 24 hours, 1,000 words and 10 minutes of audio per
   job, 5 YouTube imports per session. Quota rows are removed by clean-up after they leave the
-  24-hour window; rows for a job in progress are kept until it ends. (`[PO: confirm the values
-  in production]`)
+  24-hour window; rows for a job in progress are kept until it ends. (`/api/meta` reports the
+  same limits on production, 2026-11-01: 5 jobs per session, 20 per network per 86,400 s, 1,000
+  words, 600 s of audio, session 86,400 s, 5 imports per session, 20 per network.)
 - Clearing cookies gives a new guest session, with the same network quota. Signing in to an
   account ends the guest session of that browser.
 - Guest jobs are translated and voiced exactly like account jobs (Microsoft Azure, same

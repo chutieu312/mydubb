@@ -54,9 +54,11 @@ only the floating player cut out of it.
 | `04-sync-with-video.png` | Sync ON (paused) and the floating player |
 
 Checked by looking at every image (2026-11-01): text readable, nothing clipped, expected states,
-no personal data. What differs from production: the test server's voice label ("Andrew
-Multilingual") and language list, and no Azure notice (the test server runs mock providers); the
-captions say the Azure part in words.
+no personal data. Regenerated after #45–#50 were merged (2026-11-01): the four files are
+byte-identical, so they match the current UI. What differs from production: the test server
+lists two languages (production eight; the voice label "Andrew Multilingual" is the same), and
+there is no Azure notice (the test server runs mock providers); the captions say the Azure part
+in words.
 
 Before upload: re-run after any panel change, look at the images again, at most five files,
 PNG, 1280×800.
