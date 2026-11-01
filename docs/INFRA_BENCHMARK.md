@@ -347,3 +347,91 @@ Product Owner only; nothing here was accessed by this work.
   prices and the instance's disk size are shown when choosing a plan.
 - Do not run load against production. Compare the numbers with this document before any upgrade;
   upgrading, env changes and auto-top-up are Product Owner decisions.
+
+## 6. Re-run on `86c6ca4` and deployment check (2026-11-01)
+
+Verification only: no product, price or quota change. Raw results:
+[results/86c6ca4/](../benchmarks/infra/results/86c6ca4/) (`run-v2idle/`, `run-v2matrix/`). These are
+**new local measurements [M]** made with harness **schema 2** on the image built from `86c6ca4`
+(`main` after PR #48 usage records and PR #49). The `cb71cd2` numbers above stay as **legacy-v1**
+and were not overwritten. Environment as in "Test environment" (Docker Desktop, 16 CPUs, run
+sequentially, nothing else of this project running; other unrelated containers were present on the
+machine, so wall times carry some noise). Fake Azure, real FFmpeg, isolated PostgreSQL 17, no
+production, no Azure/Supadata/Cognito. Harness checks ran first: 12 unit tests and
+`test_scripts.sh` all pass. The full matrix (28 cases, concurrency 1 and 2, 3 runs after a warm-up)
+finished with exit 0 and every case validated (`audio-summary.md`: no FAILED row). Not measured
+here: Azure latency, the web server under load, cgroup peak memory, a 20-minute job at 0.1 CPU
+(not in the matrix).
+
+**Idle (660 s, defaults, no users):** 408 statements, 216 without BEGIN/COMMIT (legacy: 396 / 208);
+longest gap without any statement 15.0 s; stale-job check (2 statements) every 15.0 s; cleanup every
+300 s. The extra 8 statements per window are the two usage-retention DELETEs
+(`job_usage_attempts`, `job_usage`) that cleanup now runs every 300 s. CPU 8.3 s per 660 s
+(legacy 9.9 s). RSS 105 MB; cgroup memory 82 MB at the end (legacy 154 MB; cgroup memory depends on
+page cache and is not a stable figure). The conclusion is unchanged: while the app runs, the DB sees
+a statement at least every 15 s **[M, local]**, so Neon's 5-minute autosuspend [P] cannot trigger;
+whether production Neon really stays awake is not verified.
+
+**Audio, against legacy-v1 (median wall s, same workloads):**
+
+| Case | New | Legacy |
+|---|---|---|
+| unlimited long plain c1 / c2 | 10.3 / 11.9 | 9.4 / 10.7 |
+| 0.5 CPU long plain c1 / c2 | 36.6 / 81.8 | 35.2 / 82.3 |
+| 0.5 CPU long timed c2 | 87.9 | 83.1 |
+| 0.1 CPU guest_limit plain c1 | 110.9 | 123.7 |
+| 0.1 CPU short plain c1 | 30.7 | 26.6 |
+
+Peak RSS (python + FFmpeg) is within 1-3 MB of legacy in every case (max 303 MB, long timed c2) and
+peak temp disk matches (max 487 MB, long plain c2). Wall times are within about ±15 % (single
+runs at 0.1 CPU vary more). No timeout, no OOM, no disk-guard trip. The usage recording added by PR
+\#48 is not exercised by this harness (it calls the pipeline directly with the fake provider), so
+it does not show up in these numbers. RSS is still not the container's memory and does not prove
+that 512 MB is enough for production.
+
+**Deployment (read-only, from GitHub Actions logs) [M, indirect]:** the `Deploy to Render` job of the
+CI run for merge commit `86c6ca4` (run 41353266464) reports Render deployment
+`dep-dbjr8a7f3r2c73ctu3k0` **live for commit 86c6ca4** at 2026-11-01 21:51:33 UTC, service
+`mydubb` (auto-deploy off), and the following production smoke check passed (health ok, ready with
+database ok, providers azure/azure/ffmpeg, mock_mode false). The earlier merge `0c7a0b0` (PR #48)
+was also reported live (run 41347929701, 20:47 UTC). `86c6ca4` contains PR #48 and #49.
+Migration `0020`: see "Dashboard evidence" below; the CI log alone only implies it.
+
+### Dashboard evidence (read by the Product Owner, 2026-11-01)
+
+Reported by the Product Owner from the Render and Neon dashboards and a read-only SQL editor, in
+the browser's time zone (the deploy times match UTC-8 against the CI log). Not independently
+checked by Claude; no secrets or account data were shared. **[M, reported]**
+
+- **Render, service `mydubb`:** `dep-dbjr8a7f3r2c73ctu3k0` Live, commit `86c6ca4` (1:50 PM start,
+  1:51 PM live; matches the CI log). Plan **Free**, memory limit 512 MB, dashboard warns that a free
+  instance spins down with inactivity. Log line `Running upgrade 0012_user_roles -> 0020, per-job
+  usage records` at 12:46:39 PM, in deploy `dep-dbjqa50u01pc7387k8kg` (commit `0c7a0b0`, PR #48);
+  later deploys stayed at `0020`, so the migration ran once, before `86c6ca4`. No CPU/memory graphs
+  (Application Metrics are not shown on Free; absent is not zero). Network out: about 27 MB in the
+  month. The Events filter for restart/OOM was **not** opened, so restarts/OOM are unverified.
+- **Neon, project `mydubb`** (AWS US West 2): Free plan, 1 GB storage, 100 compute hours,
+  autoscaling 0.25-2 CU, autosuspend fixed at 5 minutes (not configurable on Free). Usage since
+  1 Nov: **4.13 CU-hours**, storage 0.03 GB. Monitoring graphs need a paid plan, so no 7-day
+  active/idle graph. System operations (last 100 events, 30 Oct 6:28 AM to 1 Nov 3:10 PM, about 2.4
+  days): suspend and start **15 / 15** on 30 Oct (from 6:28), **20 / 20** on 31 Oct, **15 / 15** on
+  1 Nov (to 3:10 PM), for example suspended 8:06 AM, started 8:21 AM; suspended 1:07 PM, started
+  1:26 PM. Compute was running again from 3:10 PM.
+- **Production DB:** both usage tables exist (`job_usage`, `job_usage_attempts`) and
+  `alembic_version` is `0020`. Migration `0020` is therefore **verified**.
+
+What this changes: the local result "a running app issues a statement at least every 15 s, so Neon
+cannot suspend" still holds **for an app that is running**. Production shows many real suspends
+(15-20 a day), so Neon is not kept awake all day. The likely reason is Render Free spinning the
+instance down after inactivity (which stops the 15 s loop), but suspend times were not matched
+against Render spin-down events, so this is a hypothesis, not a finding. Neon 4.13 CU-hours in
+the first part of 1 Nov is a measured account figure; it must not be extrapolated to a month
+or to paid plans (the 730 h x 0.25 CU model above is for an always-running compute and does
+not describe this account today). When a paid Render instance that does not spin down is
+used, the 15 s loop is expected to keep Neon awake.
+
+**Production usage:** the usage tables exist and are at revision `0020`. The usage report itself
+(job counts, real vs mock, actual/estimated/unknown) was **not** run, so there is no usage figure
+yet; jobs created before the deploy have no usage rows by design. Until real jobs after the deploy
+are counted with the read-only `usage_report` (UTC), the conclusion is "not enough data";
+synthetic data must not stand in for it.
