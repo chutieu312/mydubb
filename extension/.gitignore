@@ -2,3 +2,4 @@ dist/
 playwright-report/
 test-results/
 dist-test/
+release/
