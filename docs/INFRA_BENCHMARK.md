@@ -409,7 +409,7 @@ checked by Claude; no secrets or account data were shared. **[M, reported]**
   usage records` at 12:46:39 PM, in deploy `dep-dbjqa50u01pc7387k8kg` (commit `0c7a0b0`, PR #48);
   later deploys stayed at `0020`, so the migration ran once, before `86c6ca4`. No CPU/memory graphs
   (Application Metrics are not shown on Free; absent is not zero). Network out: about 27 MB in the
-  month. The Events filter for restart/OOM was **not** opened, so restarts/OOM are unverified.
+  month. Events (all 36 types enabled, 31 Oct 12:29 PM to 1 Nov 1:51 PM): nothing except deploys, no Server Restarted, Instance Failed or Disk Usage. That shows no error events; without a memory graph it does **not** show memory is safe.
 - **Neon, project `mydubb`** (AWS US West 2): Free plan, 1 GB storage, 100 compute hours,
   autoscaling 0.25-2 CU, autosuspend fixed at 5 minutes (not configurable on Free). Usage since
   1 Nov: **4.13 CU-hours**, storage 0.03 GB. Monitoring graphs need a paid plan, so no 7-day
@@ -422,12 +422,27 @@ checked by Claude; no secrets or account data were shared. **[M, reported]**
 
 What this changes: the local result "a running app issues a statement at least every 15 s, so Neon
 cannot suspend" still holds **for an app that is running**. Production shows many real suspends
-(15-20 a day), so Neon is not kept awake all day. The likely reason is Render Free spinning the
-instance down after inactivity (which stops the 15 s loop), but suspend times were not matched
-against Render spin-down events, so this is a hypothesis, not a finding. Neon 4.13 CU-hours in
-the first part of 1 Nov is a measured account figure; it must not be extrapolated to a month
-or to paid plans (the 730 h x 0.25 CU model above is for an always-running compute and does
-not describe this account today). When a paid Render instance that does not spin down is
+(15-20 a day), so Neon is not kept awake all day. Render Free does not record spin-downs as events, so the Product Owner used the uvicorn log
+(`Shutting down`, `Application startup complete`) and compared 1 Nov by hand: **15 pairs** of Render
+shutdown followed by Neon "Suspend compute" 4.2-5.2 minutes later, matching Neon's 5-minute
+autosuspend (for example Render off 9:43:11, Neon suspend 9:48; Render off 1:02:22 PM, Neon suspend
+1:07 PM); Neon "Start compute" follows each Render restart within about a minute. Shutdowns without a
+following suspend were deploys (12:47, 1:31, 1:50, 1:51 PM) or happened while Neon was already
+suspended. So **Neon sleeps because Render Free stops the app after about 15 minutes without
+requests, which also stops the 15 s loop [M, reported]**. This agrees with the local result: the
+loop keeps Neon awake only while the app runs. Two unexplained cases: the app finished starting at
+8:38:01 AM and logged `Shutting down` at 8:38:03, and again 8:52:47 to 8:52:56, with no Instance
+Failed event (possibly a spin-up and spin-down in quick succession; cause unknown).
+
+Compute hours: from Start/Suspend pairs the Product Owner estimated Neon compute active about
+**17.35 h on 31 Oct** (48 cycles, median 37 minutes each) and **10.58 h from 0:00 to 3:10 PM on 1 Nov**.
+At the 0.25 CU minimum that is about 4.3 CU-h per day, consistent with the 4.13 CU-h shown by Neon, so
+compute stayed at the minimum. A rough extrapolation of 4 CU-h per day x 30 is about 120 CU-h per
+month, above the Free 100 h. This rests on two days, and it is not known whether Neon's 4.13 is
+counted in UTC or local time, so it is **not a conclusion**; compare the Projects page again after a
+few days against the 100 h limit. The Billing page offers "Increase your limits" at $10/month for
+250 hours (read from the UI, not checked against Neon's price page; no plan was changed).
+When a paid Render instance that does not spin down is
 used, the 15 s loop is expected to keep Neon awake.
 
 **Production usage:** the usage tables exist and are at revision `0020`. The usage report itself
