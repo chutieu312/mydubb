@@ -946,3 +946,266 @@ select[aria-invalid="true"] {
 .guest-banner p {
   margin: 0;
 }
+
+/* ---- Studio and Usage & Costs share one page: the one not shown stays in memory, hidden. ---- */
+
+.studio-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+}
+
+.studio-view[hidden] {
+  display: none;
+}
+
+/* ---- Administrator's links in the header ---- */
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.header-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--brand);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-underline-offset: 3px;
+}
+
+.header-nav a[aria-current="page"] {
+  color: var(--text);
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--brand);
+}
+
+/* ---- Usage & Costs ---- */
+
+.usage-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Headings that take focus when a view opens, for keyboard and screen reader users. */
+.focus-target:focus {
+  outline: none;
+}
+
+.hero a.link-button {
+  display: inline-flex;
+  align-items: center;
+}
+
+.usage-filter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+
+/* A date and time field has a wide minimum of its own: it stays inside its column. */
+.usage-filter-fields .field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.usage-filter-actions,
+.usage-pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.usage-pager {
+  justify-content: space-between;
+}
+
+.usage-error {
+  justify-items: start;
+}
+
+.usage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+.usage-card {
+  align-content: start;
+  gap: 8px;
+}
+
+.usage-card h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.usage-figure {
+  font-size: 1.5rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.usage-text {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-subtitle {
+  font-size: 1rem;
+}
+
+.usage-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.usage-open {
+  min-height: 32px;
+  padding: 0;
+}
+
+.usage-lines {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-complete {
+  color: var(--done);
+  font-weight: 600;
+}
+
+.usage-incomplete {
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: 999px;
+  display: inline-block;
+  padding: 0 8px;
+  font-weight: 600;
+  margin: 2px 0;
+}
+
+.usage-pairs {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0 8px;
+  margin: 0;
+}
+
+.usage-pairs dt {
+  color: var(--muted);
+}
+
+.usage-pairs dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A `dl` group keeps the two-column list of the job's details. */
+.usage-dl-row {
+  display: contents;
+}
+
+.usage-sources {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.usage-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.usage-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 2px solid var(--line);
+  padding: 6px 10px 6px 0;
+  white-space: nowrap;
+}
+
+.usage-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 10px 10px 0;
+  vertical-align: top;
+  overflow-wrap: break-word;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* On a narrow screen each row is a small card: label on the left, value on the right. The markup
+   states the table roles, which `display: block` would otherwise take from screen readers. */
+@media (max-width: 999px) {
+  .usage-table,
+  .usage-table tbody,
+  .usage-table tr,
+  .usage-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .usage-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .usage-table tr {
+    padding: 12px 0;
+    border-bottom: 2px solid var(--line);
+  }
+
+  .usage-table tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .usage-table td,
+  .usage-table tbody tr:last-child td {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 0 8px;
+    border-bottom: 0;
+    padding: 4px 0;
+  }
+
+  .usage-table td > * {
+    grid-column: 2;
+  }
+
+  .usage-table td::before {
+    content: attr(data-label);
+    grid-column: 1;
+    grid-row: 1 / span 6;
+    color: var(--muted);
+    font-weight: 600;
+  }
+}

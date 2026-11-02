@@ -350,10 +350,20 @@ def test_no_api_endpoint_writes_the_role(web, db_engine):
     assert _events(db_engine) == []
 
 
-def test_only_the_admin_session_route_is_mounted_under_admin(web):
+def test_only_the_known_routes_are_mounted_under_admin_and_they_only_read(web):
     paths = web.app.openapi()["paths"]  # type: ignore[attr-defined]
-    assert {path for path in paths if path.startswith("/api/admin")} == {ADMIN_URL, PROBE_URL}
-    assert set(paths[ADMIN_URL]) == {"get"}
+    usage = {
+        "/api/admin/usage/summary",
+        "/api/admin/usage/jobs",
+        "/api/admin/usage/jobs/{job_id}",
+    }
+    assert {path for path in paths if path.startswith("/api/admin")} == {
+        ADMIN_URL,
+        PROBE_URL,
+        *usage,
+    }
+    for path in (ADMIN_URL, *usage):
+        assert set(paths[path]) == {"get"}
 
 
 # -- the extension's token --------------------------------------------------------------------

@@ -173,6 +173,52 @@ It returns nothing else and lists nobody.
   request with an `Authorization` header).
 - `403 admin_required`: signed in, not an administrator.
 
+### Usage & Costs
+Read-only reports for the page `/admin/usage` ([USAGE_COSTS.md](USAGE_COSTS.md#the-usage--costs-page)).
+All three refuse as `GET /api/admin/session` does, before anything else about the request is looked
+at, and send `Cache-Control: no-store`, errors included. Times are UTC. Money and audio seconds are
+exact decimal strings; a value that was not recorded is `null`, never `0`. Each response is read from
+one snapshot and says when in `generated_at`.
+
+**`GET /api/admin/usage/summary`** `?since&until&language&job_id`. The whole filtered period:
+`jobs_total`, `statuses`, `complete`, `incomplete`, `reasons`, `jobs_with_mock`, `jobs_without_usage`,
+`first_usage_at`, `services[]` (see below), `reference_cost`, and the `filters` applied.
+
+**`GET /api/admin/usage/jobs`** `?since&until&language&job_id&cursor&limit`. `jobs[]`, newest first
+(`started_at DESC, job_id DESC`), `next_cursor` (`null` on the last page) and the `filters` applied.
+`limit`: 1-100, default 25. A job: `job_id`, `started_at`, `finished_at`, `language`, `voice`,
+`speed_percent`, `timing_mode`, `status`, `outcome`, `error_code`, `providers`
+(`real|mock|mixed|none`), `complete`, `reasons[]`, `services[]`, `reference_cost`, `baseline_seconds`,
+`target_audio_seconds`, `final_audio_seconds`, `audio_processing_ms`, `mp3_bytes`.
+
+**`GET /api/admin/usage/jobs/{job_id}`** `?cursor&limit`. `job`, `method_version`, `attempts_total`,
+`attempts[]` by `seq`, `next_cursor`. `limit`: 1-100, default 50. `job` always covers all the job's
+requests. A request: `seq`, `service`, `provider_kind`, `outcome`, `http_status`, `error_code`,
+`started_at`, `elapsed_ms`, `usage_amount`, `usage_unit`, `usage_basis`
+(`actual|estimated|unknown|none`), `usage_method`, `reference_cost`, `no_cost_reason`
+(`mock|none|unknown_usage|no_reference_price`). `404 job_usage_not_found` for a job with no usage
+record and for an unknown id alike.
+
+`services[]`, one per service, never added together: `service`, `requests`, `mock_requests`,
+`actual_requests`, `actual_characters`, `estimated_requests`, `estimated_characters`,
+`unknown_requests`, `unknown_sent_characters` (a size sent, not a billing figure), `none_requests`,
+`outcomes`, `unpriced_characters`, `reference_cost`. `reference_cost`: `currency`, `known_total`,
+`partial` with `partial_reasons[]` (`unknown_usage|unpriced_usage|incomplete_jobs|jobs_without_usage`:
+the figure is then a lower bound), `lines[]` (`service`, `sku`, `meter`, `region`, `unit`, `price`,
+`currency`, `effective_from`, `checked_on`, `source`, `characters`, `amount`), one per price in force.
+
+Filters: `since` (inclusive) and `until` (exclusive), on `job_usage.started_at`, as ISO dates or
+datetimes; no zone means UTC, an offset is converted. Without them, the last 7 days; with one, `until`
+is now or `since` is 7 days before `until`. The period can be at most 31 days. `language` is an API
+language value, `job_id` a job id. A next page must repeat the filters of the response that gave its
+cursor, `since` and `until` included.
+
+- `422 validation_error` with `fields`: a bad time, a reversed or too long period, an unknown language,
+  a bad id, a `limit` out of range (refused, never clamped), a broken cursor or one issued for other
+  filters or another job.
+- `503 usage_report_timeout`: a lock wait or statement over 10 s, or a summary over 30 s.
+- `503 usage_report_unavailable`: any other database failure. Neither ever comes as an empty `200`.
+
 ### Guest sessions and sign-in
 With guest access on ([API.md](API.md#guest-access)), every response that establishes a session
 (`authenticated`) also ends the browser's guest session, if any, and clears its `mydubb_guest`
