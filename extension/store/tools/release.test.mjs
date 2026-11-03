@@ -99,7 +99,7 @@ describe("check-dist, ordinary build", () => {
 });
 
 describe("check-dist --release", () => {
-  const release = (dir, file) => run(dir, { release: true, keyFile: file });
+  const release = (dir, file = join(temp, "absent.json")) => run(dir, { release: true, keyFile: file });
   test("without a recorded key it is not release-ready and says what is missing", () => {
     const result = release(fakeDist());
     assert.deepEqual(result.problems, []);

@@ -1,11 +1,11 @@
 # Data audit, permission justifications and dashboard answers (DRAFT)
 
-Status: **draft, not confirmed by the Product Owner, nothing declared on the dashboard.** Prepared
-2026-10-31 and re-checked against the merged one-page panel on 2026-11-01: code at `origin/main`
-`86c6ca4` (PR #45 panel; PR #47 admin role; PR #48 usage and reference-cost records, merged after
-the first audit and now covered in §2; PR #50 spinner, which only changes how a working job's
-status looks), extension 0.4.0, manifest and the backend documents named in each row. The admin
-role and the usage records do not touch the extension.
+Status: **draft; the Product Owner confirmed the statements listed in §7 and nothing is declared on
+the dashboard.** Prepared 2026-10-31, re-checked on 2026-11-01 and again on 2026-11-03: code at
+`origin/main` `02360a1` (PR #45 panel; PR #47 admin role; PR #48 usage and reference-cost records;
+PR #50 spinner, which only changes how a working job's status looks; PR #52 the administrators'
+Usage & Costs page), extension 0.4.1, manifest and the backend documents named in each row. The
+admin role, the usage records and the admin page do not touch the extension.
 
 "Verified" below means read in code or in this repository's documents. Anything about what a
 third party (Microsoft, Render, Neon, AWS) keeps or does is **not verified here**.
@@ -24,7 +24,7 @@ No transcript, token, e-mail address or other user data is quoted in this docume
 | **MyDubb account connection**: token, user id, e-mail, display name, expiry | After **Connect MyDubb**: the sign-in happens on `https://mydubb.com` in Chrome's sign-in window (`chrome.identity.launchWebAuthFlow`); the extension never sees the password or the website cookie | The token goes to the MyDubb server as `Authorization: Bearer` on `/api/jobs*`, `/api/extension/*` (`credentials: "omit"`) | Extension: `storage.session`. Server: `user_sessions` row (SHA-256 of the token, `client='extension'`), life at most 12 h (`EXTENSION_SESSION_TTL_SECONDS`) | **Disconnect** (clears storage, then ends the token on the server); password reset or administrator revocation end it on the server; browser quit clears the extension copy |
 | **Generated MP3** | Downloaded by the panel with the token | n/a (received) | Extension: memory only (a Blob in the offscreen document, one per tab), never written to storage | Ended (audio stopped, object URL revoked) by: a newer result, which replaces it by itself once its own MP3 has downloaded (the earlier audio stays usable meanwhile; a refused or failed Generate or a failed download keeps it); lecture change, reload, tab close, Disconnect, another account |
 | **Public configuration** (`GET /api/meta`: languages, voices) | On panel open, no token | MyDubb server | Not stored by the extension | n/a |
-| **Ordinary request data** (IP address, `Origin`, time) | Inherent in every request to the MyDubb server | MyDubb server and its host | The server's access log prints the client address (documented in `docs/GUEST_ACCESS.md`); how long Render keeps logs is **not verified** | Not controlled by the extension |
+| **Ordinary request data** (IP address, `Origin`, time) | Inherent in every request to the MyDubb server | MyDubb server and its host | The server's access log prints the client address (documented in `docs/GUEST_ACCESS.md`); Render documents 7 days of log retention on a Hobby workspace (§8) | Not controlled by the extension |
 
 ### Requests to MyDubb that happen without a click on Generate or Connect
 
@@ -46,34 +46,38 @@ Not automatic: creating a job (`POST /api/jobs`, only on **Generate audio**), si
 (`/api/extension/token`, only after **Connect MyDubb**) and `POST /api/extension/logout` (only on
 **Disconnect**).
 
-The content script also listens for pointer and key events on the Udemy page, **only to know
-whether the user touched the page** (it decides whether a changed video speed is the user's); it
-records and sends nothing about them.
+While **Sync with video** is attached to the video (`attach` comes only from Sync's `enable()`), the
+content script listens for `pointerdown` and `keydown` on the Udemy page, **only to keep the time of
+the latest one** (`content/sync.ts`, `lastInput`), which tells a speed the user picked from one the
+site put back. No key, position or content is read, and nothing is stored or sent. The floating
+player's own controls also handle trusted pointer and key events on themselves
+(`content/floating.ts`). The page's lecture address and title are read in `content/page.ts`
+(`parseLecture`); the manifest has no `history` or `tabs` permission.
 
 ## 2. What the MyDubb server does with a Generate request
 
 | Step | Verified fact (source) |
 |---|---|
-| Transcript text | Held in worker memory until the job finishes; not written to the database (`docs/ARCHITECTURE.md` "Data retention") |
+| Transcript text | Held in worker memory until the job finishes; not written to the database (`docs/ARCHITECTURE.md` "Data retention"). Per-job working files: removal is attempted when the pipeline finishes (`shutil.rmtree(work_dir, ignore_errors=True)` in a `finally`, `backend/app/jobs/pipeline.py`), which guarantees neither success nor that it runs if the process stops abruptly, so files can be left behind. The policy says so |
 | Sent to Microsoft Azure | **Yes.** The transcript text goes to **Azure Translator**; the translated text goes to **Azure Speech** to make the voice. The panel says "Your text is processed by Microsoft Azure". The backend calls text translation (`POST …/translate`, v3.0) and real-time text to speech (`…tts.speech.microsoft.com/cognitiveservices/v1`), not document translation or batch synthesis. Microsoft's pages for exactly those services state that they do not store the text or the generated audio (quotes and sources in §8). What Microsoft does beyond that (location, abuse monitoring) is not stated there and is **not verified here**; MyDubb's own Azure resource settings could not be read |
-| Translation text and MP3 | Local disk of the server, deleted `RESULT_TTL_SECONDS` after completion (**3,600 s on production**, reported by the public `GET /api/meta` on 2026-11-01; code default also 1 hour); expired results are refused (`410 result_expired`) |
-| Job metadata (status, voice, target language, timestamps, baseline duration, speed, character count, provider names, error, owning user id) | PostgreSQL (Neon, AWS us-west-2 per `docs/DEPLOYMENT.md`). **No automatic deletion today.** A 7-day retention is only a proposal, not implemented (`docs/context.md` §6) |
-| Usage record per job (PR #48; `docs/USAGE_COSTS.md`, migration 0020): the client (`web` or `extension`), the kind of access, language, voice, speed, timing mode, provider names, durations, **number of characters** sent, number of blocks, MP3 size, outcome and error code, and one row per request sent to a provider (service, outcome, HTTP status, items, timing, characters sent) | PostgreSQL tables `job_usage`, `job_usage_attempts`. **Not stored there:** transcript, translation, SSML, keys, tokens, addresses, URLs, user or session ids, e-mail. No foreign key to `jobs`: the rows outlive the job row and are **not removed when the job or the user row is**. **Linkability (checked in the schema and the code, not only the foreign key):** `job_usage` has the same `job_id` as the `jobs` row, and `jobs.user_id` names the owning account, so anyone who can read the database can join the two; the join stops when the account is deleted (`user_id` becomes NULL) but the usage row then still holds the time, client, access kind, language, voice, speed, character count and outcome of that job, which can also be matched to the same fields of the surviving `jobs` row. No user, session or network identifier is written into `job_usage*` (`backend/app/usage/models.py`; the context passed in is only the fixed labels `client` and `access`, `jobs/router.py`). The `client` label tells whether the job came from the extension (`principal.bearer`). Recording can be switched off by the `USAGE_RECORDING_ENABLED` setting (default on; production value could not be read). **Deleted automatically** after `USAGE_RETENTION_DAYS` (code default **180**, range 7-3650) by the server's clean-up; production value not checked |
+| Translation text and MP3 | Files on the server's local disk (`RESULT_STORAGE_DIR`). **Access ends** `RESULT_TTL_SECONDS` after completion (**3,600 s on production**, reported by the public `GET /api/meta` on 2026-11-01): `result_store.get` returns nothing and the API answers `410 result_expired`. **The files are removed later**, by `purge_expired` in the cleanup loop (`CLEANUP_INTERVAL_SECONDS`, code default 300 s, and at startup), which runs only while the app runs; so the policy must not promise removal at that exact second. A restart or redeploy also loses them, the disk being temporary (`storage/result_store.py`, `docs/INFRA_BENCHMARK.md`) |
+| Job metadata (status, voice, target language, start times, timestamps, baseline duration, speed, character count, provider names, error, owning user id) | PostgreSQL (Neon; §8). **No automatic deletion today**, so it stays after the result has expired. A 7-day retention is only a proposal, not implemented (`docs/context.md` §6) |
+| Usage record per job (PR #48; `docs/USAGE_COSTS.md`, migration 0020): the client (`web` or `extension`), the kind of access, language, voice, speed, timing mode, provider names, durations, **number of characters** sent, number of blocks, MP3 size, outcome and error code, and one row per request sent to a provider (service, outcome, HTTP status, items, timing, characters sent) | PostgreSQL tables `job_usage`, `job_usage_attempts`. **Not stored there:** transcript, translation, SSML, keys, tokens, addresses, URLs, user or session ids, e-mail. No foreign key to `jobs`: the rows outlive the job row and are **not removed when the job or the user row is**. **Linkability (checked in the schema and the code, not only the foreign key):** `job_usage` has the same `job_id` as the `jobs` row, and `jobs.user_id` names the owning account, so anyone who can read the database can join the two; the join stops when the account is deleted (`user_id` becomes NULL) but the usage row then still holds the time, client, access kind, language, voice, speed, character count and outcome of that job, which can also be matched to the same fields of the surviving `jobs` row. No user, session or network identifier is written into `job_usage*` (`backend/app/usage/models.py`; the context passed in is only the fixed labels `client` and `access`, `jobs/router.py`). The `client` label tells whether the job came from the extension (`principal.bearer`). So the records are **not anonymous**, and the policy must not call them that. Recording is controlled by `USAGE_RECORDING_ENABLED` (code default on). **Removed** by the periodic cleanup after `USAGE_RETENTION_DAYS` (code default **180**, range 7-3650). Neither setting is overridden on production: see §8 for that conclusion and its limits |
+| Usage & Costs page (PR #52, `backend/app/admin/usage.py`, `app/usage/queries.py`, `app/usage/report.py`) | On the website, read-only, behind `require_admin` (the `admin` role). Reads `job_usage*` and, by an outer join on `job_id`, **`jobs.status` and `jobs.error_code` only** (`Job.status, Job.error_code`); it also counts `jobs` rows that have no usage record. The declared response models hold the job id, times, language, voice, speed, timing mode, status, outcome, error code, providers, character counts and reference cost; they hold **no e-mail, user id, transcript or translation**. Not in the extension. The job id is what links back to an account for someone with database access (row above) |
 | English terms found in the translation ("glossary candidates": term, kind, counts, first/last seen) | PostgreSQL, **no automatic deletion**; no transcript, translation, job or user is stored with a term (`docs/ARCHITECTURE.md`). They are derived from user text |
-| Account | Invitation accounts only, e-mail/password via Amazon Cognito behind MyDubb's own sign-in; the `users` table keeps issuer, `sub`, e-mail, display name, disabled flag and, since migration 0012 (PR #47, merged), a `role` (`user` or `admin`, set only by an operator tool; no API and no extension action writes it); no password; no automatic deletion. `user_role_events` records each role change (user id, old/new role, time, operator login name) without an e-mail and outlives the account |
-| Logs | Application logs hold counts, status codes and ids, never transcript text or translations (`docs/ARCHITECTURE.md`); the uvicorn access log has client addresses (above) |
-| Deletion on request | **No self-service way and no documented process to delete job metadata or an account.** Do not promise one in the policy until the Product Owner decides how it is handled |
+| Account | Invitation accounts only, e-mail/password via Amazon Cognito behind MyDubb's own sign-in; the `users` table keeps issuer, `sub`, e-mail, display name, disabled flag, `last_login_at` and, since migration 0012 (PR #47, merged), a `role` (`user` or `admin`, set only by an operator tool; no API and no extension action writes it); no password; no automatic deletion. Session rows hold a token hash and are removed by cleanup once expired or revoked; the extension token's lifetime has a hard ceiling of 12 h in `config.py`. `user_role_events` records each role change (user id, old/new role, time, operator login name) without an e-mail and outlives the account |
+| Logs | Application logs hold counts, status codes and ids, never transcript text or translations (`docs/ARCHITECTURE.md`); the uvicorn access log has client addresses (above). Render's log retention: §8 |
+| Deletion on request | **No self-service way and no tested procedure to delete job metadata or an account.** The Product Owner decided (§7) that requests are received at support@mydubb.com, the requester is verified, and they are handled as far as practically possible and as the law requires. The policy promises neither complete deletion nor a time limit ([DATA-REQUESTS.md](DATA-REQUESTS.md)) |
 | Encryption at rest | **Not verified** (Neon, Render disk). In transit: the extension talks to one `https` origin; plain `http` is accepted only for a `localhost` build |
 
 ## 3. Outside the extension (do not mix into the extension's disclosures)
 
 The MyDubb website: the Studio form, "Try as guest", **YouTube caption import** (Supadata), website
 sign-in and its session cookie. None of it is in the extension: guests cannot connect it and the
-extension has no YouTube import. The policy draft is scoped to the extension and the service
-requests it makes, and points to a separate website policy; a website appendix (guest session,
-cookies, hashed network quota, YouTube/Supadata) is written in
-[PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) for the case that the Product Owner wants one
-policy for both. The scope is the Product Owner's decision.
+extension has no YouTube import. The Product Owner decided that the policy covers the extension and
+the service requests it makes, and it says it is not a policy for the website as a whole. **No website
+policy exists**, so the page links to none. Notes for one (guest session, cookies, hashed network
+quota, YouTube/Supadata) are in [WEBSITE-POLICY-NOTES.md](WEBSITE-POLICY-NOTES.md), internal only.
 
 ## 4. Permission and host justifications (text for the dashboard)
 
@@ -116,45 +120,56 @@ and compare each definition below with the facts. Until then every row is "pendi
 | Selected transcript text (and the user's edits of it), and the translation received for it | "Website content and resources"; also possibly "User-generated content" | Text read from the Udemy page, stored in the session, sent to the server and to Azure on Generate; the translation is stored in the session too | Matches on its face: pending |
 | Lecture URL path (course slug, lecture id) and page title | "Web browsing activity": "information about the websites or other web resources a user requests or interacts with" | Read by the extension, kept in the browser, **not** sent to MyDubb | Meets the definition as written, and Chrome counts local handling: pending dashboard confirmation of how local-only data is declared |
 | Video state (time, duration, paused, speed, muted) of the lecture | Possibly "Website content and resources" | Read and written locally, not sent | Pending |
-| Pointer and key events on Udemy pages (a flag only: "the user touched the page"; no key, position or content recorded) | Possibly the dashboard's "User activity" | Read, used in memory, discarded, not stored or sent | Pending: confirm whether transient local use counts |
+| Pointer and key events on Udemy pages, only while Sync is on (the time of the latest one; no key, position or content recorded) | Possibly the dashboard's "User activity" | Read, used in memory, not stored or sent | Pending: confirm whether transient local use counts |
 | Network address of every request (server access log) | Possibly the dashboard's "Location" or "PII", if its definition includes the IP address | Received and logged by the server | Pending: check the dashboard definition |
 | Health, financial/payment, personal communications | No such data is read | – | Expected not applicable; confirm |
 | Remote code | None (all code is in the package) | – | Expected "No" |
 | Single purpose, permission justifications | §5, §4 | – | Text ready; PO confirms |
-| Certifications (the dashboard's statements on not selling data, not using it outside the single purpose, not using it for creditworthiness) | Wording pending | – | Facts in §2 and the policy must be confirmed true by the PO before certifying |
-| Privacy policy URL | Required when data is handled | – | **Pending PO**: not published; scope decision in [PRIVACY-POLICY-DRAFT.md](PRIVACY-POLICY-DRAFT.md) |
-| Limited Use statement | Must be on a site of the extension or one click from its homepage | – | Sentence is in the policy draft; PO publishes |
+| Certifications (the dashboard's statements on not selling data, not using it outside the single purpose, not using it for creditworthiness) | Wording pending | – | The Product Owner confirmed these facts (§7); the PO still compares them with the live wording before certifying |
+| Privacy policy URL | Required when data is handled | – | **Pending**: planned `https://mydubb.com/extension-privacy.html`, not deployed, not entered on the dashboard |
+| Limited Use statement | Must be on a site of the extension or one click from its homepage | – | In the policy and on its page; goes public only when the page is deployed |
 
 **Do not answer "no data collected".** The extension transmits the selected text and the token to
 the MyDubb service, and a policy is required whenever user data is handled.
 
 ## 7. What the Product Owner must confirm or provide
 
-- **Confirmed by the Product Owner (2026-11-01):** the operator is Can Nguyen; support and
-  privacy contact is support@mydubb.com; the policy is separate for the extension and the
-  requests it sends to MyDubb (the website gets its own).
-- Still open: whether the dashboard publisher is trader or non-trader; that the Chrome Web Store
-  account can verify support@mydubb.com as its contact e-mail (the dashboard verifies it; this
-  work cannot).
-- Where the policy is published (URL), the URL of the website policy it points to, and the
-  homepage/support URL for the listing.
-- That the facts in §1 and §2 are true for production: result lifetime (code default 1 hour),
-  no analytics, which website features are on (guest, YouTube import).
-- What the operator will actually do with a deletion request and within what time (§2: no process
-  exists today). Users are told only to write to support@mydubb.com; a proposed intake process is
-  in [DATA-REQUESTS.md](DATA-REQUESTS.md). Whether to build the proposed 7-day job-metadata
-  cleanup first. The policy must say only what exists.
+**Confirmed by the Product Owner.** 2026-11-01: operator Can Nguyen; support and privacy contact
+support@mydubb.com; a policy for the extension and the requests it sends to MyDubb, not a general
+website policy. 2026-11-03:
+
+- No analytics or advertising in the extension, and none is added in this release.
+- User data is not sold, and not transferred except in the cases Chrome allows.
+- User data is not used or transferred outside the extension's declared purpose.
+- User data is not used for creditworthiness or lending.
+- The operator reads user content only when the user provides it for support, or when the law
+  requires it.
+- Requests to access, correct or delete are received at support@mydubb.com; the requester is
+  verified; they are handled as far as practically possible and as the law requires. No automatic
+  deletion exists, and no complete deletion or response time is promised. No clause limits rights
+  that the law gives.
+- Policy changes: the text and the Last updated date on the page change; further notice when the
+  law requires it.
+
+**Still open.**
+
+- Trader or non-trader on the dashboard; that the account can verify support@mydubb.com (the
+  dashboard verifies it; this work cannot).
+- Homepage and support URL for the listing. Deploying the policy page and entering its planned URL.
+- A tested procedure for carrying out a deletion request ([DATA-REQUESTS.md](DATA-REQUESTS.md)),
+  and whether to build the proposed 7-day job-metadata cleanup first. Whether the operator wants the
+  policy to state a response time once one can be kept.
 - Whether the operator relies on the Microsoft statements in §8, and the regions and settings of
-  MyDubb's own Azure resources (not readable from here).
+  MyDubb's own Azure resources (not read).
 - After reading the live dashboard labels: the final declarations, made on the facts above.
 
 ## 8. Read-only verification, 2026-11-01
 
 Method: one public `GET https://mydubb.com/api/meta` (no account, no job), read-only calls to
 GitHub (workflow runs and variable names), and Microsoft's public pages. Nothing was created,
-changed or deployed. **No Render, Neon, Azure or hosting-log access exists in this environment**
-(no Render API key or CLI, no Neon or Azure access; `RENDER_API_KEY` is a GitHub secret that
-cannot be read), so those items are listed as not read, not guessed.
+changed or deployed. **This environment has no Render, Neon, Azure or hosting-log access** (no
+Render API key or CLI, no Neon or Azure access; `RENDER_API_KEY` is a GitHub secret that cannot be
+read). What those dashboards show comes from the Product Owner and Copilot, marked as such below.
 
 **Read and confirmed**
 
@@ -169,16 +184,39 @@ cannot be read), so those items are listed as not read, not guessed.
 | The commit that added the usage records (`0c7a0b0`, #48) and the one after the benchmark (`86c6ca4`) were deployed: "Deploy to Render" and "Production smoke check" succeeded | GitHub Actions runs 41347929701 and 41353266464. This shows the deploy job ended well, not what Render runs; Render itself was not read |
 | mydubb.com is served by Render behind a Cloudflare edge (headers `x-render-origin-server: Render`, `server: cloudflare`). The edge location (LAX) says nothing about where the application or database runs | Response headers |
 | The Store screenshots are byte-identical after regenerating from the merged code (#45–#50); the voice label "Andrew Multilingual" is the production label. The test server lists two languages, production eight | `npm run store:shots`, compared by hash |
-| The extension code changed by #48–#50 (spinner: `dubbing.ts`, `jobs.ts`, `sidepanel.css`) adds no request, storage key, permission or host. #48 adds nothing the extension sends or reads | `git diff` of `extension/` |
+| The extension code changed by #48–#52 (spinner: `dubbing.ts`, `jobs.ts`, `sidepanel.css`) adds no request, storage key, permission or host. #48 and #52 add nothing the extension sends or reads | `git diff` of `extension/` |
 
-**Microsoft, from the official pages (read 2026-11-01; the pages show no visible date; their
-metadata gives `ms.date` 2026-04-01 and 2026-02-25)**
+**Reported from the dashboards, not read directly by Claude**
 
-- Translator, [Data, privacy, and security for Azure Translator in Foundry Tools](https://learn.microsoft.com/en-us/legal/cognitive-services/translator/data-privacy-security):
+| Fact | Source and level of evidence |
+|---|---|
+| Production has both usage tables (`job_usage`, `job_usage_attempts`) and `alembic_version` is `0020`. Render's log shows `Running upgrade 0012_user_roles -> 0020` in the deploy of `0c7a0b0`. Replaces the earlier "not read" for migration 0020 | Product Owner, Render and Neon dashboards and a read-only SQL editor, 2026-11-01: `docs/INFRA_BENCHMARK.md`, "Dashboard evidence" (#51). Reported, not independently checked |
+| Render service `mydubb` on plan Free; Neon project `mydubb` in AWS US West 2 on the Free plan | Same source. Reported. The policy names the providers and promises **no region**: Render's region was not reported (`render.yaml` says `oregon`), and where the providers process data in general is not known |
+| On Render's service `mydubb`, no `USAGE_RECORDING_ENABLED` or `USAGE_RETENTION_DAYS` row in the environment; Linked Environment Groups: "No environment groups available to link."; Secret Files lists no file | Copilot, read-only look at the Render dashboard, 2026-11-03. Reported |
+| Render workspace plan is Hobby | Product Owner, 2026-11-03. Reported |
+
+**Conclusion on usage settings (configuration plus code, not a measurement).** With no override on
+Render, `config.py` applies its defaults: recording on, retention 180 days. Claude checked the other
+places an override could come from and found none: `Dockerfile` sets no `USAGE_*`, `render.yaml` sets
+none, `.github/` sets none, and `.dockerignore` keeps `.env` out of the image, the only file
+`config.py` reads. This is **not** a runtime measurement or a read of production data: nothing has
+observed a usage row being written or purged on production.
+
+**Render log retention.** [render.com/docs/logging](https://render.com/docs/logging#retention-period)
+(read 2026-11-03, no date on the page): "Render's log retention period depends on your workspace's
+plan", Hobby "7 days". The page does not say which log types this covers, and does not mention client
+addresses. It applies to Render's logs by plan only; the policy does not extend it to every internal
+log of a provider, or to exports or backups.
+
+**Microsoft, from the official pages (read 2026-11-01, and again by the Product Owner's session; the
+pages show no visible date; their metadata gives `ms.date` 2026-04-01 and 2026-02-25). The policy
+links the current addresses; the older `legal/cognitive-services` addresses name these as canonical.**
+
+- Translator, [Data, privacy, and security for Azure Translator in Foundry Tools](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/translator/data-privacy-security):
   "Translator doesn’t persist customer data submitted for translation:"; "Text translation
   processes customer data at REST and doesn’t store customer data." (Document translation, which
   MyDubb does not use, "temporarily stores customer data while processing".)
-- Text to speech, [Data, privacy, and security for text to speech](https://learn.microsoft.com/en-us/legal/cognitive-services/speech-service/text-to-speech/data-privacy-security):
+- Text to speech, [Data, privacy, and security for text to speech](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/speech-service/text-to-speech/data-privacy-security):
   "Microsoft doesn't retain or store the text that you provide with the real-time synthesis text
   to speech API."; "Microsoft doesn't store audio or video content generated with the real-time
   synthesis API." (Long Audio and batch synthesis, which MyDubb does not use, store scripts and
@@ -189,14 +227,12 @@ metadata gives `ms.date` 2026-04-01 and 2026-02-25)**
   The statements describe Microsoft's services in general, not the settings of MyDubb's Azure
   resources.
 
-**Not read (blocked: no access)**
+**Not read (no access; nothing in the policy depends on a guess about them)**
 
 | Item | Where it would be read |
 |---|---|
-| `USAGE_RETENTION_DAYS` and `USAGE_RECORDING_ENABLED` on production | Render service environment |
-| `RESULT_TTL_SECONDS` as an environment value (the effective value is confirmed above) | Render service environment |
-| Render service region (`render.yaml` says `oregon`) and Neon region (`docs/DEPLOYMENT.md` says AWS us-west-2) | Render and Neon dashboards |
+| Render service region (`render.yaml` says `oregon`) | Render dashboard |
 | `AZURE_TRANSLATOR_REGION`, `AZURE_SPEECH_REGION`, the resources' network and data settings | Render environment, Azure portal |
-| Access-log retention of the host | Render dashboard and plan documentation |
-| Whether the production database has the usage tables (migration 0020) | Database or Render deploy logs |
-| Whether the website sets other cookies or loads analytics | Looking at the live site in a browser (not done; `/api/meta` cannot show it) |
+| Whether usage rows are in fact being written and purged on production (`CLEANUP_INTERVAL_SECONDS` on production also) | The read-only `usage_report`, Render environment |
+| Encryption at rest at Neon and on Render's disk | Their dashboards and documents |
+| Whether the website sets other cookies or loads analytics (website policy only) | Looking at the live site in a browser |

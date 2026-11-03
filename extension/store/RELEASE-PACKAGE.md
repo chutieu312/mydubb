@@ -1,8 +1,8 @@
 # Images, screenshots and the release ZIP
 
-Status (2026-11-01): **icons integrated, four screenshots made from the real one-page panel,
-draft ZIP works. The package is not release-ready: the verified release key (Store Item ID and
-public key) does not exist yet** ([STABLE-ID.md](STABLE-ID.md)).
+Status (2026-11-03): **icons integrated, four screenshots made from the real one-page panel, release
+ZIP of 0.4.1 built and checked locally with the verified key** ([STABLE-ID.md](STABLE-ID.md)). It has
+not been uploaded, and the conditions at the end of this page are still open.
 
 ## Sizes (Chrome documentation, read 2026-10-31)
 
@@ -81,9 +81,9 @@ npm run build:release && npm run check:dist:release && npm run package:release
   `check:dist` refuses any other file, test hook, fixture or test host; `make-zip.mjs` also refuses
   `.map`, tests, `dist-test`, `.env`, key files and documents, then reads the ZIP back and compares
   every entry with the build. `release/` is git-ignored.
-- Version: `static/manifest.json`, **0.4.0 today and for the first draft upload**. Every later upload
-  to the same Store item needs a higher one: raise `"version"` there **before** building the next
-  package (STABLE-ID.md step 7); it is not raised yet. Node ≥ 22, `npm ci`
+- Version: `static/manifest.json`, **0.4.1 today** (the first draft upload was 0.4.0). Every later
+  upload to the same Store item needs a higher one: raise `"version"` there **before** building the
+  next package (STABLE-ID.md step 7). Node ≥ 22, `npm ci`
   from the lockfile, esbuild 0.28.2; everything is bundled, so the ZIP has no runtime dependency
   and loads no remote code.
 - **Chrome's loaded folder:** this tooling writes only inside the worktree's `extension/dist`,
@@ -92,7 +92,8 @@ npm run build:release && npm run check:dist:release && npm run package:release
 
 ## Not release-ready until
 
-The verified release key (Store Item ID and public key from a draft upload) is recorded and
-`npm run check:dist:release` passes; the policy is published and its URL given (operator Can Nguyen and
-support@mydubb.com are confirmed; the other placeholders are listed in [README.md](README.md)); the Product Owner has decided about the reviewer test account
-([LISTING.md](LISTING.md)); and the screenshots are looked at again after any panel change.
+The policy page is deployed and its URL opens without signing in (planned
+`https://mydubb.com/extension-privacy.html`; pending items are in [README.md](README.md)); the
+Product Owner has decided about the reviewer test account ([LISTING.md](LISTING.md)); and the
+screenshots are looked at again after any panel change. Done for the package itself: the verified
+key is recorded and `npm run check:dist:release` passes.

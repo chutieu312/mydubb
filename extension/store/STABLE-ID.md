@@ -1,9 +1,10 @@
 # Stable release ID: procedure and tooling
 
-Status (2026-11-01): **the build and check tooling is done; the key is not.** No developer
-account, Store Item ID or verified public key exists, so `store/release-key.json` does not exist
-and no release-ready package can be made. Nothing here invents or guesses an ID. Steps marked
-**PO** need the Product Owner or the dashboard.
+Status (2026-11-03): **steps 1–7 are done.** The Product Owner gave the Item ID
+`nndofiifflpbhefoehcbfpnaoiohicop` and the public key; `key-to-id` gives the same ID, and
+`store/release-key.json` holds them. The version is 0.4.1, and a release ZIP was
+built and checked locally. Steps 8 (load in a separate profile, upload) and 9 are not done. Nothing
+here invents or guesses an ID. Steps marked **PO** need the Product Owner or the dashboard.
 
 Sources (Chrome documentation, read 2026-10-31; several pages carry old "last updated" stamps, so
 confirm in the live dashboard): `developer.chrome.com/docs/extensions/reference/manifest/key`,
@@ -70,9 +71,9 @@ mode accepts only the one recorded key, never "any key". Tests: `store/tools/rel
    Store item** (this keyed one, and every later one) must have a **higher** `version` than the
    last one uploaded, or the dashboard refuses it. Edit `"version"` in
    `extension/static/manifest.json` (for example `0.4.1`) **before** step 8; the build copies it
-   and the ZIP name carries it. This version has **not** been raised yet: it is a step for the
-   preparation of the next upload, and it applies again to every further upload (including a
-   re-upload after a fix or a rejection). Commit the change with the package it belongs to.
+   and the ZIP name carries it. It was raised to 0.4.1 for this package, and this step applies again
+   to every further upload (including a re-upload after a fix or a rejection). Commit the change
+   with the package it belongs to.
 8. `npm run build:release && npm run check:dist:release && npm run package:release`.
    Load `dist-release/` unpacked **in a separate Chrome profile** and compare its ID in
    `chrome://extensions` with the Item ID. Upload the ZIP (the raised `version`) to the same
@@ -96,5 +97,5 @@ declarations, review and publication stay separate and unfinished.
 
 ## Not done
 
-Account, upload, Item ID, public key, `store/release-key.json`, `EXTENSION_IDS`, review
+Loading the release build in a separate profile, uploading the 0.4.1 ZIP, `EXTENSION_IDS`, review
 submission, publication.

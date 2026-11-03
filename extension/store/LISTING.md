@@ -21,7 +21,7 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 | Visibility | Start as **Unlisted** or **Private**: the extension needs an invitation account, so a public listing would send users to a sign-in they cannot complete (Product Owner decides; all options go through the same review) |
 | Support e-mail | support@mydubb.com (confirmed by the Product Owner; the dashboard still has to verify it) |
 | Homepage / support URL | `[PO: URLs]` (mydubb.com is the service's address; whether it is the homepage and has a support page is the Product Owner's decision) |
-| Privacy policy URL | `[PO: published URL of PRIVACY-POLICY-DRAFT.md after review]` |
+| Privacy policy URL | Planned: `https://mydubb.com/extension-privacy.html`. **Not deployed yet; enter it only after it opens without signing in** |
 | Screenshots | [screenshots/](screenshots/) (four, 1280×800), see [RELEASE-PACKAGE.md](RELEASE-PACKAGE.md) |
 
 ## Detailed description

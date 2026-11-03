@@ -1,218 +1,211 @@
-# MyDubb privacy policy (DRAFT, not published, not reviewed)
+# MyDubb extension privacy policy (for Product Owner review, not published)
 
-> **Draft for the Product Owner.** Every `[PO: …]` marker is a fact only the operator can give.
-> Nothing here is filled with an invented value. Do not publish until the markers are resolved and
-> the Product Owner has read [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md). It is not legal advice; whether
-> it also satisfies privacy law that applies to the operator is for the operator to check.
-> The sections below the line are the proposed public text.
+> **Internal note, not part of the public text.** The text below the line is the proposed public
+> policy. Its page is [`frontend/public/extension-privacy.html`](../../frontend/public/extension-privacy.html),
+> planned for `https://mydubb.com/extension-privacy.html` (**not deployed, not entered on the
+> dashboard**). Change both together: the page has the same words.
 >
-> **Decided by the Product Owner (2026-11-01).** The operator is **Can Nguyen**; the contact for
-> support and privacy is **support@mydubb.com**; this policy is **separate for the extension** and
-> the requests the extension sends to MyDubb. It points to a separate website policy, which does
-> not exist yet (`[PO: URL when published]`). **Appendix A (website) is therefore not part of
-> this policy**: it stays below only as source material for that website policy (written from the
-> code and documents, with its own `[PO]` gaps) and must not be published with this text. Until
-> this policy is published at a URL, the dashboard has no valid policy URL.
+> Before it goes public: the Product Owner reads it against [PRIVACY-AUDIT.md](PRIVACY-AUDIT.md),
+> the "Last updated" date is set to the date of the last content change, and the Microsoft and
+> Render pages are read again. It is not legal advice; whether it satisfies the privacy law that
+> applies to the operator is for the operator to check. Website notes moved to
+> [WEBSITE-POLICY-NOTES.md](WEBSITE-POLICY-NOTES.md) and are not part of this policy.
 
 ---
 
-# Privacy policy for MyDubb
+# MyDubb Chrome extension privacy policy
 
-Last updated: `[PO: date of publication]`
+Last updated: November 3, 2026
 
-**Who runs MyDubb:** Can Nguyen`[PO: postal or contact address, only if the operator wishes to
-give one]`.
-**Contact for questions about this policy, support and privacy:** support@mydubb.com.
+Operator: Can Nguyen
+
+Support and privacy contact: support@mydubb.com
 
 ## Scope
 
-This policy covers the **MyDubb Chrome extension** and what the MyDubb service (mydubb.com)
-does with the requests the extension sends. It does **not** describe the MyDubb website's own
-pages (the studio form, guest use, importing captions from a YouTube link, the website's
-cookies); those are covered by `[PO: link to the website privacy policy, when it exists]`.
+This policy covers the MyDubb Chrome extension and the requests it sends to the MyDubb service at
+mydubb.com. It is not a privacy policy for the MyDubb website as a whole: it does not describe
+website features the extension does not use, such as the studio page, guest use or importing
+captions from a YouTube link.
 
 MyDubb is an independent service. It is not made by, endorsed by or connected with Udemy,
 Microsoft or Google.
 
 ## What the extension is for
 
-The extension takes English transcript text that **you select** on an Udemy lecture page, and,
-when you ask, turns it into audio in another language with your MyDubb account, so you can listen
-next to the lecture video.
+The extension takes English transcript text that you select on an Udemy lecture page and, when you
+ask, turns it into audio in another language with your MyDubb account, so you can listen next to
+the lecture video.
 
-## What the extension reads and when it leaves your browser
+## What the extension handles in your browser
 
-| What | When it is read | Where it goes |
-|---|---|---|
-| The text you select on an Udemy lecture page | When you choose **Send to MyDubb** | Shown in the side panel and kept in your browser's session memory. **Sent to MyDubb only when you click Generate audio** |
-| Your choices: start times, language, voice, speed | In the panel | Sent to MyDubb with the text when you click Generate audio |
-| The translation MyDubb returns, and the audio | When the job finishes, the panel fetches them | The translation is kept in your browser's session memory so the panel can show it again; the audio is held in memory by the extension's player and is not saved by the extension |
-| The lecture's address, page title and the video's time, speed and sound state | While the panel or the floating player is in use | **Stays in your browser.** Not sent to MyDubb. When new audio loads, the extension pauses the lecture video and moves it to where your passage starts; with **Sync with video** on it also mutes the video and changes its speed, and restores them when you turn Sync off |
-| Your MyDubb sign-in | When you choose **Connect MyDubb** | You type your password on mydubb.com, not in the extension. The extension receives a sign-in token and your account's e-mail and name, keeps them in your browser's session memory, and sends the token to MyDubb with each request |
+"Session storage" below is Chrome's session storage for the extension. Chrome clears it when the
+browser quits, and Udemy pages cannot read it.
 
-**Your text and choices are sent only when you click Generate audio.** Some other requests to
-MyDubb happen without a click, and they carry no transcript text:
+- **The text you select.** Read when you choose Send to MyDubb on an Udemy page. It is shown in
+  the side panel and kept in session storage. It is sent to MyDubb only when you choose Generate
+  audio.
+- **Your choices.** Start times, language, voice and speed. They are kept in session storage and
+  sent to MyDubb with the text when you choose Generate audio.
+- **The address and title of the current lecture.** Read from the Udemy page in that tab, to tell
+  which lecture the panel belongs to and to show its title. They stay in your browser and are not
+  sent to MyDubb. This is not your browsing history: the extension has no access to Chrome's
+  history, and its page script runs on www.udemy.com only.
+- **The state of the lecture video.** Its time, duration, speed, and whether it is paused or muted.
+  Read to show the video controls and to keep audio and video together. It stays in your browser.
+  When new audio loads, the extension pauses the lecture video and moves it to where your passage
+  starts. With Sync with video on, it also mutes the video and changes its speed, and restores them
+  when Sync turns off.
+- **Pointer and key presses, only while Sync with video is on.** The extension notes the time of
+  your latest pointer press or key press on the page, to tell a speed you picked from one the site
+  put back, and so keep the video coordinated. Only that time is held, in memory. Which key you
+  pressed, what you typed and where you pressed are not recorded, and nothing about it is stored or
+  sent. This is not keystroke logging or analytics. The floating player's own controls also respond
+  to presses on them.
+- **The translation and the audio.** When a job finishes, the panel fetches them from MyDubb. The
+  translation is kept in session storage together with the account, connection and lecture it
+  belongs to, so the panel can show it again. The audio is held in memory by the extension's player
+  and is not saved by the extension.
+- **Your MyDubb sign-in.** When you choose Connect MyDubb, you type your password on mydubb.com,
+  not in the extension. The extension receives a sign-in token and your account's e-mail and name,
+  keeps them in session storage, and sends the token to MyDubb with its requests.
 
-- Every time the side panel opens, it asks MyDubb for the public list of languages and voices
-  (no sign-in token). Like any request, it reaches MyDubb with your network address.
+The extension has no analytics or advertising code. It does not read your Udemy account details or
+your cookies.
+
+## Requests the extension sends to MyDubb
+
+Your text and choices are sent only when you choose Generate audio. Some other requests happen
+without a click, and they carry no transcript text:
+
+- Every time the side panel opens, it asks MyDubb for the public list of languages and voices, with
+  no sign-in token. Like any request, it reaches MyDubb with your network address.
 - If the panel holds a sign-in token, it asks MyDubb whether the token is still valid.
-- If a job was started in that tab and the panel is closed and opened again, or while a job
-  runs, the panel asks MyDubb for the job's status, then its translation and its audio file, and
-  keeps doing so until the job ends or you leave the lecture. These requests carry your token and
-  the job's id, not your text.
-- **Connect MyDubb** and **Disconnect** contact MyDubb when you press them; the sign-in window is
-  the MyDubb website, which sets its own cookies (see the website policy).
+- If a job was started in that tab and the panel is closed and opened again, or while a job runs,
+  the panel asks MyDubb for the job's status, then its translation and its audio file, and keeps
+  doing so until the job ends or you leave the lecture. These requests carry your token and the
+  job's id, not your text.
+- Connect MyDubb and Disconnect contact MyDubb when you press them. The sign-in window is the MyDubb
+  website, which sets the cookies it needs for signing in.
 
-The extension has no analytics or advertising code and does not read your Udemy account,
-cookies or browsing history. `[PO: confirm no analytics or telemetry is added before
-publishing]`
+## What MyDubb does with a request
 
-## What MyDubb does with your text
-
-- MyDubb translates your text and creates the audio using **Microsoft Azure** services (Translator
-  for the translation, Speech for the voice). Your text, and then its translation, are therefore
-  **sent to Microsoft**. Microsoft's own terms and privacy statement govern what Microsoft does
-  with it. Microsoft's documentation says of the services MyDubb calls (text translation and
-  real-time text to speech): Translator "doesn’t persist customer data submitted for
-  translation" and text translation "doesn’t store customer data"; for text to speech,
-  "Microsoft doesn't retain or store the text that you provide with the real-time synthesis text
-  to speech API" and "doesn't store audio or video content generated with the real-time
-  synthesis API" ([Translator](https://learn.microsoft.com/en-us/legal/cognitive-services/translator/data-privacy-security),
-  [text to speech](https://learn.microsoft.com/en-us/legal/cognitive-services/speech-service/text-to-speech/data-privacy-security),
-  read `[PO: re-read on the day of publication]`). These are Microsoft's statements, not
-  MyDubb's promises; those pages say nothing about where the processing takes place, and MyDubb
-  adds no promise about what Microsoft does. `[PO: confirm the regions and settings of MyDubb's
-  Azure resources; they could not be read]`
-- The transcript is held in the server's memory while the job runs. The translation and the MP3
-  are stored on MyDubb's server and deleted one hour after the job completes (the lifetime MyDubb
-  itself reports for results).
-- MyDubb keeps a **record of each job** (status, voice, language, times, speed, text length,
-  which providers were used, any error and which account made it) in its database. **It is not
-  deleted automatically today.** `[PO: update this sentence if the proposed clean-up is built]`
-  The record does not contain your text.
-- MyDubb also keeps a **usage record** of each job (the client, language, voice, speed, which
-  providers were used, how many characters were sent, durations, size of the audio, the outcome
-  and any error code) to measure use and cost. It does not contain your text, your name, your
-  e-mail or your account's id, but it carries the job's id, so whoever can read MyDubb's
-  database can match it to the job record and, through that, to the account that made the job.
-  The code deletes these records automatically after `[PO: the production value could not be
-  read; the code default is 180 days]`.
-- MyDubb also keeps a list of English technical terms it found in translations, **without** the
-  text, the job or the account they came from.
-- Ordinary server logs record technical request details such as the network address. MyDubb's own
-  application logs do not contain your text or translations. `[PO: state how long the hosting
-  provider keeps access logs once that is known]`
+- **Microsoft Azure.** MyDubb sends your text to Azure Translator (text translation), and the
+  translation to Azure Speech (real-time text to speech). Microsoft's own terms and privacy
+  statement govern what Microsoft does with it. Microsoft's documentation states that text
+  translation "doesn’t store customer data"
+  ([Azure Translator](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/translator/data-privacy-security)),
+  that "Microsoft doesn't retain or store the text that you provide with the real-time synthesis
+  text to speech API", and that "Microsoft doesn't store audio or video content generated with the
+  real-time synthesis API"
+  ([text to speech](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/speech-service/text-to-speech/data-privacy-security)).
+  These are Microsoft's statements about those services, not promises by MyDubb.
+- **Your transcript on the server.** It is held in memory while the job runs and is not written to
+  MyDubb's database. The server attempts to remove temporary working files when a job finishes. An
+  interrupted process or a cleanup failure can leave files behind.
+- **The translation and the audio on the server.** They are saved as files so the panel can fetch
+  them. They stop being available one hour after the job completes. A cleanup that runs periodically
+  then removes the files, so they can stay on the disk for some time after that hour; a server
+  restart can also remove them sooner.
+- **A record of each job.** Status, voice, language, start times, speed, length of the text, the
+  providers used, any error, the times of the job and the account that made it. It does not contain
+  your text. It is kept in MyDubb's database after the result has expired, and **it is not deleted
+  automatically today**.
+- **A usage record of each job.** The client (extension or website), the kind of access, language,
+  voice, speed, timing mode, the providers used, the number of characters sent, durations, the size
+  of the audio, the outcome and any error code, and for each request to a provider its outcome and
+  timing. It is used to measure use and cost. It contains no text, name, e-mail or account id, but
+  it is **not anonymous**: it carries the job's id, so anyone who can read MyDubb's database can
+  match it to the job record and, through that, to the account. MyDubb's configuration keeps usage
+  records for 180 days; a periodic cleanup then removes them, so removal can happen somewhat later.
+  Until then they stay even if the job record or the account is removed.
+- **A list of technical terms.** English technical terms found in translations, with counts and
+  when they were first and last seen, without the text, the job or the account they came from. This
+  list is **not deleted automatically**.
+- **Logs.** MyDubb's application logs hold counts, status codes and ids, not your text or
+  translations. The web server's access log records technical details of each request, including
+  your network address, in logs kept by MyDubb's host. Render
+  [documents](https://render.com/docs/logging#retention-period) a log retention period of 7 days
+  for MyDubb's workspace plan (Hobby). That describes Render's log retention by plan; it is not a
+  promise about every internal log of a provider, or about exports or backups.
 
 ## Your account
 
-Access is by invitation. Your e-mail address, name and a record of your sign-ins are kept to run
-your account. Sign-in is handled by Amazon Cognito; MyDubb does not store your password. The
-extension's token lasts at most 12 hours.
+Access is by invitation. MyDubb keeps your e-mail address, your name, your identifier at Amazon
+Cognito, your account's status and role, and the time of your last sign-in. Sign-in is handled by
+Amazon Cognito, and MyDubb does not store your password. The extension's token lasts at most 12
+hours; the server stores only a hash of it, and a periodic cleanup removes that record after the
+token has expired or ended. Account records, and records of a change to an account's role, are
+**not deleted automatically**.
 
-## Who receives data
+## Who can see your data at MyDubb
 
-Microsoft (Azure Translator and Speech); the infrastructure providers that run MyDubb
-(`[PO: confirm: Render for the application and Neon for the database, both in the US West
-region as documented, and Amazon Web Services for sign-in]`). MyDubb does not sell your data and
-does not use it for advertising or credit decisions, and it does not use it for any purpose
-other than providing the dubbing you asked for. `[PO: confirm]` People working on MyDubb do not
-read your text except `[PO: state the cases, e.g. with your consent, for security or abuse
-investigation, or to follow the law]`.
+People with the administrator role at MyDubb can open a Usage & Costs page on the MyDubb website,
+which shows usage records and reference costs per job. Its API reads the usage records and each
+job's status and error code. It returns the job's id, but not an e-mail address, an account id, a
+transcript or a translation.
 
-## Ending it and removing data
+The operator reads your content only when you provide it yourself for support, or when the law
+requires it.
 
-- **Disconnect** in the extension removes the token from your browser and ends it on the server.
+## Service providers
+
+- **Microsoft** (Azure Translator and Azure Speech): your text and its translation.
+- **Render**: hosts the MyDubb application, its temporary result files and its logs. Requests reach
+  Render through a Cloudflare network edge.
+- **Neon**: hosts MyDubb's database.
+- **Amazon Web Services** (Amazon Cognito): account sign-in.
+
+This policy does not promise that data stays in a particular region or country.
+
+## How your data is not used
+
+MyDubb does not sell user data. It does not transfer user data to others except in the cases the
+Chrome Web Store User Data Policy allows, such as the service providers above that are needed to
+provide the extension's purpose. It does not use or transfer user data for purposes unrelated to
+the extension's purpose, for advertising, or to determine creditworthiness or for lending.
+
+## Ending the connection and removing data from your browser
+
+- **Disconnect** removes the token from your browser and ends it on the server.
 - **Clear** empties the transcript text in the panel and removes the saved draft and any selection
-  waiting to be shown. It does **not** remove the translation or the audio already loaded in the
-  player, the job being followed or your start times.
-- The **audio** (kept in memory only) is discarded when a newer result replaces it, when you move
-  to another lecture, reload or leave the lecture page, or close the tab, and when you
-  **Disconnect** or connect another account.
-- The saved **translation** of the loaded audio is removed when a newer result has loaded and
-  replaces it, when you move to another lecture or off the lecture pages, when you **Disconnect**
-  or the connection ends or expires, when another account connects, when you close the tab
-  (everything the extension saved for that tab goes), and when the browser quits (session memory is
-  cleared). It does not matter whether a job is still being followed. A request that MyDubb
-  refuses, or a job or download that fails, does not remove the earlier audio or its translation.
-  Reloading the page keeps the saved translation.
-- Uninstalling the extension removes everything it stored in your browser.
-- Translations and audio disappear from the server on their own (see above).
-- Questions about your account or job records: write to support@mydubb.com from the e-mail
-  address of your MyDubb account. Do not include transcripts, passwords or tokens.
-  `[PO: what the operator will do with a request to delete data, and within what time. No
-  deletion process exists today, so nothing is promised here; write only what will be done. A
-  proposed process is in DATA-REQUESTS.md]`
+  waiting to be shown. It does not remove the translation or the audio already loaded in the player,
+  the job being followed or your start times.
+- **Your choices** are removed when you close the tab or quit the browser. Moving to another lecture
+  blanks the start times.
+- **The audio** (kept in memory only) is discarded when a newer result replaces it, when you move to
+  another lecture, reload or leave the lecture page, or close the tab, and when you Disconnect or
+  connect another account.
+- **The saved translation** of the loaded audio is removed when a newer result has loaded and
+  replaces it, when you move to another lecture or off the lecture pages, when you Disconnect or the
+  connection ends or expires, when another account connects, when you close the tab, and when the
+  browser quits. A request that MyDubb refuses, or a job or download that fails, does not remove the
+  earlier audio or its translation. Reloading the page keeps the saved translation.
+- **Uninstalling** the extension removes everything it stored in your browser.
+
+## Asking about your data
+
+You can ask to access, correct or delete your data by writing to support@mydubb.com. Please write
+from the e-mail address of your MyDubb account if you can, and do not send transcripts, passwords or
+tokens. The operator verifies who is asking and handles the request as far as is practically
+possible and as the law requires.
+
+MyDubb has no automatic deletion of account or job records today. This policy does not promise that
+all data can be deleted, or a fixed response time. Nothing here limits any right you have under the
+law that applies to you.
 
 ## Security
 
 The extension talks to MyDubb over HTTPS only. Your token is kept in the extension's session
-storage, which Udemy pages cannot read, and the extension never sends your password or cookies.
-No system is perfectly secure, and this policy makes no promise beyond this description.
+storage, and the extension never sends your password or cookies. No system is perfectly secure, and
+this policy makes no promise beyond this description.
 
 ## Chrome Web Store user data policy
 
 The use of information received by the MyDubb extension adheres to the Chrome Web Store User Data
 Policy, including the Limited Use requirements.
 
-## Changes
+## Changes to this policy
 
-`[PO: how changes will be announced]`
-
----
-
-# Appendix A: MyDubb website (NOT part of the extension policy; source for a separate website policy)
-
-Written from `docs/GUEST_ACCESS.md`, `docs/AUTH_API.md`, `docs/API.md` and `docs/ARCHITECTURE.md`,
-not from production. The public `GET https://mydubb.com/api/meta` (read 2026-11-01) reports
-**guest access enabled** and **YouTube caption import enabled (Supadata)**, so both sections
-below describe features that are on; the same answer reports sign-up off and password reset on.
-Cookies, analytics and the web server's log retention were not verified. Nothing here promises
-more than the code does.
-
-## Cookies
-
-The website uses cookies the server sets and JavaScript cannot read: `mydubb_auth` (your
-signed-in session; only its SHA-256 is stored on the server), `mydubb_auth_challenge` (binds a
-pending sign-in step, such as choosing a new password, to your browser, short-lived) and, for a
-guest, `mydubb_guest`. All are `HttpOnly`, `SameSite=Strict` and `Secure` in production. They are
-needed to sign in or to keep a session, not for advertising. `[PO: confirm the site has no
-analytics or other cookies]`
-
-## Trying MyDubb as a guest (website only; not available in the extension)
-
-- A guest session is a random token in the `mydubb_guest` cookie, **valid 24 hours** from its
-  start. The server stores a hash of the token and a security token for the page, not your name or
-  e-mail.
-- **Network quota.** To limit use, the server reads the client's network address, reduces it
-  (an IPv6 address to its /64 prefix) and stores only a **keyed hash** of it, not the address
-  itself, with the guest session and with each guest job. Limits in the code today: 5 jobs per
-  guest session, 20 per network per sliding 24 hours, 1,000 words and 10 minutes of audio per
-  job, 5 YouTube imports per session. Quota rows are removed by clean-up after they leave the
-  24-hour window; rows for a job in progress are kept until it ends. (`/api/meta` reports the
-  same limits on production, 2026-11-01: 5 jobs per session, 20 per network per 86,400 s, 1,000
-  words, 600 s of audio, session 86,400 s, 5 imports per session, 20 per network.)
-- Clearing cookies gives a new guest session, with the same network quota. Signing in to an
-  account ends the guest session of that browser.
-- Guest jobs are translated and voiced exactly like account jobs (Microsoft Azure, same
-  retention as above); the job record keeps no link to a guest session once the session row is
-  cleaned up.
-- The application's own logs never contain the network address or its hash. The web server's
-  access log does print the client address of every request; how long the host keeps it is not
-  verified here. `[PO]`
-
-## Importing captions from a YouTube link (website only; not in the extension)
-
-- If you paste a YouTube link and choose **Import transcript**, MyDubb's server sends that link
-  to **Supadata**, a third-party caption service, asking only for the English captions that
-  already exist on the video. The captions come back and fill the form. No job is created and
-  Azure is not called by the import.
-- MyDubb does not store the link, the video id or the captions for the import (the quota record
-  of a guest import holds no link, video or caption), and its logs hold only status codes,
-  counts, timing and credits used. What Supadata keeps is governed by Supadata's terms and is not
-  verified here. `[PO: link to Supadata's terms]`
-- Importing as a guest counts against the import quota above.
-
-## Not promised
-
-No automatic deletion of job records or accounts exists today (see the main text);
-`[PO: whether the website will offer a way to ask for deletion]`.
+When this policy changes, the text on this page and the Last updated date are changed. Additional
+notice is given when the law requires it.

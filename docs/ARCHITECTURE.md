@@ -150,8 +150,8 @@ background worker is involved; this fits the single-instance design.
 |---|---|---|
 | Transcript text | Worker memory only (`JobInput`) | Until the job finishes |
 | Job metadata (status, voice, timestamps, baseline duration, audio speed, character count, provider names, error) | PostgreSQL `jobs` | Not deleted automatically in M1 (see open decisions) |
-| Translation text + MP3 | Local disk `RESULT_STORAGE_DIR/<job_id>/` | `RESULT_TTL_SECONDS` after completion (default 1 h) |
-| Per-job working files | OS temp dir | Deleted when the pipeline ends |
+| Translation text + MP3 | Local disk `RESULT_STORAGE_DIR/<job_id>/` | Access ends `RESULT_TTL_SECONDS` after completion (default 1 h); the periodic cleanup removes the files some time after that, not at that exact moment |
+| Per-job working files | OS temp dir | Removal is attempted when the pipeline ends; a cleanup failure or a process that stops abruptly can leave files behind |
 | Sessions | PostgreSQL `access_sessions` | Deleted by cleanup once expired or revoked; their jobs keep metadata with `session_id = NULL` |
 | Cognito users (issuer, `sub`, email, display name, disabled flag; no password) | PostgreSQL `users` | No automatic deletion; their jobs reference them (`user_id`, set NULL if a user row is deleted) |
 | Cognito sessions | PostgreSQL `user_sessions` | Deleted by cleanup once expired or revoked |
