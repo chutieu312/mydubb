@@ -1476,6 +1476,212 @@ describe("one page: English transcript, Translate to, Your audio", () => {
     expect($("account-detail").textContent).toBe("Lan (lan@example.com)");
     expect($("header-details").contains($("disconnect"))).toBe(true);
     expect($<HTMLButtonElement>("disconnect").hidden).toBe(false);
-    expect($("generate-hint").textContent).toBe("Nothing is sent to MyDubb until you choose Generate audio.");
+    expect($("generate-hint").textContent).toBe("Your text is sent to MyDubb only when you choose Generate audio.");
+  });
+});
+
+describe("the stored translation of the loaded audio (loaded:<tab>)", () => {
+  const LOADED = `loaded:${TAB}`;
+  const text = (id: string) => $(id).textContent;
+  const refusal = () => new MyDubbError(422, "validation_error", "Fix the times.", [{ field: "last_sentence_start", message: "Must be after the first." }]);
+  const resultFor = (id: string) => ({
+    ...RESULT,
+    job_id: id,
+    audio: { ...RESULT.audio, url: `/api/jobs/${id}/result/audio` },
+    translation: { ...RESULT.translation, text: `Bản dịch ${id}` },
+  });
+  /** Job A is made; the second Generate is refused (no job B, so the tab's job record is gone). */
+  const refusedAfterA = () =>
+    fakeApi({
+      createJob: vi.fn().mockResolvedValueOnce({ id: "job-A", status: "queued" }).mockRejectedValue(refusal()),
+      getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_token: string, id: string) => resultFor(id)),
+    });
+  /** Job A, then job B for whoever is connected next. */
+  const aThenB = () =>
+    fakeApi({
+      createJob: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "job-A", status: "queued" })
+        .mockResolvedValueOnce({ id: "job-B", status: "queued" }),
+      getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_token: string, id: string) => resultFor(id)),
+    });
+
+  async function aLoadedThenBRefused() {
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    const made = await started(storage, refusedAfterA());
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(player.view?.owner.jobId).toBe("job-A");
+    expect(storage.data[LOADED]).toMatchObject({ jobId: "job-A", text: "Bản dịch job-A" });
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(made.api.createJob).toHaveBeenCalledTimes(2);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined(); // the refusal left no job record
+    return { ...made, storage };
+  }
+
+  it("a refused new Generate keeps the earlier audio and its translation, playing and stored", async () => {
+    const { storage } = await aLoadedThenBRefused();
+    expect(player.view?.owner.jobId).toBe("job-A");
+    expect(player.ended).toEqual([]);
+    expect(text("translation")).toBe("Bản dịch job-A");
+    expect(storage.data[LOADED]).toMatchObject({ jobId: "job-A", text: "Bản dịch job-A" });
+  });
+
+  it("a failed new job keeps the earlier translation stored as well", async () => {
+    const failed = { id: "job-B", status: "failed", error: { code: "speech_quota_exceeded", message: "The speech quota is used up." } };
+    const api = aThenB();
+    api.getJob.mockImplementation(async (_token: string, id: string) => (id === "job-B" ? failed : { id, status: "completed" }));
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    await started(storage, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(text("job-error")).toMatch(/speech quota is used up/);
+    expect(player.view?.owner.jobId).toBe("job-A");
+    expect(storage.data[LOADED]).toMatchObject({ jobId: "job-A" });
+  });
+
+  it("is removed on Disconnect, also when the refused Generate left no job record", async () => {
+    const { dubbing, storage } = await aLoadedThenBRefused();
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH } });
+    await settle();
+    expect(storage.data[LOADED]).toBeUndefined();
+  });
+
+  it("is removed when the token is no longer accepted (the stored connection goes), with no job record", async () => {
+    const { dubbing, storage } = await aLoadedThenBRefused();
+    delete storage.data[AUTH_KEY];
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH } });
+    await settle();
+    expect(storage.data[LOADED]).toBeUndefined();
+  });
+
+  it("is removed when another account connects, with no job record", async () => {
+    const { dubbing, storage } = await aLoadedThenBRefused();
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+    await settle();
+    expect(storage.data[LOADED]).toBeUndefined();
+  });
+
+  it("is removed when the tab moves to another lecture, with no job record", async () => {
+    const { dubbing, storage } = await aLoadedThenBRefused();
+    lesson = "demo-course/2";
+    dubbing.lessonState("demo-course/2");
+    await settle();
+    expect(storage.data[LOADED]).toBeUndefined();
+  });
+
+  it("is removed when the tab leaves the lecture pages", async () => {
+    const { dubbing, storage } = await aLoadedThenBRefused();
+    lesson = null;
+    dubbing.lessonState(null);
+    await settle();
+    expect(storage.data[LOADED]).toBeUndefined();
+  });
+
+  it("a page reload (the player session gone) on the same lecture and connection keeps it", async () => {
+    const { dubbing, storage } = await aLoadedThenBRefused();
+    player.set(null);
+    dubbing.lessonState(LESSON);
+    await settle();
+    expect(storage.data[LOADED]).toMatchObject({ jobId: "job-A" });
+  });
+
+  describe("a write that is still pending when the identity or the lecture changes", () => {
+    /** The first write of A's translation waits until released; everything else goes through. */
+    function holdA() {
+      const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+      const held = deferred();
+      const set = storage.set;
+      storage.set = vi.fn(async (items: Record<string, unknown>) => {
+        const value = items[LOADED] as { jobId?: string } | undefined;
+        if (value?.jobId === "job-A") await held.promise;
+        return set(items);
+      });
+      return { storage, release: held.resolve };
+    }
+
+    it("the lecture changes: A's late write does not bring the translation back", async () => {
+      const { storage, release } = holdA();
+      const { dubbing } = await started(storage, aThenB());
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(storage.set).toHaveBeenCalledWith(expect.objectContaining({ [LOADED]: expect.objectContaining({ jobId: "job-A" }) }));
+      lesson = "demo-course/2";
+      dubbing.lessonState("demo-course/2");
+      await settle();
+      release();
+      await settle(10);
+      expect(storage.data[LOADED]).toBeUndefined();
+    });
+
+    it("the account changes: A's late write does not bring the translation back", async () => {
+      const { storage, release } = holdA();
+      const { dubbing } = await started(storage, aThenB());
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH } });
+      await settle();
+      release();
+      await settle(10);
+      expect(storage.data[LOADED]).toBeUndefined();
+    });
+
+    it("another account loads B meanwhile: A's late write does not overwrite B's translation", async () => {
+      const { storage, release } = holdA();
+      const { dubbing } = await started(storage, aThenB());
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+      $<HTMLButtonElement>("generate").click();
+      await settle(12);
+      expect(player.view?.owner.jobId).toBe("job-B");
+      release();
+      await settle(10);
+      expect(storage.data[LOADED]).toMatchObject({ jobId: "job-B", text: "Bản dịch job-B", userId: "u2", connectionId: "conn-b", lessonKey: LESSON });
+    });
+  });
+
+  describe("when the panel is reopened", () => {
+    const stored = (over: Record<string, unknown> = {}) => ({
+      jobId: "job-A",
+      text: "Bản dịch job-A",
+      tag: "vi",
+      dir: "ltr",
+      userId: "u1",
+      connectionId: "conn-a",
+      lessonKey: LESSON,
+      ...over,
+    });
+
+    it("keeps it for the same account, connection and lecture", async () => {
+      const storage = fakeStorage({ [AUTH_KEY]: AUTH, [LOADED]: stored() });
+      await started(storage);
+      await settle();
+      expect(storage.data[LOADED]).toMatchObject({ jobId: "job-A" });
+    });
+
+    it.each([
+      ["another account", { userId: "u9" }],
+      ["another connection", { connectionId: "conn-old" }],
+      ["another lecture", { lessonKey: "demo-course/9" }],
+      ["a copy without its owner (older shape)", { userId: undefined, connectionId: undefined, lessonKey: undefined }],
+    ])("removes it for %s", async (_name, over) => {
+      const storage = fakeStorage({ [AUTH_KEY]: AUTH, [LOADED]: stored(over) });
+      await started(storage);
+      await settle();
+      expect(storage.data[LOADED]).toBeUndefined();
+    });
+
+    it("removes it when no account is connected", async () => {
+      const storage = fakeStorage({ [LOADED]: stored() });
+      await started(storage);
+      await settle();
+      expect(storage.data[LOADED]).toBeUndefined();
+    });
   });
 });

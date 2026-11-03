@@ -29,6 +29,10 @@ export function AppFooter({ disclosure, resultTtlSeconds }: Props) {
           </p>
         </div>
       </details>
+      {/* A real file (frontend/public), not a route of this app: a full page load, no sign-in. */}
+      <p className="small">
+        <a href="/extension-privacy.html">Extension privacy policy</a>
+      </p>
     </footer>
   );
 }

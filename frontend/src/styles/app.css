@@ -811,6 +811,10 @@ select[aria-invalid="true"] {
   max-width: 60ch;
 }
 
+.footer a {
+  color: var(--brand);
+}
+
 /* ---- Email + password sign-in ---- */
 
 .sr-only {

@@ -108,6 +108,17 @@ describe("App provider labels", () => {
     expect(privacy?.textContent).toContain("kept temporarily (about 1 hour)");
   });
 
+  it("the footer links to the extension's own policy, named as such, outside the Privacy details", async () => {
+    stubApi({ translation: "azure", speech: "azure", audio: "ffmpeg" });
+    render(<App />);
+    await screen.findByLabelText("English Transcript");
+
+    const link = screen.getByRole("link", { name: "Extension privacy policy" });
+    expect(link.getAttribute("href")).toBe("/extension-privacy.html");
+    expect(link.closest("footer")).toBeTruthy();
+    expect(link.closest("details")).toBeNull();
+  });
+
   it("Azure translation + mock audio: per-component banner and disclosure before submit", async () => {
     stubApi({ translation: "azure", speech: "mock", audio: "mock" });
     render(<App />);

@@ -8,11 +8,17 @@
   },
   "scripts": {
     "build": "node build.mjs",
+    "build:release": "node build.mjs --release",
     "check:dist": "node check-dist.mjs",
+    "check:dist:release": "node check-dist.mjs --release",
+    "package:draft": "node store/tools/make-zip.mjs",
+    "package:release": "node store/tools/make-zip.mjs --release",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run",
-    "test:browser": "node build.mjs --e2e && playwright test"
+    "test": "vitest run && node --test \"store/tools/*.test.mjs\"",
+    "test:browser": "node build.mjs --e2e && playwright test",
+    "store:shots": "node build.mjs --e2e && playwright test -c store/shots",
+    "store:icons": "node store/tools/render-icons.mjs && node store/tools/render-preview.mjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
