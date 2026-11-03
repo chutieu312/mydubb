@@ -194,14 +194,29 @@ migration.
 short session from the application's factory, opened after the auth check (the auth session has
 already queried, and the level can only be set before a transaction's first query). `generated_at`
 says when each response was read; summary, list and detail are separate requests and can differ.
-Inside the transaction `lock_timeout` and `statement_timeout` are both **10 s**, and a summary stops
-after **30 s** in total, checked between batches; both end in `503` (`usage_report_timeout`), any
-other database failure in `503 usage_report_unavailable`, logged by exception type only. Never a
-`200` with an empty report. The timeouts last for that transaction only, and the connection goes
-back to the pool before the response is sent. A report request holds two pooled connections (auth
-and report) while it runs. Not bounded by those limits: waiting for a pooled connection (the
-engine's pool timeout) and a network that silently stops answering. A failure inside the auth check
-itself is handled like on any other endpoint (`500 internal_error`).
+
+A report request holds **one pooled connection at a time**: the auth check reads the role from the
+database as on any request, its transaction ends and its connection goes back to the pool, and only
+then does the report ask for its own. So it never waits for a connection while holding one, and
+concurrent reports cannot starve each other on the application's pool of 5 + 5; beyond ten at once
+they queue for a connection as any other request does. This is local to these routes: `get_db` and
+the other endpoints are unchanged. A role revoked after that check applies from the next request, as
+before.
+
+Inside the transaction `lock_timeout` and `statement_timeout` are at most **10 s**. A whole summary
+has a budget of **30 s**, counted from before it asks for its connection: each read (batches,
+attempts and the two final queries, also when the period has no batch) is limited on the server to
+the time left, and a summary over budget is an error even if its reads all ended. A list or a detail
+has no such budget: at most 10 s for each of its two or three statements. Going over, or finding no
+pooled connection, ends in `503 usage_report_timeout`; any other database failure in
+`503 usage_report_unavailable`, logged by exception type only. Never a `200` with an empty report.
+The timeouts last for that transaction only, and the connection goes back to the pool before the
+response is sent, on success and on error.
+
+Not bounded by those limits: a network that silently stops answering, and a summary that gets its
+connection only as the pool times out (30 s) is refused at that point rather than sooner. A failure
+inside the auth check itself, waiting for its connection included, is handled like on any other
+endpoint (`500 internal_error`, logged by the global handler).
 
 **Moving between the pages.** The Studio stays mounted, hidden, behind the page: its form (the draft
 in page memory, nothing stored or put in the address), its job panel and its status polling carry on
@@ -331,7 +346,7 @@ uv run ruff check . && uv run ruff format --check .
 export TEST_DATABASE_URL=postgresql://...   # a disposable database
 uv run pytest tests/test_usage_providers.py tests/test_usage_jobs.py \
   tests/test_usage_report.py tests/test_usage_retention.py tests/test_usage_timeouts.py \
-  tests/test_admin_usage.py
+  tests/test_admin_usage.py tests/test_admin_usage_limits.py
 cd ../frontend && npx vitest run src/App.adminUsage.test.tsx src/lib/usageFilters.test.ts
 cd ../e2e && bash run-e2e.sh tests/auth.adminUsage.spec.ts
 ```
@@ -352,7 +367,11 @@ figures as the command and its CSV on one data set, every usage case, several pr
 a summary independent of batch and page size, one snapshot with commits landing between its queries,
 the transaction's isolation, read-only state and timeouts (and that they do not reach pooled
 connections), a real lock ending in `503`, logs without SQL or secrets, and query and object counts
-on 500 jobs (no query per job, no full read). The frontend tests and the browser specs cover the link
+on 500 jobs (no query per job, no full read). `test_admin_usage_limits.py` uses real `pg_sleep` delays
+and more concurrent requests than the pool has connections, with the pool's wait and the budget
+shortened to keep it quick: no connection held while a report asks for its own, every way out
+returning its connections, and the budget over the final queries, an empty period, a slow statement
+and the wait for a connection. The frontend tests and the browser specs cover the link
 and refusals, filters, pages, stale answers, the `401` and `403` paths, sign-out with requests still
 running, direct address, reload, Back/Forward, and the Studio draft, job and audio.
 

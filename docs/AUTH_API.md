@@ -216,7 +216,8 @@ cursor, `since` and `until` included.
 - `422 validation_error` with `fields`: a bad time, a reversed or too long period, an unknown language,
   a bad id, a `limit` out of range (refused, never clamped), a broken cursor or one issued for other
   filters or another job.
-- `503 usage_report_timeout`: a lock wait or statement over 10 s, or a summary over 30 s.
+- `503 usage_report_timeout`: a lock wait or statement over 10 s, a summary over 30 s (all of it,
+  from asking for its connection to its last read), or no pooled connection in time.
 - `503 usage_report_unavailable`: any other database failure. Neither ever comes as an empty `200`.
 
 ### Guest sessions and sign-in

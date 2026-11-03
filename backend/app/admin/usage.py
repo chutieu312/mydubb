@@ -1,10 +1,11 @@
 """Usage & Costs: read-only reports of recorded usage and reference costs, for administrators.
 
-Every route depends on `require_admin` (the router's dependency, solved before anything else about
-the request is looked at) and then reads through `app.usage.queries`, in its own short read-only
-snapshot. A response holds only the fields declared here, built before the transaction ends: no
-transcript, translation, SSML, identity, address, URL of a video or provider message exists in the
-usage tables, and a job id gives access to its usage figures, never to the job.
+Every route depends on `require_admin` (through the router's dependency, solved before anything else
+about the request is looked at), returns the connection that check used, and only then reads through
+`app.usage.queries`, in its own short read-only snapshot on another. A response holds only the
+fields declared here, built before the transaction ends: no transcript, translation, SSML, identity,
+address, URL of a video or provider message exists in the usage tables, and a job id gives access to
+its usage figures, never to the job.
 
 docs/USAGE_COSTS.md, "The Usage & Costs page".
 """
@@ -21,8 +22,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from sqlalchemy.orm import Session
 
-from app.dependencies import get_services, require_admin
+from app.auth.principal import Principal
+from app.dependencies import get_db, get_services, require_admin
 from app.errors import ApiError
 from app.languages import TargetLanguage
 from app.services import AppServices
@@ -40,7 +44,24 @@ from app.usage.report import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/admin/usage", tags=["admin"], dependencies=[Depends(require_admin)])
+
+def _admin_holding_no_connection(
+    _: Annotated[Principal, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """`require_admin`, then its transaction ends and its connection goes back to the pool (`db` is
+    the session it used: a request has one `get_db`, and its closing commit then has nothing left).
+
+    A report asks for a connection of its own. Waiting for it while holding this one would let
+    requests take the whole pool and wait for each other until the pool times out. Nothing later
+    in the request reads through this session, and the check it made stands as for any request."""
+    with _report_errors():
+        db.commit()
+
+
+router = APIRouter(
+    prefix="/api/admin/usage", tags=["admin"], dependencies=[Depends(_admin_holding_no_connection)]
+)
 
 DEFAULT_PERIOD = timedelta(days=7)
 MAX_PERIOD = timedelta(days=31)
@@ -357,7 +378,8 @@ def _report_errors() -> Iterator[None]:
         raise _timed_out() from None
     except SQLAlchemyError as exc:
         logger.warning("Usage report failed (%s)", type(exc).__name__)
-        if getattr(getattr(exc, "orig", None), "sqlstate", None) in _TIMED_OUT:
+        sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None)
+        if sqlstate in _TIMED_OUT or isinstance(exc, PoolTimeoutError):
             raise _timed_out() from None
         raise ApiError(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -391,8 +413,9 @@ Cursor = Annotated[str | None, Query(max_length=_MAX_CURSOR)]
 def usage_summary(period: Period, services: Services) -> dict[str, Any]:
     """The whole filtered period, whatever page of jobs is being shown."""
     prices = default_price_book()
+    budget = queries.SummaryBudget()
     with _report_errors(), queries.report_snapshot(services.session_factory) as db:
-        summary = queries.summarize_period(db, period.filters, prices)
+        summary = queries.summarize_period(db, period.filters, prices, budget)
         totals = summary.totals
         return {
             "generated_at": datetime.now(UTC),
