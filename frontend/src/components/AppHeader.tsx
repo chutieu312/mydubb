@@ -1,5 +1,7 @@
 import type { AuthUser } from "../api/authTypes";
+import { USAGE_PATH, type AppRoute } from "../lib/appRoute";
 import type { Theme } from "../lib/theme";
+import { AppLink } from "./AppLink";
 import { ThemeToggle } from "./ThemeToggle";
 
 interface Props {
@@ -10,6 +12,9 @@ interface Props {
   user?: Pick<AuthUser, "email" | "display_name"> | null;
   // A guest session ("Try as guest"): no account; the button leaves guest mode.
   guest?: boolean;
+  // The page being shown, for an administrator only: the server decides who gets these links, and
+  // it checks every report request whatever the page shows.
+  adminRoute?: AppRoute | null;
   loggingOut: boolean;
   onLogout: () => void;
 }
@@ -20,6 +25,7 @@ export function AppHeader({
   signedIn,
   user,
   guest = false,
+  adminRoute = null,
   loggingOut,
   onLogout,
 }: Props) {
@@ -36,6 +42,16 @@ export function AppHeader({
           MyDubb
         </div>
         <div className="header-actions">
+          {adminRoute && (
+            <nav className="header-nav" aria-label="Administrator">
+              <AppLink href="/" aria-current={adminRoute === "studio" ? "page" : undefined}>
+                Studio
+              </AppLink>
+              <AppLink href={USAGE_PATH} aria-current={adminRoute === "usage" ? "page" : undefined}>
+                Usage &amp; Costs
+              </AppLink>
+            </nav>
+          )}
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           {guest && (
             <>

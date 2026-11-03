@@ -104,6 +104,10 @@ export function installAuthFetch(routes: Record<string, Handler[]>) {
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const method = init.method ?? "GET";
       const path = String(input);
+      // Every signed-in account asks this once. An ordinary user unless a test says otherwise.
+      if (path === "/api/admin/session" && !queues.has(`${method} ${path}`)) {
+        return apiError(403, "admin_required", "This requires an administrator.");
+      }
       const queue = queues.get(`${method} ${path}`);
       const first = queue?.[0];
       const handler = first?.sticky ? first : queue?.shift();

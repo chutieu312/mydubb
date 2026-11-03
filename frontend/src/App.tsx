@@ -5,14 +5,18 @@ import type { AuthUser } from "./api/authTypes";
 import { ApiError, api, setCsrfToken } from "./api/client";
 import { guestApi, type GuestSession } from "./api/guestApi";
 import type { AppMeta, Job } from "./api/types";
+import { usageApi } from "./api/usageApi";
 import { AppFooter } from "./components/AppFooter";
 import { AppHeader } from "./components/AppHeader";
 import { AccessGate } from "./features/access/AccessGate";
+import { AdminGate, type AdminAccess } from "./features/admin/AdminGate";
+import { UsagePage } from "./features/admin/UsagePage";
 import { PasswordAuthFlow } from "./features/auth/PasswordAuthFlow";
 import { DubbingForm } from "./features/dubbing/DubbingForm";
 import { GuestBanner } from "./features/guest/GuestBanner";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
+import { replaceUrl, routeOf, USAGE_PATH, usePathname } from "./lib/appRoute";
 import { authModeOf, guestAccessOf, passwordResetOf } from "./lib/authMode";
 import { languageChoiceOf, languageNouns } from "./lib/languages";
 import { azureDisclosure, azureDisclosureShort } from "./lib/providers";
@@ -41,6 +45,13 @@ type Restored =
 // Drafts are kept per identity: a guest's draft never appears for an account, nor the reverse.
 const guestOwner = (guest: GuestSession) => `guest:${guest.guest.id}`;
 
+// The filters in the address belong to the administrator who set them.
+const dropUsageFilters = () => {
+  if (routeOf(window.location.pathname) === "usage" && window.location.search) {
+    replaceUrl(USAGE_PATH);
+  }
+};
+
 export function App() {
   const [meta, setMeta] = useState<AppMeta | null>(null);
   const [auth, setAuth] = useState<AuthState>("checking");
@@ -56,6 +67,13 @@ export function App() {
   const logoutPending = useRef(false);
   const [theme, toggleTheme] = useTheme();
   const [drafts] = useState(createDraftKeeper);
+  const route = routeOf(usePathname());
+  const studioView = useRef<HTMLDivElement>(null);
+  const studioHeading = useRef<HTMLHeadingElement>(null);
+  // Whether this identity is an administrator: asked once per identity (GET /api/admin/session),
+  // again only on Try again. A later refusal of a report request ends it ("ended").
+  const [adminCheck, setAdminCheck] = useState<{ key: string; access: AdminAccess } | null>(null);
+  const [adminAttempt, setAdminAttempt] = useState(0);
 
   // Identity generation. Every change of who is using the page (session restored, sign in, sign
   // out, session ended, guest session started) starts a new one. The answer to a request sent
@@ -157,6 +175,7 @@ export function App() {
   const expireSession = useCallback(() => {
     const wasGuest = auth === "guest";
     nextIdentity();
+    dropUsageFilters();
     setCsrfToken(null);
     setJobId(null);
     setUser(null);
@@ -172,6 +191,31 @@ export function App() {
           : "Your session has expired or ended. Please enter the Access Code again.",
     );
   }, [mode, auth, nextIdentity]);
+
+  const adminKey = `${identity}#${adminAttempt}`;
+  const canBeAdmin = auth === "authenticated" && mode === "cognito";
+  useEffect(() => {
+    if (!canBeAdmin) return;
+    const controller = new AbortController();
+    const gen = identity;
+    const settle = (access: AdminAccess) => {
+      if (!controller.signal.aborted && isCurrent(gen)) setAdminCheck({ key: adminKey, access });
+    };
+    usageApi
+      .adminSession(controller.signal)
+      .then(() => settle("admin"))
+      .catch((err: unknown) => {
+        if (controller.signal.aborted || !isCurrent(gen)) return;
+        if (err instanceof ApiError && err.isUnauthenticated) expireSession();
+        else settle(err instanceof ApiError && err.code === "admin_required" ? "denied" : "failed");
+      });
+    return () => controller.abort();
+  }, [canBeAdmin, adminKey, identity, isCurrent, expireSession]);
+  const adminAccess: AdminAccess = !canBeAdmin
+    ? "none"
+    : adminCheck?.key === adminKey
+      ? adminCheck.access
+      : "checking";
 
   const handleAuthenticated = useCallback(
     (signedIn: AuthUser | null) => {
@@ -249,8 +293,28 @@ export function App() {
       guestChanged: () => {
         if (isCurrent(gen)) refreshGuest(gen);
       },
+      // 403 admin_required on a report: still signed in, no longer an administrator.
+      adminEnded: () => {
+        if (!isCurrent(gen)) return;
+        dropUsageFilters();
+        setAdminCheck({ key: `${gen}#${adminAttempt}`, access: "ended" });
+      },
     };
-  }, [identity, auth, isCurrent, expireSession, refreshGuest]);
+  }, [identity, auth, adminAttempt, isCurrent, expireSession, refreshGuest]);
+
+  // The Studio stays mounted behind the Usage page, so its form and job are as they were on
+  // return. Sound does not go on without its controls on screen: the player pauses and keeps its
+  // place. Focus follows the page for keyboard and screen reader users.
+  const previousRoute = useRef(route);
+  useEffect(() => {
+    if (previousRoute.current === route) return;
+    previousRoute.current = route;
+    if (route === "usage") {
+      studioView.current?.querySelectorAll("audio").forEach((player) => player.pause());
+    } else {
+      studioHeading.current?.focus({ preventScroll: true });
+    }
+  }, [route]);
 
   const rememberDraft = useCallback(
     (draft: StudioDraft) => {
@@ -262,6 +326,7 @@ export function App() {
   const signedOut = () => {
     // An explicit sign out (or a session the server confirms is gone) discards the draft.
     nextIdentity();
+    dropUsageFilters();
     drafts.clear();
     setCsrfToken(null);
     setJobId(null);
@@ -328,6 +393,7 @@ export function App() {
         signedIn={auth === "authenticated"}
         user={user}
         guest={auth === "guest"}
+        adminRoute={adminAccess === "admin" ? route : null}
         loggingOut={loggingOut}
         onLogout={logout}
       />
@@ -374,11 +440,24 @@ export function App() {
               onAuthenticated={handleAuthenticated}
             />
           )}
+          {!blockingError && inStudio && meta && route === "usage" && (
+            adminAccess === "admin" ? (
+              // A new identity starts empty: nothing of the previous one's report can come back.
+              <UsagePage
+                key={identity}
+                languages={languages.options}
+                onSessionExpired={bound.sessionExpired}
+                onAccessEnded={bound.adminEnded}
+              />
+            ) : (
+              <AdminGate access={adminAccess} onRetry={() => setAdminAttempt((n) => n + 1)} />
+            )
+          )}
           {!blockingError && inStudio && meta && (
-            <>
+            <div className="studio-view" ref={studioView} hidden={route === "usage"}>
               <section className="hero">
                 <p className="eyebrow">Your dubbing studio</p>
-                <h1>
+                <h1 ref={studioHeading} tabIndex={-1} className="focus-target">
                   {languageList
                     ? `Turn English into ${languageList} audio`
                     : "Turn English into audio in your chosen language"}
@@ -435,7 +514,7 @@ export function App() {
                   onFinished={auth === "guest" ? bound.guestChanged : undefined}
                 />
               )}
-            </>
+            </div>
           )}
         </main>
 

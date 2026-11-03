@@ -17,6 +17,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.access.router import router as access_router
 from app.admin.router import router as admin_router
+from app.admin.usage import router as admin_usage_router
 from app.auth.router import router as auth_router
 from app.config import AppEnv, AuthMode, Settings, load_settings
 from app.errors import error_response, install_error_handlers
@@ -254,6 +255,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
     if settings.auth_mode is AuthMode.COGNITO:
         app.include_router(auth_router)
         app.include_router(admin_router)
+        app.include_router(admin_usage_router)
         # With EXTENSION_IDS empty it answers 404 extension_disabled.
         app.include_router(extension_router)
     else:

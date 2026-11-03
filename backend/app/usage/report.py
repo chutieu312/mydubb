@@ -20,12 +20,13 @@ import csv
 import statistics
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TextIO
 
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import Select, and_, func, select, text
 from sqlalchemy.orm import Session
 
 from app.jobs.models import Job
@@ -33,6 +34,7 @@ from app.usage.models import JobUsage, UsageAttempt
 from app.usage.pricing import PriceBook, ReferencePrice, default_price_book
 
 SERVICES = ("translator", "speech")
+_KNOWN_BASES = ("actual", "estimated")
 NOT_INCLUDED = (
     "Supadata YouTube import (a separate operation, not a dubbing job), Render, Neon, payments, "
     "taxes and anything else the application costs."
@@ -72,6 +74,14 @@ class JobReport:
         return "real" if kinds == {"azure"} else "mock" if kinds == {"mock"} else "mixed"
 
 
+@dataclass(frozen=True)
+class CostLine:
+    service: str
+    price: ReferencePrice
+    characters: int
+    amount: Decimal
+
+
 @dataclass
 class Totals:
     """Usage of a group of jobs. Only real (non-mock) attempts feed the character sums."""
@@ -83,6 +93,7 @@ class Totals:
     chars: Counter = field(default_factory=Counter)  # (service, basis, price key) -> characters
     unknown_requests: Counter = field(default_factory=Counter)
     unknown_sent: Counter = field(default_factory=Counter)  # service -> chars sent, not billing
+    basis_requests: Counter = field(default_factory=Counter)  # (service, basis) -> attempts (real)
 
     def add_job(self, job: JobReport, prices: PriceBook) -> None:
         self.jobs += 1
@@ -92,8 +103,9 @@ class Totals:
                 continue
             self.requests[a.service] += 1
             self.outcomes[(a.service, a.outcome)] += 1
-            if a.usage_basis in ("actual", "estimated") and a.usage_amount is not None:
-                price = prices.price_for(a.service, a.started_at.astimezone(UTC).date())
+            self.basis_requests[(a.service, a.usage_basis)] += 1
+            if _has_known_usage(a):
+                price = _price_on_attempt_date(a, prices)
                 self.chars[(a.service, a.usage_basis, _price_key(price))] += a.usage_amount
             elif a.usage_basis == "unknown":
                 self.unknown_requests[a.service] += 1
@@ -115,6 +127,37 @@ class Totals:
 
     def unpriced(self, service: str) -> int:
         return sum(n for (s, _, key), n in self.chars.items() if s == service and key is None)
+
+    def cost_lines(self, prices: PriceBook) -> list[CostLine]:
+        """One line per service and price in force: a period can span several prices."""
+        lines = []
+        for service in SERVICES:
+            keys = {k for (s, _, k) in self.chars if s == service and k is not None}
+            for key in sorted(keys, key=str):
+                price = _price_of(prices, service, key)
+                chars = sum(n for (s, _, k), n in self.chars.items() if s == service and k == key)
+                lines.append(CostLine(service, price, chars, price.cost(chars)))
+        return lines
+
+
+def _has_known_usage(attempt: UsageAttempt) -> bool:
+    return attempt.usage_basis in _KNOWN_BASES and attempt.usage_amount is not None
+
+
+def _price_on_attempt_date(attempt: UsageAttempt, prices: PriceBook) -> ReferencePrice | None:
+    return prices.price_for(attempt.service, attempt.started_at.astimezone(UTC).date())
+
+
+def attempt_cost(attempt: UsageAttempt, prices: PriceBook) -> tuple[Decimal | None, str | None]:
+    """The reference cost of one attempt, or why there is none (the same rules as `Totals`)."""
+    if attempt.provider_kind == "mock":
+        return None, "mock"
+    if _has_known_usage(attempt):
+        price = _price_on_attempt_date(attempt, prices)
+        if price is None:
+            return None, "no_reference_price"
+        return price.cost(attempt.usage_amount), None
+    return None, "none" if attempt.usage_basis == "none" else "unknown_usage"
 
 
 def _price_key(price: ReferencePrice | None) -> tuple[str, str, str, str] | None:
@@ -159,22 +202,28 @@ def _snapshot(db: Session) -> None:
     db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
 
 
-def build_report(db: Session, filters: Filters, prices: PriceBook | None = None) -> Report:
-    _snapshot(db)
-    prices = prices or default_price_book()
-    conditions = _usage_conditions(filters)
-    rows = db.execute(
-        select(JobUsage, Job.status, Job.error_code)
-        .outerjoin(Job, Job.id == JobUsage.job_id)
-        .where(*conditions)
-        .order_by(JobUsage.started_at, JobUsage.job_id)
-    ).all()
-    jobs = {
+def usage_rows_query() -> Select:
+    """Each usage row with the job's own status and error code, while its row still exists."""
+    return select(JobUsage, Job.status, Job.error_code).outerjoin(Job, Job.id == JobUsage.job_id)
+
+
+def job_reports_of(rows: Iterable) -> dict[uuid.UUID, JobReport]:
+    return {
         usage.job_id: JobReport(
             usage, status or usage.outcome or "unknown", job_code or usage.error_code
         )
         for usage, status, job_code in rows
     }
+
+
+def build_report(db: Session, filters: Filters, prices: PriceBook | None = None) -> Report:
+    _snapshot(db)
+    prices = prices or default_price_book()
+    conditions = _usage_conditions(filters)
+    rows = db.execute(
+        usage_rows_query().where(*conditions).order_by(JobUsage.started_at, JobUsage.job_id)
+    ).all()
+    jobs = job_reports_of(rows)
     attempts = db.scalars(
         select(UsageAttempt)
         .join(JobUsage, JobUsage.job_id == UsageAttempt.job_id)
@@ -190,7 +239,7 @@ def build_report(db: Session, filters: Filters, prices: PriceBook | None = None)
         jobs[attempt.job_id].attempts.append(attempt)
     for job in jobs.values():
         job.reasons = _reasons(job)
-    first_usage_at = db.scalar(select(func.min(JobUsage.started_at)))
+    first_usage_at = _first_usage_at(db)
     without_usage = _jobs_without_usage(db, filters)
     # The report outlives the session (and its rollback): keep every loaded value on the objects.
     db.expunge_all()
@@ -202,6 +251,11 @@ def build_report(db: Session, filters: Filters, prices: PriceBook | None = None)
         first_usage_at=first_usage_at,
         generated_at=datetime.now(UTC),
     )
+
+
+def _first_usage_at(db: Session) -> datetime | None:
+    """The oldest usage row still in the database (retention may have removed older ones)."""
+    return db.scalar(select(func.min(JobUsage.started_at)))
 
 
 def _usage_conditions(f: Filters) -> list:
@@ -350,18 +404,14 @@ def _service_block(t: Totals, service: str, title: str, basis: str, book: PriceB
 def _cost_block(t: Totals, book: PriceBook) -> list[str]:
     lines = [f"Reference cost at paid-tier list prices ({book.currency}; services are on Free)"]
     total = Decimal(0)
-    for service in SERVICES:
-        keys = sorted({k for (s, _, k) in t.chars if s == service and k is not None}, key=str)
-        for key in keys:
-            price = _price_of(book, service, key)
-            chars = sum(n for (s, _, k), n in t.chars.items() if s == service and k == key)
-            amount = price.cost(chars)
-            total += amount
-            lines.append(
-                f"  {service} {price.sku} {price.region} {price.price}/1M chars"
-                f" (effective {price.effective_from}, checked {price.checked_on}):"
-                f" {_n(chars)} chars = {_money(amount)}"
-            )
+    for line in t.cost_lines(book):
+        price = line.price
+        total += line.amount
+        lines.append(
+            f"  {line.service} {price.sku} {price.region} {price.price}/1M chars"
+            f" (effective {price.effective_from}, checked {price.checked_on}):"
+            f" {_n(line.characters)} chars = {_money(line.amount)}"
+        )
     unknown = sum(t.unknown_requests.values())
     lines.append(
         f"  total of KNOWN usage: {_money(total)} {book.currency}"
