@@ -1,0 +1,164 @@
+{
+  "window_start_utc": "2026-11-01T22:35:04+00:00",
+  "observe_seconds": 660.0,
+  "statements_total": 408,
+  "statements_excluding_begin_commit": 216,
+  "connection_events": 2,
+  "longest_gap_without_any_statement_s": 15.0,
+  "by_statement": [
+    {
+      "statement": ";",
+      "count": 96,
+      "median_gap_s": 0.01,
+      "min_gap_s": 0.0,
+      "max_gap_s": 15.01
+    },
+    {
+      "statement": "BEGIN",
+      "count": 96,
+      "median_gap_s": 0.01,
+      "min_gap_s": 0.0,
+      "max_gap_s": 15.01
+    },
+    {
+      "statement": "COMMIT",
+      "count": 96,
+      "median_gap_s": 0.01,
+      "min_gap_s": 0.0,
+      "max_gap_s": 15.01
+    },
+    {
+      "statement": "UPDATE jobs SET status=$1::VARCHAR, error_code=$2::VARCHAR, error_message=$3::VARCHAR, updated_at=$4::TIMESTAMP WITH TIME ZONE, completed_at=$5::TIMESTAMP WITH ",
+      "count": 44,
+      "median_gap_s": 15.01,
+      "min_gap_s": 15.0,
+      "max_gap_s": 15.02
+    },
+    {
+      "statement": "UPDATE guest_import_quota SET state=$1::VARCHAR, settled_at=clock_timestamp() WHERE guest_import_quota.state = $2::VARCHAR AND (guest_import_quota.heartbeat_at ",
+      "count": 44,
+      "median_gap_s": 15.01,
+      "min_gap_s": 15.0,
+      "max_gap_s": 15.02
+    },
+    {
+      "statement": "DELETE FROM access_sessions WHERE access_sessions.expires_at <= $1::TIMESTAMP WITH TIME ZONE OR access_sessions.revoked_at IS NOT NULL",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM user_sessions WHERE user_sessions.expires_at <= $1::TIMESTAMP WITH TIME ZONE OR user_sessions.revoked_at IS NOT NULL",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM auth_challenges WHERE auth_challenges.expires_at <= $1::TIMESTAMP WITH TIME ZONE OR auth_challenges.consumed_at IS NOT NULL",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM extension_auth_codes WHERE extension_auth_codes.expires_at <= $1::TIMESTAMP WITH TIME ZONE OR extension_auth_codes.consumed_at IS NOT NULL",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM password_reset_events WHERE password_reset_events.reset_at < $1::TIMESTAMP WITH TIME ZONE",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM password_reset_attempts WHERE password_reset_attempts.state != $1::VARCHAR AND password_reset_attempts.settle_at < $2::TIMESTAMP WITH TIME ZONE AND ",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "SET LOCAL lock_timeout = '?'",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "SET LOCAL statement_timeout = '?'",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "SELECT password_reset_attempts.id, password_reset_attempts.email_hash",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "UPDATE guest_job_quota SET state=CASE WHEN (jobs.status = $1::VARCHAR) THEN $2::VARCHAR ELSE $3::VARCHAR END, charged_at=CASE WHEN (jobs.status = $1::VARCHAR) T",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM guest_job_quota WHERE guest_job_quota.state != $1::VARCHAR AND guest_job_quota.charged_at < now() - $2 AND guest_job_quota.settled_at < now() - $3",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM guest_import_quota WHERE guest_import_quota.state != $1::VARCHAR AND guest_import_quota.charged_at < now() - $2 AND guest_import_quota.settled_at < ",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM guest_sessions WHERE (guest_sessions.expires_at <= now() OR guest_sessions.revoked_at IS NOT NULL) AND guest_sessions.created_at < now() - $1",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "SELECT set_config('?', $1, true), set_config('?', $1, true)",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM job_usage_attempts WHERE job_usage_attempts.started_at < $1::TIMESTAMP WITH TIME ZONE",
+      "count": 2,
+      "median_gap_s": 300.0,
+      "min_gap_s": 300.0,
+      "max_gap_s": 300.0
+    },
+    {
+      "statement": "DELETE FROM job_usage WHERE job_usage.started_at < $1::TIMESTAMP WITH TIME ZONE",
+      "count": 2,
+      "median_gap_s": 300.01,
+      "min_gap_s": 300.01,
+      "max_gap_s": 300.01
+    }
+  ],
+  "extra": {
+    "cpu_seconds": "8.313",
+    "pg_transactions": "234",
+    "app_rss": "VmHWM:\t 105912 kB VmRSS:\t 105912 kB ",
+    "app_cgroup_memory_current_bytes": "81965056",
+    "connections_at_end": "idle|1;"
+  }
+}

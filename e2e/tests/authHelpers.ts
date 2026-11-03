@@ -74,6 +74,10 @@ export async function emailedCode(email: string, kind: "verification_code" | "re
 
 export const disableUser = (email: string) => control("/disable", { email });
 
+/** MyDubb's admin role, as `scripts.auth_users` changes it. The user must have signed in once. */
+export const setAdminRole = (email: string, admin: boolean) =>
+  control("/admin-role", { email, admin });
+
 export const failNext = (
   operation: "InitiateAuth" | "ForgotPassword" | "ConfirmForgotPassword",
   email: string,

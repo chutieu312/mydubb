@@ -1,8 +1,9 @@
 # Usage records and reference costs
 
 Every dubbing job records what it asked of the providers, so there is long-term data for
-designing prices and quotas. A local command turns that data into a report. There is no dashboard,
-admin page or API for it.
+designing prices and quotas. Administrators read it on the website
+([The Usage & Costs page](#the-usage--costs-page)); a local command gives the same figures, with CSV
+files, for reconciling.
 
 Three things are always kept apart, in the data and in every report:
 
@@ -144,11 +145,101 @@ age is its usage `started_at`; an attempt is deleted by its own start time, so a
 can briefly lose its oldest attempts before its summary (the next cleanup removes the rest).
 Plan a report before the retention horizon passes, or keep the CSV exports.
 
+## The Usage & Costs page
+
+`/admin/usage` on the website, for MyDubb administrators ([AUTHENTICATION.md](AUTHENTICATION.md#administrators)).
+It only reads: no change to prices, quota, roles, usage or jobs, no call to Azure, Supadata or
+Cognito, and no export (use the command below for CSV). It is not in the Chrome extension. API:
+[AUTH_API.md](AUTH_API.md#usage--costs). Opening or refreshing the page can wake Neon; nothing reads
+the database in the background to keep the page fresh.
+
+**Access.** Every report request goes through `require_admin` first, reading the role from the
+database: a guest, an ordinary user, a disabled user, an invalid session and an extension token are
+refused before any report query, any request with an `Authorization` header is refused whatever its
+cookies are, and a revoked role applies from the next request. The role opens the usage figures of
+this page only: a job id gives no access to that job's transcript, audio or endpoints. Responses hold
+only the fields declared in `app/admin/usage.py`, with `Cache-Control: no-store`, also on errors.
+
+The page asks `GET /api/admin/session` once for each signed-in identity, to show its link; hiding
+the link protects nothing. The report is never written to browser storage. A sign-out, an ended
+session or a refused request removes the figures and ignores late answers; a `401` shows the sign-in
+form, a `403 admin_required` keeps the user signed in and says the access ended. When a role is
+revoked elsewhere, figures already on screen stay until that browser's next report request: the page
+does not poll.
+
+**Filters.** Since, until, language, job id. Default: the last 7 days. At most **31 days** per
+summary or list; a period that long may be anywhere, but older than `USAGE_RETENTION_DAYS` it holds
+what retention left. The rule is the command's: `since <= job_usage.started_at < until`, UTC when no
+zone is given, an offset is converted. A job id is matched inside the period; "View usage" (or the
+button offered when the filter finds nothing) opens a job whatever its date. Bad input is refused
+with `422`, never clamped. Filters and the open job live in the address, so a direct link, a reload
+and Back/Forward work; a page of results does not, so a reload starts from the first page.
+
+**Paging.** Jobs: `started_at DESC, job_id DESC`, 25 by default, at most 100. A job's requests: by
+`seq`, 50 by default, at most 100. Cursors hold a position, not a row number, so a job that starts
+meanwhile does not shift a page, and a cursor works only with the filters (or the job) it was issued
+for. A summary covers the whole period, and a job's figures all its requests, whatever page is
+shown.
+
+**How it reads.** `app/usage/queries.py`: `build_report` loads a whole period, which suits a local
+command; here a list reads one page from the database, and a summary reads the period in batches of
+200 jobs (each with its attempts, then released), and hands them to the same `Totals` and
+completeness rules as the command. There is one definition of actual / estimated / unknown / none,
+mock, prices and money, in `app/usage/report.py`, and the page computes nothing: it rounds the exact
+decimal strings for display (half up, 4 decimals, as the text report), with every digit in the
+tooltip. The existing indexes are enough (`job_usage.started_at`, the attempts' primary key); no
+migration.
+
+**Snapshot and limits.** Each response is one `REPEATABLE READ, READ ONLY` transaction on a new
+short session from the application's factory, opened after the auth check (the auth session has
+already queried, and the level can only be set before a transaction's first query). `generated_at`
+says when each response was read; summary, list and detail are separate requests and can differ.
+
+A report request holds **one pooled connection at a time**: the auth check reads the role from the
+database as on any request, its transaction ends and its connection goes back to the pool, and only
+then does the report ask for its own. So it never waits for a connection while holding one, and
+concurrent reports cannot starve each other on the application's pool of 5 + 5; beyond ten at once
+they queue for a connection as any other request does. This is local to these routes: `get_db` and
+the other endpoints are unchanged. A role revoked after that check applies from the next request, as
+before.
+
+Inside the transaction `lock_timeout` and `statement_timeout` are at most **10 s**. A whole summary
+has a budget of **30 s**, counted from before it asks for its connection: each read (batches,
+attempts and the two final queries, also when the period has no batch) is limited on the server to
+the time left, and a summary over budget is an error even if its reads all ended. A list or a detail
+has no such budget: at most 10 s for each of its two or three statements. Going over, or finding no
+pooled connection, ends in `503 usage_report_timeout`; any other database failure in
+`503 usage_report_unavailable`, logged by exception type only. Never a `200` with an empty report.
+The timeouts last for that transaction only, and the connection goes back to the pool before the
+response is sent, on success and on error.
+
+Not bounded by those limits: a network that silently stops answering, and a summary that gets its
+connection only as the pool times out (30 s) is refused at that point rather than sooner. A failure
+inside the auth check itself, waiting for its connection included, is handled like on any other
+endpoint (`500 internal_error`, logged by the global handler).
+
+**Moving between the pages.** The Studio stays mounted, hidden, behind the page: its form (the draft
+in page memory, nothing stored or put in the address), its job panel and its status polling carry on
+as they were, and an open result comes back as it was. The audio player pauses on leaving and keeps
+its place. A reload, a sign-out or another identity behave as they always did (the draft and the
+job panel are not kept through a reload).
+
+**Reading it.** The figures are what was recorded. "Reference cost — not an invoice": list prices,
+per request at the price in force on its date (each price its own line with its SKU, region,
+effective and checked dates and source), Free allowance not deducted, invoice not verified, Supadata,
+hosting, taxes and payments not included. The total is shown as a lower bound ("at least") whenever
+a request has unknown usage, known usage has no price for its date, a job is incomplete or, in a
+summary, a job of the period has no usage record. Those jobs are counted on their creation time,
+since they have no usage start. The "earliest usage record" is the oldest row still in the database,
+not the deployment date. "Audio processing" is the wall time of the whole audio stage. There is no
+cost per minute or per hour.
+
 ## The report command
 
 Local, read-only: one `READ ONLY` PostgreSQL transaction; it creates no job and calls no provider.
 Run it from `backend/` where `DATABASE_URL` is set (environment or git-ignored `backend/.env`,
-never on the command line, never printed); there is no API.
+never on the command line, never printed). It is not needed to use the page; it stays for reconciling
+and for CSV files.
 
 ```bash
 cd backend
@@ -254,7 +345,10 @@ cd backend
 uv run ruff check . && uv run ruff format --check .
 export TEST_DATABASE_URL=postgresql://...   # a disposable database
 uv run pytest tests/test_usage_providers.py tests/test_usage_jobs.py \
-  tests/test_usage_report.py tests/test_usage_retention.py tests/test_usage_timeouts.py
+  tests/test_usage_report.py tests/test_usage_retention.py tests/test_usage_timeouts.py \
+  tests/test_admin_usage.py tests/test_admin_usage_limits.py
+cd ../frontend && npx vitest run src/App.adminUsage.test.tsx src/lib/usageFilters.test.ts
+cd ../e2e && bash run-e2e.sh tests/auth.adminUsage.spec.ts
 ```
 
 They cover multi-request and multi-block jobs, missing and broken headers, SSML and CJK counting,
@@ -265,3 +359,21 @@ half-up rounding, the read-only transaction, usage writes blocked by a real Post
 (expand-only, reversible, one Alembic head). The rest of the suite is unchanged and still passes.
 Only fake HTTP transports, mock providers and disposable PostgreSQL are used: Azure, Cognito
 and Supadata are never called.
+
+For the page, `test_admin_usage.py` goes through the real routes, auth first: who is refused (and
+that no report query ran), revocation on the next request, field allowlists and `no-store`, period
+boundaries and offsets, the 31-day and page limits, cursors, stable pages while jobs arrive, the same
+figures as the command and its CSV on one data set, every usage case, several prices in one period,
+a summary independent of batch and page size, one snapshot with commits landing between its queries,
+the transaction's isolation, read-only state and timeouts (and that they do not reach pooled
+connections), a real lock ending in `503`, logs without SQL or secrets, and query and object counts
+on 500 jobs (no query per job, no full read). `test_admin_usage_limits.py` uses real `pg_sleep` delays
+and more concurrent requests than the pool has connections, with the pool's wait and the budget
+shortened to keep it quick: no connection held while a report asks for its own, every way out
+returning its connections, and the budget over the final queries, an empty period, a slow statement
+and the wait for a connection. The frontend tests and the browser specs cover the link
+and refusals, filters, pages, stale answers, the `401` and `403` paths, sign-out with requests still
+running, direct address, reload, Back/Forward, and the Studio draft, job and audio.
+
+Not verified by any of this: production data, RAM or capacity on the production plan, or the figures
+against an invoice.

@@ -8,7 +8,7 @@ and no AWS credential exists.
 
 A second, tiny HTTP server (port 9000, published on 127.0.0.1 only) lets the tests do what an
 administrator and an inbox would: create users, read the codes the stand-in "emailed", disable a
-user and make the next call to the pool fail.
+user, make the next call to the pool fail, and grant or revoke MyDubb's admin role.
 """
 
 import os
@@ -18,6 +18,7 @@ import threading
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 
 sys.path.insert(0, os.environ.get("FAKE_COGNITO_DIR", "/e2e-fake"))
 
@@ -25,10 +26,12 @@ from fake_cognito import FakeCognito  # noqa: E402
 
 from app.auth.cognito import CognitoError, CognitoErrorKind  # noqa: E402
 from app.config import load_settings  # noqa: E402
+from app.db import session_scope  # noqa: E402
 from app.main import create_app  # noqa: E402
-from app.services import build_services  # noqa: E402
+from app.services import AppServices, build_services  # noqa: E402
 
 fake = FakeCognito()
+services: AppServices
 control = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -48,6 +51,11 @@ class Failure(BaseModel):
     operation: str
     email: str
     kind: CognitoErrorKind
+
+
+class RoleChange(BaseModel):
+    email: str
+    admin: bool
 
 
 # Failures are armed per user, so tests running side by side cannot disturb each other.
@@ -112,14 +120,27 @@ def fail_next(failure: Failure) -> dict[str, str]:
     return {"status": "armed"}
 
 
+@control.post("/admin-role")
+def admin_role(change: RoleChange) -> dict[str, str]:
+    """What `scripts.auth_users grant-admin` and `revoke-admin` do, on the throwaway database."""
+    with session_scope(services.session_factory) as db:
+        db.execute(
+            text("UPDATE users SET role = :role WHERE email_normalized = :email"),
+            {"role": "admin" if change.admin else "user", "email": change.email.lower()},
+        )
+    return {"status": "changed"}
+
+
 def main() -> None:
+    global services
     server = uvicorn.Server(
         uvicorn.Config(control, host="0.0.0.0", port=9000, log_level="warning")  # noqa: S104
     )
     threading.Thread(target=server.run, daemon=True).start()
 
     settings = load_settings()
-    app = create_app(services=build_services(settings, cognito_client=fake))
+    services = build_services(settings, cognito_client=fake)
+    app = create_app(services=services)
     uvicorn.run(app, host="0.0.0.0", port=8000, workers=1, server_header=False)  # noqa: S104
 
 

@@ -377,7 +377,9 @@ so it outlives the account. `changed_by` is `auth_users:<login name on the machi
 tool>`: a trace, not an authenticated identity, since whoever holds `DATABASE_URL` can do anything.
 Editing `users.role` with SQL would leave no trail, so don't. Rows are never cleaned up.
 
-**Limits.** No web UI or list of users; `/api/admin/session` is the only endpoint so far. Disabling a
+**Limits.** No web UI to manage roles and no list of users. The only endpoints are
+`/api/admin/session` and the read-only [Usage & Costs](USAGE_COSTS.md#the-usage--costs-page) reports,
+which also bring the role no access to anyone's job content. Disabling a
 user only in Cognito leaves their MyDubb session, and so their admin access, until it expires (see
 "Disabling a user"): use `revoke-admin` or MyDubb's `disable`. An administrator request already in
 progress when the role is revoked finishes.
