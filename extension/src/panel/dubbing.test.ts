@@ -1690,11 +1690,15 @@ describe("an ordinary web page (no Udemy lecture, no video)", () => {
   const mp3 = () => new Blob(["mp3"], { type: "audio/mpeg" });
   const text = (id: string) => $(id).textContent;
 
-  /** The panel of a tab whose page never reported a state: Loom, any site without a content script. */
+  /**
+   * The panel of a tab that never reports a state (Loom, any site without a content script) once
+   * the panel has settled that no script answers: the tab shows no lecture.
+   */
   async function onWebPage(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
-    lesson = undefined;
+    lesson = null;
     const made = make(storage, api);
     await made.dubbing.start();
+    made.dubbing.lessonState(null);
     return made;
   }
 
@@ -1946,5 +1950,139 @@ describe("an ordinary web page (no Udemy lecture, no video)", () => {
     await settle(10);
     expect(storage.data[`job:${TAB}`]).toBeUndefined();
     expect(player.opened).toHaveLength(0);
+  });
+});
+
+describe("a tab whose page state has not arrived yet", () => {
+  const text = (id: string) => $(id).textContent;
+  const generate = () => $<HTMLButtonElement>("generate");
+
+  /** The panel before the tab says anything: not a lecture, and not yet known to be an ordinary page. */
+  async function unknownSource(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
+    lesson = undefined;
+    const made = make(storage, api);
+    await made.dubbing.start();
+    return made;
+  }
+
+  /** What the panel does when the tab reports a state: the host answers it first, then Dubbing hears of it. */
+  function tabReports(dubbing: Dubbing, key: string | null) {
+    lesson = key;
+    dubbing.lessonState(key);
+  }
+
+  it("does not send anything, says why, and keeps the form editable", async () => {
+    const { api } = await unknownSource();
+    expect(generate().disabled).toBe(true);
+    expect(text("generate-hint")).toMatch(/Checking whether this tab shows a Udemy lecture/);
+    expect(text("generate-hint")).toMatch(/reload the tab/);
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    generate().click();
+    await settle(12);
+    expect(api.createJob).not.toHaveBeenCalled();
+    expect($<HTMLInputElement>("first-start").value).toBe("00:00:10");
+  });
+
+  it("a Udemy state that arrives late enables Generate: one job, filed under the lecture, whose result loads", async () => {
+    const { dubbing, api, storage } = await unknownSource();
+    generate().click(); // too early: nothing is sent
+    await settle();
+    expect(api.createJob).not.toHaveBeenCalled();
+
+    tabReports(dubbing, "demo-course/2");
+    expect(generate().disabled).toBe(false);
+    expect(text("generate-hint")).toMatch(/only when you choose Generate audio/);
+    generate().click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "demo-course/2", state: "created", jobId: "job-1" });
+    expect(player.opened).toHaveLength(1);
+    expect(player.opened[0]?.request.lessonKey).toBe("demo-course/2");
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(links).toEqual(["demo-course/2"]);
+  });
+
+  it("a page that is settled as ordinary enables Generate with no state at all", async () => {
+    const { dubbing, api } = await unknownSource();
+    expect(generate().disabled).toBe(true);
+    tabReports(dubbing, null);
+    expect(generate().disabled).toBe(false);
+    generate().click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(player.opened[0]?.request.lessonKey).toBe("page");
+  });
+
+  it("a lecture that changes while the first click is being sent drops its answer instead of attaching it", async () => {
+    let answer!: (value: unknown) => void;
+    const api = fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) });
+    const { dubbing } = await unknownSource(undefined, api);
+    tabReports(dubbing, "demo-course/2");
+    generate().click();
+    await settle();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    tabReports(dubbing, "demo-course/3");
+    answer(job("queued"));
+    await settle(12);
+    expect(api.getJob).not.toHaveBeenCalled();
+    expect(player.opened).toHaveLength(0);
+    expect(api.createJob).toHaveBeenCalledTimes(1); // never sent again by itself
+  });
+
+  it("an account change while waiting leaves the click to the account that is connected when the state arrives", async () => {
+    const { dubbing, api, storage } = await unknownSource();
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+    expect(generate().disabled).toBe(true);
+    tabReports(dubbing, "demo-course/2");
+    generate().click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.createJob.mock.calls[0]?.[0]).toBe(OTHER.token);
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ userId: OTHER.user.id, lessonKey: "demo-course/2" });
+  });
+
+  it("a tab that loads a new page makes the source unknown again; the followed job keeps being followed", async () => {
+    let finish!: (value: unknown) => void;
+    const api = fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+    const { dubbing } = await unknownSource(undefined, api);
+    tabReports(dubbing, null);
+    generate().click();
+    await settle();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+
+    lesson = undefined; // the tab started loading another page
+    dubbing.sourceChanged();
+    expect(generate().disabled).toBe(true);
+    finish(job("completed"));
+    await settle(12);
+    expect(player.opened).toHaveLength(1);
+    expect(player.opened[0]?.request.lessonKey).toBe("page");
+
+    tabReports(dubbing, null); // still an ordinary page: the same job and audio
+    expect(generate().disabled).toBe(false);
+    expect(player.view).not.toBeNull();
+  });
+
+  it("a stored job of the page is neither dropped nor attached to a lecture only because a state arrives", async () => {
+    const record: JobRecord = {
+      operationId: "op-1",
+      userId: "u1",
+      connectionId: "conn-a",
+      lessonKey: "page",
+      state: "created",
+      jobId: "job-1",
+      sentAt: 0,
+      choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1, timed: false, firstStart: "00:00:10", lastStart: "00:06:10" },
+    };
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record });
+    const { dubbing, api } = await unknownSource(storage);
+    await settle(10);
+    // Kept while the source is unknown, then dropped for the lecture: never re-filed under it.
+    tabReports(dubbing, "demo-course/2");
+    await settle(10);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(api.createJob).not.toHaveBeenCalled();
+    expect(player.view?.lessonKey).not.toBe("demo-course/2");
   });
 });

@@ -101,7 +101,9 @@ const LESSON_CHANGED =
   "The lecture changed. A job already sent keeps running on MyDubb, but its result is not shown under this lecture.";
 const ACCOUNT_CHANGED = "The MyDubb account changed, so the previous job and result were cleared from this panel.";
 const CONNECTION_ENDED = "Your MyDubb connection ended (expired or disconnected). Connect again to continue.";
-const AUDIO_READY = "Ready. Press play when you want to listen.";
+const SOURCE_UNKNOWN =
+  "Checking whether this tab shows a Udemy lecture. Generate is available in a moment; if it stays unavailable, reload the tab.";
+const AUDIO_READY ="Ready. Press play when you want to listen.";
 const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
   "play-blocked": "Chrome blocked playback. Press Play again.",
   "play-failed": "The audio could not start playing. Press Play to try again, or Load audio.",
@@ -525,6 +527,7 @@ export class Dubbing {
     // The translation of the loaded audio goes with its lecture, with or without a job record.
     if (this.loaded && !loadedBelongs(this.loaded, this.account(), source)) this.clearLoaded();
     this.checkPlayer();
+    this.renderGenerate();
     if (this.form.lessonKey !== key) {
       // The times belong to the transcript of one lecture; the language, voice and speed stay.
       if (this.form.lessonKey !== null) {
@@ -834,11 +837,19 @@ export class Dubbing {
 
   private renderGenerate(): void {
     const ui = this.ui;
-    ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null;
+    const checking = this.host.currentLesson() === undefined;
+    ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null || checking;
     ui.generate.textContent = this.sendingOp !== null ? "Sending…" : "Generate audio";
-    ui.generateHint.textContent = this.auth
-      ? "Your text is sent to MyDubb only when you choose Generate audio."
-      : "Connect MyDubb (top of the panel) to generate audio.";
+    ui.generateHint.textContent = !this.auth
+      ? "Connect MyDubb (top of the panel) to generate audio."
+      : checking
+        ? SOURCE_UNKNOWN
+        : "Your text is sent to MyDubb only when you choose Generate audio.";
+  }
+
+  /** The tab stopped being known (or became known) as a lecture or an ordinary page. */
+  sourceChanged(): void {
+    if (this.restored) this.renderGenerate();
   }
 
   private scheduleSave(): void {
@@ -875,12 +886,17 @@ export class Dubbing {
     if (this.sendingOp !== null || !this.meta) return;
     const auth = this.auth;
     if (!auth) return;
-    // A tab without a Udemy lecture (or not yet reporting one) generates for itself: its result is
-    // tied to this tab, account and click like any other, and dropped if a lecture shows up.
-    const lessonKey = sourceOf(this.host.currentLesson()) ?? PAGE_SOURCE;
-    const transcript = this.host.transcript();
+    // A click is tied to what the tab shows (a lecture, or an ordinary page). While that is not
+    // known yet nothing is sent: a job filed under "page" would be dropped when the tab then turns
+    // out to be a lecture.
+    const lessonKey = sourceOf(this.host.currentLesson());
     this.setFieldErrors([]);
     ui.formError.textContent = "";
+    if (lessonKey === undefined) {
+      ui.formError.textContent = SOURCE_UNKNOWN;
+      return;
+    }
+    const transcript = this.host.transcript();
     if (transcript.trim() === "") {
       ui.formError.textContent = "There is no transcript. Paste one above, or select text on the page and choose “Send to MyDubb”.";
       return;

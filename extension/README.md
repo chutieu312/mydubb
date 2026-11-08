@@ -446,7 +446,11 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   selection kept as received, empty and over-100,000-character selections, the confirmation before
   an edited draft is replaced; two tabs, an account change with a job still running, a tab closing,
   the earlier audio kept while the next job runs, a failed download or a refused Generate; a tab
-  that becomes a Udemy lecture (and back); and a Udemy lecture regression (the content script's
+  that becomes a Udemy lecture (and back); a Udemy tab whose content script is held back (the
+  fixture's blocking script is gated) with a valid form: Generate unavailable (also after longer than
+  the time an ordinary page needs to be recognised), no POST, then one POST filed under the lecture
+  with its translation and audio; an ordinary tab that starts loading a lecture the same way keeps its
+  page job and audio until the lecture shows; and a Udemy lecture regression (the content script's
   selection, the lecture key, the video paused at the start of the audio, Sync turned on). Autoplay is allowed
   by a browser flag in these tests, so Chrome's autoplay blocking is only unit-tested, and
   background-tab throttling is not reproduced (unit-tested only). These are not evidence of
@@ -517,7 +521,10 @@ use the Azure free allowance.
    cannot click): the panel opens for that tab with Chrome's text; note whether the line breaks
    survived. If a timestamp ended up on one line, check the text is kept as received (not re-timed),
    fix it by hand or Copy → Paste, and Generate. (c) Empty and very long selections are reported;
-   with an edited draft, a new selection asks before replacing it. (d) A second tab, a second
+   with an edited draft, a new selection asks before replacing it. (c2) Press **Generate audio**
+   straight after opening the panel on a Udemy lecture (or while it is still loading): it may be
+   unavailable for a moment with the "Checking…" hint, then sends one job for the lecture; a reload
+   of the tab during that is the only thing that should change it. (d) A second tab, a second
    account (**Disconnect**, connect another), closing the tab and a second Generate while listening
    must not mix results (the earlier audio plays until the new one is ready). (e) Open a Udemy
    lecture in the same tab afterwards: the page's result goes, the video controls appear.
@@ -533,6 +540,16 @@ use the Azure free allowance.
   (A way to get exact line breaks on other sites would need `activeTab` + `scripting`, not added.)
 - The audio of an ordinary page is tied to the tab, not to the address: if the tab goes to another
   site, it keeps playing until it is paused, replaced, or the tab closes.
+- **Generate waits until the panel knows what the tab shows.** A Udemy lecture reports itself through
+  its content script; an ordinary page has none, so nothing answers. Until the panel has either a
+  page state or three failed attempts in a row on a finished page (about 2 s; the last retry at
+  about 15 s for a tab that keeps loading), **Generate audio** is unavailable, with the hint
+  "Checking whether this tab shows a Udemy lecture…" (nothing is sent, nothing is queued, the text
+  and times stay editable). A tab that starts loading a new page becomes "not known" again until it
+  has finished. If the Udemy tab stays connected but silent for 5 s, the panel says so and Generate
+  keeps waiting: reload the tab. There is no permission to read the address, so this is the only
+  signal; a navigation still in flight (the old page is still on screen) is not seen, and a job sent
+  for the old page is then dropped when the lecture shows, like any change of lecture.
 - Invitation accounts only (no guest), no YouTube import, no automatic transcript extraction, no
   playback speed control (the speed is chosen at Generate), no MP3 download button.
 - Sync with video follows the job's span as a whole: plain mode maps the whole MP3 linearly onto

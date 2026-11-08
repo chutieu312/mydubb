@@ -4,6 +4,7 @@
 // only: the native "Send to MyDubb" context menu cannot be clicked by Playwright, so those tests
 // call the real worker handler with the text Chrome would pass; the menu itself is accepted by hand.
 
+import type { BrowserContext } from "@playwright/test";
 import {
   HTTP_ORIGIN,
   allowConnect,
@@ -11,6 +12,7 @@ import {
   disconnect,
   expect,
   fillTimes,
+  lectureUrl,
   openLecture,
   openPanel,
   openWebPage,
@@ -367,4 +369,121 @@ test("Udemy lecture: Send to MyDubb, Generate, audio and Sync still use the lect
   await panel.getByRole("button", { name: "Turn on sync" }).click();
   await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
   expect((await playerSessions(worker))[0]?.rate).toBe(1);
+});
+
+/**
+ * Holds the lecture fixture's blocking script until `release()`. The lecture page has been
+ * committed and the tab is "loading", but the page cannot finish, so the Udemy content script (which
+ * runs when the document is idle) has not attached and nothing can report the lecture. Events are
+ * ordered by the gate, not by sleeping: `asked` resolves once the browser requested the script.
+ */
+function holdLectureScript(context: BrowserContext) {
+  let release!: () => void;
+  let requested!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const asked = new Promise<void>((resolve) => (requested = resolve));
+  const ready = context.route(
+    (url) => url.pathname === "/__fixture/fixture.js",
+    async (route) => {
+      requested();
+      await gate;
+      await route.fallback();
+    },
+  );
+  return { release, asked, ready };
+}
+
+test("a Udemy tab whose lecture state comes late: Generate waits, then sends one job filed under the lecture", async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  const lecture = 603;
+  const held = holdLectureScript(context);
+  await held.ready;
+  const ids = () => worker.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.id!));
+  const before = new Set(await ids());
+  const page = await context.newPage();
+  const fresh = (await ids()).filter((id) => !before.has(id));
+  expect(fresh).toHaveLength(1);
+  const tabId = fresh[0]!;
+  const loaded = page.goto(lectureUrl(lecture, "?seconds=60"));
+  await held.asked;
+
+  // The panel opens on a Udemy tab that is loading: no content script yet, so no state, and a valid form.
+  const panel = await openPanel(context, extensionId, tabId);
+  await connectAccount(panel, mydubb, extensionId);
+  await panel.getByRole("textbox", { name: "English transcript" }).fill("Late state.\nSecond line.");
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000056");
+  const generate = panel.getByRole("button", { name: GENERATE });
+  await expect(generate).toBeDisabled();
+  await expect(panel.locator("#generate-hint")).toContainText("Checking whether this tab shows a Udemy lecture");
+  // Longer than the panel needs to call a finished tab an ordinary page (3 failed attempts, 1 s apart):
+  // while the tab is loading it must still not decide, nor send.
+  await panel.waitForTimeout(3500);
+  await expect(generate).toBeDisabled();
+  await panel.evaluate(() => document.getElementById("generate")!.click());
+  expect(mydubb.posts("/api/jobs")).toHaveLength(0);
+  await expect(panel.locator("#lesson-label")).toHaveText("Checking this tab…");
+
+  // The lecture arrives, and only then can Generate send: exactly one job, under this lecture.
+  held.release();
+  await loaded;
+  await expect(panel.locator("#lesson-label")).toHaveText("Lecture 603");
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  expect(mydubb.posts("/api/jobs")).toHaveLength(1);
+  expect(mydubb.posts("/api/jobs")[0]?.body).toMatchObject({ transcript: "Late state.\nSecond line.", first_sentence_start: "00:00:10" });
+  expect(await sessionGet(worker, `job:${tabId}`)).toMatchObject({ lessonKey: "demo-course/603", state: "created" });
+  expect(await playerSessions(worker)).toMatchObject([{ tabId, lessonKey: "demo-course/603" }]);
+  await expect(panel.locator("#translation")).toHaveText("Bản dịch <b>job-1</b>");
+  await expect(panel.locator("#sync")).toBeVisible();
+  await expect(panel.locator("#video-box")).toBeVisible();
+});
+
+test("an ordinary tab that starts loading a lecture waits for it; the page's job and audio stay until the lecture shows", async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  const { page, tabId } = await openWebPage(context, worker, webUrl("heading-to-udemy"));
+  const panel = await openPanel(context, extensionId, tabId);
+  await connectAccount(panel, mydubb, extensionId);
+  const generate = panel.getByRole("button", { name: GENERATE });
+  await panel.getByRole("textbox", { name: "English transcript" }).fill("Page text.");
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000056");
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  expect(mydubb.posts("/api/jobs")).toHaveLength(1);
+
+  // The same tab loads a lecture page that cannot finish: its content script has not attached yet.
+  const lecture = 604;
+  const held = holdLectureScript(context);
+  await held.ready;
+  const loaded = page.goto(lectureUrl(lecture, "?seconds=60"));
+  await held.asked;
+  await expect(generate).toBeDisabled();
+  await panel.waitForTimeout(3500);
+  await expect(generate).toBeDisabled();
+  await panel.evaluate(() => document.getElementById("generate")!.click());
+  expect(mydubb.posts("/api/jobs")).toHaveLength(1);
+  // Nothing was dropped yet: the page's audio is still the tab's audio.
+  expect((await playerSessions(worker)).map((x) => x.lessonKey)).toEqual(["page"]);
+
+  held.release();
+  await loaded;
+  await expect(panel.locator("#lesson-label")).toHaveText("Lecture 604");
+  // A real change of context: the page's result goes, and Generate now files under the lecture.
+  await expect.poll(() => playerSessions(worker)).toEqual([]);
+  await expect(generate).toBeEnabled();
+  await generate.click();
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  expect(mydubb.posts("/api/jobs")).toHaveLength(2);
+  expect(await sessionGet(worker, `job:${tabId}`)).toMatchObject({ lessonKey: "demo-course/604" });
 });
