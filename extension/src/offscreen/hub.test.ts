@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PAGE_SOURCE } from "../shared/lesson";
 import type { PanelPlayerView, PlaybackOwner, PlayerToPage, PlayerToPanel } from "../shared/playback";
 import type { SyncSource } from "../shared/sync";
 import { PlaybackHub, type AudioLike, type HubDeps, type HubPort } from "./hub";
@@ -650,5 +651,77 @@ describe("one MyDubb audio at a time, however playback starts", () => {
     await settle();
     expect(b.audio.paused).toBe(true);
     expect(videoOps(b.page).at(-1)?.op).toBe("pause");
+  });
+});
+
+describe("audio of an ordinary web page (no lecture, no page link)", () => {
+  it("plays and pauses from the panel without any linked page, at 1x", async () => {
+    const hub = makeHub();
+    const { panel, audio, sessionId } = opened(hub, 4, OWNER, PAGE_SOURCE);
+    expect(lastView(panel)).toMatchObject({ lessonKey: PAGE_SOURCE, linked: false, status: "ready", paused: true });
+    panel.receive({ type: "command", tabId: 4, sessionId, command: "play" });
+    await Promise.resolve();
+    expect(audio.paused).toBe(false);
+    expect(lastView(panel)).toMatchObject({ paused: false, problem: null });
+    expect(audio.playbackRate).toBe(1);
+    panel.receive({ type: "command", tabId: 4, sessionId, command: "seek-to", value: 12 });
+    expect(audio.currentTime).toBe(12);
+    panel.receive({ type: "command", tabId: 4, sessionId, command: "pause" });
+    expect(audio.paused).toBe(true);
+  });
+
+  it("has no Sync (no source) and no floating player", async () => {
+    const hub = makeHub();
+    const { panel, sessionId } = opened(hub, 4, OWNER, PAGE_SOURCE);
+    expect(lastView(panel)?.sync).toMatchObject({ status: "unavailable" });
+    panel.receive({ type: "floating", tabId: 4, sessionId, visible: true });
+    expect(lastView(panel)?.floating).toBe(false);
+    panel.receive({ type: "sync", tabId: 4, sessionId, on: true });
+    await Promise.resolve();
+    expect(lastView(panel)?.sync.status).toBe("unavailable");
+  });
+
+  it("is paused by another tab's audio and pauses it in turn (one MyDubb audio at a time)", async () => {
+    const hub = makeHub();
+    const web = opened(hub, 4, OWNER, PAGE_SOURCE);
+    const lecture = opened(hub, 5, { ...OWNER, jobId: "job-2", operationId: "op-2" });
+    linkPage(hub, 5);
+    web.panel.receive({ type: "command", tabId: 4, sessionId: web.sessionId, command: "play" });
+    await Promise.resolve();
+    expect(web.audio.paused).toBe(false);
+    lecture.panel.receive({ type: "command", tabId: 5, sessionId: lecture.sessionId, command: "play" });
+    await Promise.resolve();
+    expect(lecture.audio.paused).toBe(false);
+    expect(web.audio.paused).toBe(true);
+  });
+
+  it("a newer result replaces it, new audio paused at its start; the old audio is released", () => {
+    const hub = makeHub();
+    const first = opened(hub, 4, OWNER, PAGE_SOURCE);
+    first.audio.currentTime = 20;
+    const second = opened(hub, 4, { ...OWNER, jobId: "job-2", operationId: "op-2" }, PAGE_SOURCE);
+    expect(revoked).toHaveLength(1);
+    expect(second.audio).not.toBe(first.audio);
+    expect(second.audio).toMatchObject({ paused: true, currentTime: 0 });
+    expect(lastView(second.panel)).toMatchObject({ owner: { jobId: "job-2" }, paused: true, currentTime: 0 });
+  });
+
+  it("ends with its tab and with its account connection", () => {
+    const hub = makeHub();
+    const web = opened(hub, 4, OWNER, PAGE_SOURCE);
+    hub.onWorkerMessage({ type: "mydubb:player-tab-closed", tabId: 4 }, { id: EXT, url: `chrome-extension://${EXT}/background.js` } as chrome.runtime.MessageSender);
+    expect(lastView(web.panel)).toBeNull();
+    const other = opened(hub, 6, OWNER, PAGE_SOURCE);
+    hub.onWorkerMessage({ type: "mydubb:player-identity", connectionId: "conn-b" }, { id: EXT, url: `chrome-extension://${EXT}/background.js` } as chrome.runtime.MessageSender);
+    expect(lastView(other.panel)).toBeNull();
+  });
+
+  it("a Udemy page never takes it over: a lecture hello ends it", () => {
+    const hub = makeHub();
+    const web = opened(hub, 4, OWNER, PAGE_SOURCE);
+    const page = pagePort(4);
+    hub.acceptPage(page);
+    page.receive({ type: "hello", lessonKey: LESSON });
+    expect(lastView(web.panel)).toBeNull();
   });
 });

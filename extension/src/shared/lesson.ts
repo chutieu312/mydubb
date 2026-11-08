@@ -2,6 +2,13 @@
 
 export const UDEMY_ORIGIN = "https://www.udemy.com";
 
+/**
+ * The source key of a tab that shows no Udemy lecture (Loom, any ordinary web page, a Udemy page
+ * that is not a lecture): its transcript is pasted or selected by hand and its audio plays on its
+ * own, with no video of the page. A lecture key is always "<slug>/<id>", so this can never equal one.
+ */
+export const PAGE_SOURCE = "page";
+
 export interface LessonInfo {
   /** Stable key for one lecture: "<course slug>/<lecture id>". */
   key: string;

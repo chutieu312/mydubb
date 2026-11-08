@@ -14,7 +14,7 @@
 // drive the audio and the video together; ending the session turns it off first, which gives the
 // video back what MyDubb changed.
 
-import { UDEMY_ORIGIN } from "../shared/lesson";
+import { PAGE_SOURCE, UDEMY_ORIGIN } from "../shared/lesson";
 import { isOwnExtensionPage } from "../shared/messages";
 import {
   clampPosition,
@@ -275,7 +275,8 @@ export class PlaybackHub {
       case "floating": {
         const session = this.sessions.get(bound);
         if (!session || session.id !== message.sessionId) return this.publish(bound);
-        session.floating = message.visible;
+        // The floating player lives on the Udemy page: a session of an ordinary page has none.
+        if (session.lessonKey !== PAGE_SOURCE) session.floating = message.visible;
         this.publish(bound);
         return;
       }
@@ -598,8 +599,9 @@ export class PlaybackHub {
   }
 
   private async play(session: Session): Promise<void> {
-    if (!this.pages.has(session.tabId)) {
-      // Without the page's content script nobody would notice the lecture changing.
+    // A lecture's audio plays only while its page is linked (without the content script nobody would
+    // notice the lecture changing). The audio of an ordinary page has no lecture to follow.
+    if (session.lessonKey !== PAGE_SOURCE && !this.pages.has(session.tabId)) {
       session.problem = "not-linked";
       this.publish(session.tabId);
       return;

@@ -16,7 +16,7 @@ No transcript, token, e-mail address or other user data is quoted in this docume
 
 | Data | Read when / by | Sent to | Stored where, how long | Removed by |
 |---|---|---|---|---|
-| **Selected transcript text** (user-selected on a `https://www.udemy.com/*` lecture page; editable in the panel) | On the **Send to MyDubb** menu click, by the content script (falls back to Chrome's `selectionText`) | **Extension only** until the user clicks **Generate audio**; then the MyDubb server (`POST /api/jobs`, field `transcript`). Never to the Udemy page | Extension: `chrome.storage.session` (browser memory, access level `TRUSTED_CONTEXTS`, not readable by content scripts) as the tab's draft. Server: see §2 | **Clear** (the draft and the pending selection only; not the form, the job, the loaded translation or the audio), closing the tab, browser quit (session storage), uninstalling |
+| **Selected or pasted transcript text** (selected by the user on any `http(s)` page, or typed or pasted into the panel; editable in the panel) | On the **Send to MyDubb** menu click: on a `https://www.udemy.com/*` page by the content script (falls back to Chrome's `selectionText`), on every other `http(s)` page only as Chrome's `selectionText` handed to the service worker by the click (no content script, no site permission); a paste is typed into the panel itself | **Extension only** until the user clicks **Generate audio**; then the MyDubb server (`POST /api/jobs`, field `transcript`). Never to the Udemy page | Extension: `chrome.storage.session` (browser memory, access level `TRUSTED_CONTEXTS`, not readable by content scripts) as the tab's draft. Server: see §2 | **Clear** (the draft and the pending selection only; not the form, the job, the loaded translation or the audio), closing the tab, browser quit (session storage), uninstalling |
 | **Start times, language, voice, speed, timing mode** (form values) | Form in the panel | MyDubb server on Generate (same request) | Extension: `storage.session` (`form:<tab>`), saved as they change. Server: job metadata, §2 | Closing the tab (all `tabKeys`), browser quit, uninstalling. Moving to another lecture blanks the stored start times (language, voice and speed stay). **Not** removed by Clear, Disconnect or an account change (they hold choices, not account data) |
 | **Udemy page facts**: lecture URL path (course slug, lecture id), page title (first 300 chars), the lecture `<video>`'s time, duration, paused, rate, muted, seekable range | By the content script while a panel is connected or an audio session is linked; stops when neither is left | **Not sent to MyDubb** (the job request has no URL, title or lecture id; checked in `frontend/src/lib/jobRequest.ts`). The panel and the floating player get them through the extension's own ports | Extension only: the lecture key is kept with the draft/job record in `storage.session`; the title is shown in the panel | Changing lecture clears the draft; closing the tab; browser quit |
 | **Control of the lecture video**: pause and seek to the start of the passage when a new audio is loaded (no Sync needed); Play/Pause/±5 s from the panel; with **Sync with video** on (user's choice) also mute and speed | The content script sets the video's `paused`, `currentTime` and, with Sync, `muted` and `playbackRate`; reads position | Nothing leaves the browser | n/a (Sync restores mute and speed when it turns off) | Turn Sync off |
@@ -83,7 +83,7 @@ quota, YouTube/Supadata) are in [WEBSITE-POLICY-NOTES.md](WEBSITE-POLICY-NOTES.m
 
 | Item | Needed for | Justification text |
 |---|---|---|
-| `contextMenus` | **Send to MyDubb** | Adds one right-click item, shown only when text is selected on a Udemy page, to send that selection to the side panel. |
+| `contextMenus` | **Send to MyDubb** | Adds one right-click item, shown only when text is selected on a web page (`http` or `https`), to send that selection to the side panel. Chrome gives the selected text to the extension when the item is clicked; no site permission is needed. |
 | `sidePanel` | The panel | Shows the transcript, the dubbing controls and the player in Chrome's side panel for the current tab. |
 | `storage` | Draft, job, connection | Used only as `chrome.storage.session` (memory, cleared when the browser quits): the selected text, form choices, the job being followed, the translation of the loaded audio and the MyDubb sign-in token. |
 | `identity` | **Connect MyDubb** | `chrome.identity.launchWebAuthFlow` opens the MyDubb sign-in window so the password is typed on mydubb.com, never in the extension. |
@@ -97,8 +97,9 @@ No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downl
 
 ## 5. Single purpose (draft)
 
-> Turn the English transcript text a user selects on an Udemy lecture page into audio in another
-> language with the user's own MyDubb account, and play it next to the lecture video.
+> Turn the English transcript text a user selects on a web page or pastes into the panel into
+> audio in another language with the user's own MyDubb account, and play it in the panel (next to the
+> video on an Udemy lecture page).
 
 ## 6. Privacy practices tab: what the facts require (pending confirmation on the dashboard)
 
@@ -117,7 +118,7 @@ and compare each definition below with the facts. Until then every row is "pendi
 |---|---|---|---|
 | E-mail and display name of the connected account | "Personally identifiable information" (name, e-mail, any ID number) | Stored in the extension; held by the server | Matches on its face: pending dashboard confirmation |
 | MyDubb bearer token | "Authentication information" (logins, passwords, authentication cookies) | Stored in the extension, sent to the server | Matches on its face: pending |
-| Selected transcript text (and the user's edits of it), and the translation received for it | "Website content and resources"; also possibly "User-generated content" | Text read from the Udemy page, stored in the session, sent to the server and to Azure on Generate; the translation is stored in the session too | Matches on its face: pending |
+| Selected transcript text (and the user's edits of it), and the translation received for it | "Website content and resources"; also possibly "User-generated content" | Text the user selects on a web page (Chrome hands it over at the menu click) or pastes, stored in the session, sent to the server and to Azure on Generate; the translation is stored in the session too | Matches on its face: pending |
 | Lecture URL path (course slug, lecture id) and page title | "Web browsing activity": "information about the websites or other web resources a user requests or interacts with" | Read by the extension, kept in the browser, **not** sent to MyDubb | Meets the definition as written, and Chrome counts local handling: pending dashboard confirmation of how local-only data is declared |
 | Video state (time, duration, paused, speed, muted) of the lecture | Possibly "Website content and resources" | Read and written locally, not sent | Pending |
 | Pointer and key events on Udemy pages, only while Sync is on (the time of the latest one; no key, position or content recorded) | Possibly the dashboard's "User activity" | Read, used in memory, not stored or sent | Pending: confirm whether transient local use counts |

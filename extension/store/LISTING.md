@@ -32,8 +32,9 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 >
 > **How it works**
 > 1. Connect your MyDubb account once, with the Connect MyDubb button at the top of the panel.
-> 2. On a lecture page, select transcript text, right-click and choose **Send to MyDubb**. The side
->    panel opens with three blocks, one under the other.
+> 2. On a lecture page (or any web page), select transcript text, right-click and choose **Send to
+>    MyDubb**, or open the panel and paste the transcript. The side panel opens with three blocks,
+>    one under the other.
 > 3. **English transcript**: check the text and the two start times, First and Last sentence
 >    starts: where in the video the passage begins and ends. The Video controls show the
 >    lecture's current time to help you fill them.
@@ -57,7 +58,11 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 >   and no guest mode.
 > - You choose the transcript text and the start times yourself; MyDubb does not read the course
 >   or transcribe the video for you.
-> - Works on Udemy lecture pages only.
+> - On Udemy lecture pages the video controls, Sync and the floating player work. On any other web
+>   page (for example a video host) you can send or paste a transcript, generate and listen in the
+>   panel, but there are no video controls, no Sync and no floating player.
+> - Text sent from a page other than Udemy is the text Chrome gives to the menu, which can lose line
+>   breaks; check it in the panel before you generate.
 > - Your text and choices are sent to MyDubb when you press Generate audio, and are processed by
 >   Microsoft Azure to translate and create the voice. See the privacy policy.
 > - The extension pauses the lecture video and moves it to the start of your passage. With Sync
@@ -76,7 +81,8 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 1. Ask the operator (Can Nguyen) for an invitation `[PO: how a user asks; support@mydubb.com is the confirmed address, whether invitations are requested there is not]`; activate the account on mydubb.com.
 2. Install the extension, open an Udemy lecture you have access to, **reload the tab**.
 3. In the panel (toolbar button **Open MyDubb**) choose **Connect MyDubb** and sign in in the
-   window that opens. Or select transcript text → right-click → **Send to MyDubb**, then connect.
+   window that opens. Or select transcript text on a page → right-click → **Send to MyDubb** (or paste the
+   transcript into the panel), then connect.
 4. Check the text and the First/Last sentence starts, choose language, voice and speed →
    **Generate audio**.
 5. When **Your audio** shows the translation and a paused player, press Play. Turn on **Sync with
@@ -89,8 +95,10 @@ times**).
 ## Limits (state them, do not hide them)
 
 - Invitation accounts only; guests cannot use the extension. No payment in the extension.
-- Udemy lecture pages only, top frame; quizzes and articles have no video; no YouTube or other
-  site in the extension.
+- Video controls, Sync and the floating player: Udemy lecture pages only, top frame; quizzes and
+  articles have no video. Other http(s) pages: transcript, Generate and the panel's player only (no
+  video adapter); no YouTube import in the extension. Off Udemy the selection is Chrome's own text
+  and may lose line breaks (the user checks or pastes instead).
 - Text you select, not an automatic transcript; no speech-to-text.
 - Closing the panel while a job runs: the new audio is loaded when you open the panel again.
 - Audio is made per request and kept on the server for a short time (1 hour on production, 2026-11-01); a reload

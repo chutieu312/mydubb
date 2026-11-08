@@ -23,6 +23,7 @@ import {
 import { editTimestamp } from "../../../frontend/src/lib/timestampInput";
 import { formatSeconds, parseTimestamp, previewTargetDuration } from "../../../frontend/src/lib/timestamps";
 import { analyzeTranscriptTiming, captionClock, type TranscriptTiming } from "../../../frontend/src/lib/transcriptTiming";
+import { PAGE_SOURCE } from "../shared/lesson";
 import { formKey, jobKey, loadedKey } from "../shared/messages";
 import { PLAYER_SEEK_SECONDS, sourceRangeOf, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
 import { clockLabel, isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
@@ -110,6 +111,15 @@ const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
 };
 
 type Storage = Pick<chrome.storage.StorageArea, "get" | "set" | "remove">;
+
+/**
+ * What the tab's results are tied to: a lecture key, PAGE_SOURCE for a tab that shows no lecture
+ * (an ordinary web page, or a Udemy page that is not a lecture), undefined while the tab has not
+ * reported a page state yet (then anything stored is kept and decided when it does).
+ */
+function sourceOf(lesson: CurrentLesson): string | undefined {
+  return lesson === undefined ? undefined : (lesson ?? PAGE_SOURCE);
+}
 
 /**
  * The source span of one Generate click, for Sync with video: plain mode, the two start times of
@@ -237,6 +247,7 @@ function dubbingUi() {
     videoPlace: byId("video-place"),
     playerLoad: byId<HTMLButtonElement>("player-load"),
     playerEmpty: byId("player-empty"),
+    sync: byId("sync"),
     syncStatus: byId("sync-status"),
     syncToggle: byId<HTMLButtonElement>("sync-toggle"),
     syncConfirm: byId("sync-confirm"),
@@ -441,10 +452,10 @@ export class Dubbing {
     if (isFormRecord(form) && this.formEdits === 0) this.form = form;
     this.applyAuth(stored[AUTH_KEY], false);
     const loaded = stored[loadedKey(this.deps.tabId)];
-    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), this.host.currentLesson())) this.loaded = loaded;
+    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), sourceOf(this.host.currentLesson()))) this.loaded = loaded;
     else if (loaded !== undefined) this.clearLoaded(); // another owner, an older shape or no account
     const record = stored[jobKey(this.deps.tabId)];
-    if (isJobRecord(record) && recordBelongs(record, this.account(), this.host.currentLesson())) {
+    if (isJobRecord(record) && recordBelongs(record, this.account(), sourceOf(this.host.currentLesson()))) {
       this.record = record;
       this.renderRecord();
       if (record.state === "created") {
@@ -507,11 +518,12 @@ export class Dubbing {
       if (this.lastLesson !== undefined) this.lessonGen += 1;
       this.lastLesson = key;
     }
-    if (this.record && !recordBelongs(this.record, this.account(), key)) {
+    const source = sourceOf(key);
+    if (this.record && !recordBelongs(this.record, this.account(), source)) {
       this.dropJob(LESSON_CHANGED);
     }
     // The translation of the loaded audio goes with its lecture, with or without a job record.
-    if (this.loaded && !loadedBelongs(this.loaded, this.account(), key)) this.clearLoaded();
+    if (this.loaded && !loadedBelongs(this.loaded, this.account(), source)) this.clearLoaded();
     this.checkPlayer();
     if (this.form.lessonKey !== key) {
       // The times belong to the transcript of one lecture; the language, voice and speed stay.
@@ -863,16 +875,14 @@ export class Dubbing {
     if (this.sendingOp !== null || !this.meta) return;
     const auth = this.auth;
     if (!auth) return;
-    const lessonKey = this.host.currentLesson();
+    // A tab without a Udemy lecture (or not yet reporting one) generates for itself: its result is
+    // tied to this tab, account and click like any other, and dropped if a lecture shows up.
+    const lessonKey = sourceOf(this.host.currentLesson()) ?? PAGE_SOURCE;
     const transcript = this.host.transcript();
     this.setFieldErrors([]);
     ui.formError.textContent = "";
-    if (typeof lessonKey !== "string") {
-      ui.formError.textContent = "Open the Udemy lecture this transcript belongs to, then try again.";
-      return;
-    }
     if (transcript.trim() === "") {
-      ui.formError.textContent = "There is no transcript. Send a selection from the lecture first.";
+      ui.formError.textContent = "There is no transcript. Paste one above, or select text on the page and choose “Send to MyDubb”.";
       return;
     }
 
@@ -1170,8 +1180,9 @@ export class Dubbing {
    */
   private async loadAudio(auth: StoredAuth, signal: AbortSignal, current: () => boolean): Promise<void> {
     const target = this.resultAudio;
-    const lessonKey = target?.record.lessonKey ?? this.host.currentLesson();
-    const sync = target?.sync ?? null;
+    const lessonKey = target?.record.lessonKey ?? sourceOf(this.host.currentLesson());
+    // Sync moves a lecture video: an ordinary page has none, so its audio is listened to on its own.
+    const sync = lessonKey === PAGE_SOURCE ? null : (target?.sync ?? null);
     const jobId = target?.record.jobId;
     if (!target || !jobId || typeof lessonKey !== "string") return;
     const ui = this.ui;
@@ -1220,7 +1231,7 @@ export class Dubbing {
       }
       this.rememberLoaded(target.translation, { userId: auth.user.id, connectionId: auth.connectionId, lessonKey });
       ui.audioStatus.textContent = AUDIO_READY;
-      void this.placeVideo(target.record, lessonKey, current);
+      if (lessonKey !== PAGE_SOURCE) void this.placeVideo(target.record, lessonKey, current);
     } finally {
       this.loadingAudio = false;
       if (!this.disposed) this.checkPlayer();
@@ -1349,7 +1360,7 @@ export class Dubbing {
 
   private sessionBelongs(view: PanelPlayerView): boolean {
     const auth = this.auth;
-    const lesson = this.host.currentLesson();
+    const lesson = sourceOf(this.host.currentLesson());
     return (
       !!auth &&
       view.owner.userId === auth.user.id &&
@@ -1370,7 +1381,13 @@ export class Dubbing {
     const view = this.deps.player.view;
     if (view && !this.sessionBelongs(view)) {
       this.deps.player.end(view.sessionId);
-    } else if (view && !view.linked && this.linkedFor !== view.sessionId && this.host.currentLesson() === view.lessonKey) {
+    } else if (
+      view &&
+      view.lessonKey !== PAGE_SOURCE &&
+      !view.linked &&
+      this.linkedFor !== view.sessionId &&
+      this.host.currentLesson() === view.lessonKey
+    ) {
       this.linkedFor = view.sessionId;
       this.host.linkPlayback(view.lessonKey);
     }
@@ -1410,13 +1427,18 @@ export class Dubbing {
         ui.playerDuration.textContent = formatTime(view.duration);
       }
       ui.playerSeek.setAttribute("aria-valuetext", `${formatTime(view.currentTime)} of ${formatTime(view.duration)}`);
+      // The floating player and Sync with video belong to a Udemy lecture page: shown only for one.
+      const lecture = view.lessonKey !== PAGE_SOURCE;
+      ui.playerFloating.hidden = !lecture;
+      ui.sync.hidden = !lecture;
       ui.playerFloating.textContent = view.floating ? "Hide floating player" : "Show floating player";
       ui.playerProblem.textContent = view.problem
         ? PLAYER_PROBLEMS[view.problem]
         : view.status === "loading"
           ? "Loading the audio…"
           : "";
-      this.renderSync(view);
+      if (lecture) this.renderSync(view);
+      else this.confirmingSync = false;
     } else {
       this.confirmingSync = false;
       ui.playerState.textContent = "";

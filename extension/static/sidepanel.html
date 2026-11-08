@@ -48,12 +48,12 @@
           <h2 id="draft-heading"><label for="transcript">English transcript</label></h2>
           <p id="draft-status" class="small" role="status" aria-live="polite"></p>
         </div>
-        <p id="draft-hint" class="sr-only">On Udemy, select transcript text, right-click, then choose “Send to MyDubb”.</p>
+        <p id="draft-hint" class="sr-only">Paste the English transcript, or select text on a page, right-click, then choose “Send to MyDubb”.</p>
         <textarea
           id="transcript"
           rows="5"
           spellcheck="false"
-          placeholder="On Udemy, select transcript text, right-click, then choose “Send to MyDubb”."
+          placeholder="Paste the English transcript here, or select text on a page, right-click and choose “Send to MyDubb”."
           aria-describedby="draft-hint transcript-error"
         ></textarea>
         <button id="clear" type="button" class="quiet">Clear</button>
@@ -129,7 +129,7 @@
         <p id="generate-hint" class="hint"></p>
         <details class="more">
           <summary>Timing &amp; details</summary>
-          <p>Use the start times shown in the Udemy transcript; the video time above helps to find them.</p>
+          <p>Use the start times shown in the transcript's source; on a Udemy lecture the video time above helps to find them.</p>
           <p id="timing-note" hidden>
             Timing follows the captions and is estimated: some sentences may be grouped together or start slightly off their caption time.
           </p>
@@ -196,8 +196,8 @@
             <details class="more">
               <summary>Playback details</summary>
               <p>
-                The audio keeps playing when this panel is closed. Sync applies to the loaded audio above and moves the Udemy video only
-                while it is on.
+                The audio keeps playing when this panel is closed. On a Udemy lecture, Sync applies to the loaded audio above and moves the
+                video only while it is on; on any other page the audio plays on its own.
               </p>
             </details>
           </div>

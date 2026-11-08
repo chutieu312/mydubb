@@ -31,6 +31,8 @@ import {
 import { Dubbing } from "./dubbing";
 import { PlayerLink } from "./player";
 
+const NO_LECTURE_LINK =
+  "No Udemy lecture is linked to this tab, so there are no video controls. You can still paste a transcript, generate and listen here.";
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
 const SAVE_DEBOUNCE_MS = 250;
@@ -70,6 +72,7 @@ const ui = {
   confirm: byId("confirm"),
   confirmReplace: byId<HTMLButtonElement>("confirm-replace"),
   confirmKeep: byId<HTMLButtonElement>("confirm-keep"),
+  videoBox: byId("video-box"),
   videoStatus: byId("video-status"),
   timeCurrent: byId("time-current"),
   timeDuration: byId("time-duration"),
@@ -235,13 +238,17 @@ class Panel {
     if (hadState) {
       this.setLinkStatus("Connection to the Udemy tab was lost (reload or navigation). Reconnecting…");
     } else if (this.retries === 0) {
-      this.setLinkStatus(
-        "MyDubb is not active in this tab. Open a Udemy lecture page; if it is already open, reload the tab.",
-      );
+      // An ordinary web page has no content script, so nothing answers: that is not an error. The
+      // panel works there without a video; it keeps looking in case the tab becomes a lecture.
+      this.setLesson("Not a Udemy lecture", "This tab shows no Udemy lecture.");
+      this.setLinkStatus(NO_LECTURE_LINK);
     }
     if (this.retries >= MAX_RETRIES) {
-      this.setLinkStatus("Could not reach the Udemy tab. Reload the lecture tab, then click Reconnect.");
-      ui.reconnect.hidden = false;
+      if (hadState) {
+        this.setLesson("Not a Udemy lecture", "This tab shows no Udemy lecture.");
+        this.setLinkStatus("Could not reach the Udemy tab. Reload the lecture tab, then click Reconnect.");
+        ui.reconnect.hidden = false;
+      }
       return;
     }
     this.retries += 1;
@@ -274,7 +281,7 @@ class Panel {
     ui.confirm.hidden = true;
     ui.reconnect.hidden = true;
     this.setLesson("—", "—");
-    this.setLinkStatus("The linked tab was closed. Open a Udemy lecture and send a selection to start again.");
+    this.setLinkStatus("The linked tab was closed. Open a page and send a selection to start again.");
     this.renderVideo();
     this.dubbing.tabClosed();
   }
@@ -329,6 +336,9 @@ class Panel {
   private renderVideo(): void {
     const video = this.state?.video;
     const connected = this.port !== null && this.state !== null;
+    // The video controls exist only for a Udemy lecture the tab reported: nowhere else is there a
+    // video MyDubb can control, so nothing is offered.
+    ui.videoBox.hidden = !(connected && this.state?.lesson);
     let status: string;
     if (!connected) {
       status = "Video controls are unavailable until the lecture tab is connected.";
@@ -600,7 +610,7 @@ function shortTitle(title: string): string {
 const tabId = parseTabId(location.search);
 if (tabId === null) {
   ui.linkStatus.textContent =
-    "This panel is not linked to a tab. On a Udemy lecture, select text and choose “Send to MyDubb”, or click the MyDubb toolbar button.";
+    "This panel is not linked to a tab. On a page, select text and choose “Send to MyDubb”, or click the MyDubb toolbar button.";
   ui.transcript.disabled = true;
   ui.clear.disabled = true;
 } else {

@@ -148,7 +148,9 @@ test("replaced video, SPA lecture change, reload and tab close", async ({ contex
   // Tab closed: panel says so, controls off, session data removed.
   await page.close();
   await expect(panel.getByText(/linked tab was closed/)).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Play video" })).toBeDisabled();
+  // The video controls go away with the tab (nothing to control), and stay inert.
+  await expect(panel.locator("#video-box")).toBeHidden();
+  await expect(panel.locator("#playpause")).toBeDisabled();
   await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toBeNull();
 });
 
@@ -180,8 +182,10 @@ test("unsupported tab and missing tab are reported with controls disabled", asyn
     return tabs[tabs.length - 1]!.id!;
   });
   const panel = await openPanel(context, extensionId, otherId);
-  await expect(panel.getByText(/MyDubb is not active in this tab/)).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Play video" })).toBeDisabled();
+  // An ordinary page is not an error: no video controls are offered, the rest of the panel works.
+  await expect(panel.getByText(/No Udemy lecture is linked to this tab/)).toBeVisible();
+  await expect(panel.locator("#video-box")).toBeHidden();
+  await expect(panel.locator("#playpause")).toBeDisabled();
   // The web page has no channel into the extension.
   expect(await other.evaluate(() => typeof (window as { chrome?: { runtime?: { id?: string } } }).chrome?.runtime?.id)).toBe("undefined");
 
