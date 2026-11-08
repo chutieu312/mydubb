@@ -16,6 +16,9 @@ asking for its status, its translation and its audio file (see
 [store/PRIVACY-AUDIT.md](store/PRIVACY-AUDIT.md)); **Connect MyDubb** opens the sign-in. Guests
 ("Try as guest") cannot use the extension.
 
+A separate, development-only **Sync prototype** for HTML5 video on other sites (not part of this
+extension or its Store package) is in [prototype/](prototype/README.md).
+
 ## Build and install
 
 Requires Node 22+ and Chrome 116+ (desktop).

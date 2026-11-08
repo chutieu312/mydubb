@@ -3,7 +3,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "dist-test", "node_modules", "playwright-report", "test-results"] },
+  { ignores: ["dist", "dist-test", "dist-prototype", "dist-prototype-test", "node_modules", "playwright-report", "test-results"] },
   {
     files: ["**/*.{ts,js,mjs}"],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
@@ -26,7 +26,7 @@ export default tseslint.config(
   },
   {
     // Tests and fixture pages build their own static markup.
-    files: ["**/*.test.ts", "e2e/**"],
+    files: ["**/*.test.ts", "e2e/**", "prototype/e2e/**"],
     rules: { "no-restricted-properties": "off" },
   },
 );
