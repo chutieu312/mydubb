@@ -367,8 +367,19 @@ Otherwise every word shaped like a timestamp (`0:19`, `10:05`, `00:23`, `1:02:03
 - every timestamp is valid, has caption text after it, and the times never go back;
 - no caption is far too short for the time until the next timestamp: at most 30 s plus 2 s a word
   (catches "1:20 we meet at 9:30 every day", where `9:30` is not a caption start);
+- no timestamp reads as a time that was said: none comes right after `at`, `by`, `from`, `until`,
+  `till`, `til`, `around`, `since` or `past`, or right before `am`, `pm` (`a.m.`), `o'clock` or
+  `sharp` (catches "9:20 We meet at 9:30 every day. 9:40 ...", in order and at a plausible pace).
+  A real caption that ends in one of these words ("look at" / `0:05`) is then kept as sent too;
 - the restored text is a valid timed transcript for the shared parser (last caption later than the
   first).
+
+**What one line of text cannot tell.** These rules are evidence, not proof. A time that was said,
+written like the timestamps, between two of them, at a plausible pace and without any of the words
+above ("9:20 We meet 9:30 every day. 9:40 ...") looks exactly like a caption start and is restored as
+one. That is why the panel asks to check the lines it restored, and why Copy → Paste (or, if the
+Product Owner approves it, reading the page's own selection with `activeTab` + `scripting`) is the
+only way to be certain.
 
 The result is the usual format (a timestamp line, then the caption text), so the panel, the request
 and the server read it with the parser they already share; the server parser is unchanged. The last

@@ -111,6 +111,31 @@ describe("restoreCaptionLines", () => {
     expect(restoreCaptionLines(text)).toEqual({ kind: "kept" });
   });
 
+  it.each([
+    // PR #55 review (P2): 9:20 and 9:40 are captions, 9:30 is when they meet. Nothing in one line of
+    // text tells that apart from three captions, so the whole selection is kept, never re-timed.
+    ["M:SS", "9:20 We meet at 9:30 every day. 9:40 Bring your notes."],
+    ["MM:SS (Loom)", "09:20 We meet at 09:30 every day. 09:40 Bring your notes."],
+    ["MM:SS (YouTube past ten minutes)", "10:20 We open at 10:30 every day. 10:40 Bring your notes."],
+    ["a time followed by a.m.", "9:20 The bus leaves 9:30 a.m. daily. 9:40 Bring your notes."],
+    ["a time followed by sharp", "09:20 Doors open 09:30 sharp, 09:40 so come early."],
+    // The cost of the rule: a real caption that ends in "at" is kept too (Copy -> Paste still works).
+    ["a caption ending in at", "0:04 Now look at 0:06 the dashboard."],
+  ])("keeps a selection with a spoken time in the timestamps' notation as sent: %s", (_, text) => {
+    expect(restoreCaptionLines(text)).toEqual({ kind: "kept" });
+  });
+
+  it("restores the captions and keeps a spoken time that cannot be a timestamp, in M:SS and MM:SS", () => {
+    expect(restoreCaptionLines("9:20 We meet at 9:30. 9:40 Bring your notes.")).toEqual({
+      kind: "restored",
+      text: "9:20\nWe meet at 9:30.\n9:40\nBring your notes.",
+    });
+    expect(restoreCaptionLines("09:20 We meet at 09:30. 09:40 Bring your notes.")).toEqual({
+      kind: "restored",
+      text: "09:20\nWe meet at 09:30.\n09:40\nBring your notes.",
+    });
+  });
+
   it("refuses a caption far too short for the time until the next timestamp", () => {
     // Two words: at most 30 s + 2 x 2 s before the next timestamp.
     expect(restoreCaptionLines("0:00 one two 0:34 three")).toMatchObject({ kind: "restored" });

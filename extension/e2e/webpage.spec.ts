@@ -216,7 +216,14 @@ for (const site of [
   });
 }
 
-test("a one-line selection whose timestamps cannot be told apart from the words is kept as sent, with the Copy -> Paste hint", async ({
+for (const unsure of [
+  // "9:30" is shaped like a timestamp but goes back in time.
+  "1:22 The meeting starts at 9:30 sharp 1:24 so please be on time.",
+  // PR #55 review (P2): in order and at a plausible pace, but "at 9:30" is a time that was said.
+  "9:20 We meet at 9:30 every day. 9:40 Bring your notes.",
+  "09:20 We meet at 09:30 every day. 09:40 Bring your notes.",
+]) {
+  test(`a one-line selection whose timestamps cannot be told apart from the words is kept as sent, with the Copy -> Paste hint: ${unsure}`, async ({
   context,
   worker,
   extensionId,
@@ -225,8 +232,7 @@ test("a one-line selection whose timestamps cannot be told apart from the words 
   const { page, tabId } = await openWebPage(context, worker, YOUTUBE_TRANSCRIPT_URL);
   const panel = await openPanel(context, extensionId, tabId);
   await connectAccount(panel, mydubb, extensionId);
-  // "9:30" is shaped like a timestamp but goes back in time: nothing is split, nothing is removed.
-  const unsure = "1:22 The meeting starts at 9:30 sharp 1:24 so please be on time.";
+  // Nothing is split and nothing is removed.
   await sendMenuSelection(worker, tabId, unsure, page.url());
   const textarea = panel.getByRole("textbox", { name: "English transcript" });
   await expect(textarea).toHaveValue(unsure);
@@ -235,7 +241,8 @@ test("a one-line selection whose timestamps cannot be told apart from the words 
   await expect(panel.getByLabel("First sentence starts")).toHaveValue("");
   await expect(panel.getByLabel("Last sentence starts")).toHaveValue("");
   expect(mydubb.posts("/api/jobs")).toHaveLength(0);
-});
+  });
+}
 
 test("an empty or too long selection is reported, and an edited draft is only replaced after confirmation", async ({
   context,

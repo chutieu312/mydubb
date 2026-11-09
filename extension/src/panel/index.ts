@@ -528,7 +528,9 @@ class Panel {
     const lines = pending.text.split("\n").length;
     let status = `Selection received (${pending.text.length} characters, ${lines} line${lines === 1 ? "" : "s"}).`;
     if (pending.captionLines === "restored") {
-      status += " Chrome sent it without line breaks, so each caption timestamp was put back on its own line.";
+      status +=
+        " Chrome sent it without line breaks, so each caption timestamp was put back on its own line." +
+        " Check that every time on a line of its own is a caption start, not a time that was said.";
     } else if (pending.captionLines === "kept") {
       status +=
         " Chrome sent it without line breaks, and its timestamps could not be told apart from the spoken words with" +
