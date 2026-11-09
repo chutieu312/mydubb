@@ -51,13 +51,19 @@ describe("handleMenuClick", () => {
     expect(api.sidePanel.setOptions).toHaveBeenCalledWith({ tabId: 9, path: "sidepanel.html?tabId=9", enabled: true });
     expect(api.sidePanel.open).toHaveBeenCalledWith({ tabId: 9 });
     expect(api.tabsSendMessage).toHaveBeenCalledWith(9, { type: "mydubb:get-selection" }, { frameId: 0 });
-    expect(pending).toEqual({ id: "id-1", text, problem: null, lessonKey: "c/1", at: 42 });
+    expect(pending).toEqual({ id: "id-1", text, problem: null, captionLines: null, lessonKey: "c/1", at: 42 });
     expect(api.session.set).toHaveBeenCalledWith({ "pending:9": pending });
   });
 
   it("falls back to Chrome's selection text when the content script is unreachable", async () => {
     const { api } = fakeApi(new Error("Receiving end does not exist"));
     expect(await handleMenuClick(api, click(), { id: 3 })).toMatchObject({ text: "collapsed text", lessonKey: null, problem: null });
+  });
+
+  it("never reformats the content script's exact selection, even on one line", async () => {
+    const text = "0:05 not split 0:21 here";
+    const { api } = fakeApi({ type: "mydubb:selection", text, tooLong: false, lesson });
+    expect(await handleMenuClick(api, click(), { id: 3 })).toMatchObject({ text, captionLines: null });
   });
 
   it("ignores malformed replies and uses the fallback", async () => {
@@ -102,8 +108,31 @@ describe("handleMenuClick", () => {
       expect(api.sidePanel.open).toHaveBeenCalledWith({ tabId: 12 });
       expect(api.tabsSendMessage).not.toHaveBeenCalled();
       // The text as Chrome gave it: nothing reformatted or guessed (timestamps stay where they are).
-      expect(pending).toEqual({ id: "id-1", text, problem: null, lessonKey: null, at: 42 });
+      expect(pending).toEqual({ id: "id-1", text, problem: null, captionLines: null, lessonKey: null, at: 42 });
       expect(api.session.set).toHaveBeenCalledWith({ "pending:12": pending });
+    });
+
+    it("puts caption timestamps back on their own lines when Chrome collapsed them, and says so", async () => {
+      const { api } = fakeApi(null);
+      const oneLine = "00:00 Hi everyone, welcome to the tour. 00:23 First, open the reports tab. 00:38 Finally, export it.";
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: oneLine }), { id: 1 })).toEqual({
+        id: "id-1",
+        text: "00:00\nHi everyone, welcome to the tour.\n00:23\nFirst, open the reports tab.\n00:38\nFinally, export it.",
+        problem: null,
+        captionLines: "restored",
+        lessonKey: null,
+        at: 42,
+      });
+      // Not certain (a time in the words breaks the order): kept exactly as Chrome sent it.
+      const unsure = "0:24 The meeting starts at 9:30 sharp 0:27 so be on time.";
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: unsure }), { id: 1 })).toMatchObject({
+        text: unsure,
+        captionLines: "kept",
+      });
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: "Plain notes at 9:30." }), { id: 1 })).toMatchObject({
+        text: "Plain notes at 9:30.",
+        captionLines: null,
+      });
     });
 
     it("accepts http pages and a selection inside an iframe", async () => {

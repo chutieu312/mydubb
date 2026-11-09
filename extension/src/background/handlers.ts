@@ -14,6 +14,7 @@ import {
   type SelectionReply,
 } from "../shared/messages";
 import type { WorkerToPlayer } from "../shared/playback";
+import { restoreCaptionLines } from "./captionLines";
 
 export const MENU_ID = "mydubb-send-selection";
 /**
@@ -108,7 +109,9 @@ function pageKind(url: string | undefined): "udemy" | "web" | null {
 /**
  * "Send to MyDubb": open the panel, then hand the selection to it via session storage. On Udemy the
  * content script returns the exact selection (line breaks intact); on any other http(s) page there
- * is no content script and Chrome's own selectionText is all there is.
+ * is no content script and Chrome's own selectionText is all there is. That text has its whitespace
+ * collapsed, so caption timestamps are put back on their own lines when that is certain
+ * (captionLines.ts) and the text is otherwise kept as Chrome sent it.
  */
 export async function handleMenuClick(
   api: WorkerApi,
@@ -135,19 +138,27 @@ export async function handleMenuClick(
     }
   }
 
-  let text = reply && reply.text.trim() !== "" ? reply.text : (info.selectionText ?? "");
+  // The content script's exact selection, or else Chrome's selectionText.
+  const exact = reply && reply.text.trim() !== "" ? reply.text : null;
+  let text = exact ?? info.selectionText ?? "";
   let problem: PendingSelection["problem"] = null;
+  let captionLines: PendingSelection["captionLines"] = null;
   if (reply?.tooLong || text.length > MAX_SELECTION_CHARS) {
     text = "";
     problem = "too-long";
   } else if (text.trim() === "") {
     text = "";
     problem = "empty";
+  } else if (exact === null) {
+    const restored = restoreCaptionLines(text);
+    if (restored.kind === "restored") text = restored.text;
+    if (restored.kind !== "none") captionLines = restored.kind;
   }
   const pending: PendingSelection = {
     id: api.randomId(),
     text,
     problem,
+    captionLines,
     lessonKey: reply?.lesson?.key ?? null,
     at: api.now(),
   };

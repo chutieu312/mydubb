@@ -6,6 +6,7 @@ const pending = (text: string, lessonKey: string | null = "c/1", problem: Pendin
   id: "p",
   text,
   problem,
+  captionLines: null,
   lessonKey,
   at: 0,
 });
