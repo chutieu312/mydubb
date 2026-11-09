@@ -239,6 +239,14 @@ class Settings(BaseSettings):
     guest_sessions_global: int = Field(default=300, ge=1, le=1_000_000)
     guest_session_rate_window_seconds: int = Field(default=3600, ge=60, le=24 * 3600)
 
+    # Shared daily cap on new jobs and on YouTube imports, for everyone but administrators
+    # (accounts, guests, Access Code sessions), counted when the backend accepts an operation and
+    # reset at 00:00 UTC (docs/API.md, "Usage limits"). Off by default; when on, both numbers are
+    # required. Not a money or provider-credit limit.
+    usage_caps_enabled: bool = False
+    usage_cap_generates_per_day: int | None = Field(default=None, ge=1, le=1_000_000)
+    usage_cap_youtube_imports_per_day: int | None = Field(default=None, ge=1, le=1_000_000)
+
     access_max_failures_per_client: int = Field(default=5, ge=1)
     access_max_failures_global: int = Field(default=50, ge=1)
     access_failure_window_seconds: int = Field(default=900, ge=1)
@@ -368,6 +376,20 @@ class Settings(BaseSettings):
             )
         if self.guest_access_enabled:
             self._check_guest_access()
+        if self.usage_caps_enabled:
+            missing = [
+                name
+                for name, value in (
+                    ("USAGE_CAP_GENERATES_PER_DAY", self.usage_cap_generates_per_day),
+                    ("USAGE_CAP_YOUTUBE_IMPORTS_PER_DAY", self.usage_cap_youtube_imports_per_day),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    "USAGE_CAPS_ENABLED=true needs " + " and ".join(missing) + " (whole numbers "
+                    "of at least 1); the caps are never on with a number left out"
+                )
         if self.extension_ids and self.auth_mode is not AuthMode.COGNITO:
             raise ValueError("EXTENSION_IDS needs AUTH_MODE=cognito")
         if self.job_stale_after_seconds < 3 * self.job_heartbeat_interval_seconds:

@@ -39,7 +39,15 @@ as for accounts.
 | YouTube imports per guest session | 5 | `GUEST_IMPORTS_PER_SESSION` | Successful imports over the session's lifetime; apart from jobs ([YouTube import quota](#youtube-import-quota)) |
 | YouTube imports per client network | 20 per sliding 24 hours | `GUEST_IMPORTS_PER_IP`, `GUEST_IP_WINDOW_SECONDS` | Successful imports of every guest session from that network; a used import counts from its success |
 
-Invitation accounts have none of these limits (no quota row is written for them).
+Accounts never use these quotas (no guest quota row is written for them); they have their plan's
+limits instead (Free: 20 jobs and 5 imports a day, 1,000 words and 600 s per job; administrators
+none), see [API.md, Usage limits](API.md#usage-limits).
+
+**The shared cap.** When `USAGE_CAPS_ENABLED=true`, a guest job or import also counts once in
+MyDubb's shared daily cap for everyone but administrators, in the same transaction and after the
+guest locks (a cap refusal, `503 generate_daily_cap_reached` / `import_daily_cap_reached`, writes
+no job, no place and no count). The two count differently: a guest's own places are given back
+when its job or import fails, the shared cap counts at admission and gives nothing back.
 
 The backend decides every limit; the UI only previews the word count and shows the remaining jobs
 and, separately, the remaining imports the server reports (`GET /api/guest/session`).
@@ -83,7 +91,8 @@ guest access and an import provider (`GET /api/guest/session` -> `imports` is no
 **A quota of its own** (`guest_import_quota`, migration `0008`), apart from jobs: an import never
 uses up an audio job and a job never uses up an import; the UI shows the two counts separately.
 Same network identification (normalization, keyed hash, `CLIENT_IP_HEADER` trust boundary) and
-the same sliding window as jobs. Accounts have no import quota (no row is written for them).
+the same sliding window as jobs. Accounts never use it (no row is written for them); their own
+daily import quota is their plan's ([API.md, Usage limits](API.md#usage-limits)).
 
 **One operation, settled once** (`guest/imports.py`). Every guest import is one row, identified by
 its own id, holding only the guest session, the network's keyed hash, its state, the instance

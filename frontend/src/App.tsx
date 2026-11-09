@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { accountApi, planName, type AccountUsage } from "./api/accountApi";
 import { authApi } from "./api/authApi";
 import type { AuthUser } from "./api/authTypes";
 import { ApiError, api, setCsrfToken } from "./api/client";
@@ -9,6 +10,7 @@ import { usageApi } from "./api/usageApi";
 import { AppFooter } from "./components/AppFooter";
 import { AppHeader } from "./components/AppHeader";
 import { AccessGate } from "./features/access/AccessGate";
+import { PlanBanner } from "./features/account/PlanBanner";
 import { AdminGate, type AdminAccess } from "./features/admin/AdminGate";
 import { UsagePage } from "./features/admin/UsagePage";
 import { PasswordAuthFlow } from "./features/auth/PasswordAuthFlow";
@@ -74,6 +76,14 @@ export function App() {
   // again only on Try again. A later refusal of a report request ends it ("ended").
   const [adminCheck, setAdminCheck] = useState<{ key: string; access: AdminAccess } | null>(null);
   const [adminAttempt, setAdminAttempt] = useState(0);
+  // Today's usage limits of the signed-in account, kept with the identity generation that asked
+  // for them so they never show under another account. Asked once per identity, then only after
+  // a Generate, an import or a quota refusal (no polling); `usageRequest` drops an answer that a
+  // newer request of the same identity already replaced.
+  const [accountUsage, setAccountUsage] = useState<{ gen: number; usage: AccountUsage } | null>(
+    null,
+  );
+  const usageRequest = useRef(0);
 
   // Identity generation. Every change of who is using the page (session restored, sign in, sign
   // out, session ended, guest session started) starts a new one. The answer to a request sent
@@ -276,11 +286,37 @@ export function App() {
     [isCurrent, expireSession],
   );
 
+  const hasAccount = auth === "authenticated" && mode === "cognito";
+  const refreshAccount = useCallback(
+    (gen: number) => {
+      usageRequest.current += 1;
+      const request = usageRequest.current;
+      accountApi
+        .usage()
+        .then((usage) => {
+          if (isCurrent(gen) && request === usageRequest.current) setAccountUsage({ gen, usage });
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent(gen)) return;
+          if (err instanceof ApiError && err.isUnauthenticated) expireSession();
+          // Otherwise keep the last known numbers; the server still enforces the limits.
+        });
+    },
+    [isCurrent, expireSession],
+  );
+  // Once per identity: a new sign-in, or the session restored.
+  useEffect(() => {
+    if (hasAccount) refreshAccount(identity);
+  }, [hasAccount, identity, refreshAccount]);
+  const usageNow =
+    hasAccount && accountUsage !== null && accountUsage.gen === identity ? accountUsage.usage : null;
+
   // Callbacks for child components, bound to the identity they were rendered for: when a request
   // a component sent before an identity change answers, it cannot act on the new identity.
   const bound = useMemo(() => {
     const gen = identity;
     const guestMode = auth === "guest";
+    const accountMode = hasAccount;
     return {
       sessionExpired: () => {
         if (isCurrent(gen)) expireSession();
@@ -289,6 +325,10 @@ export function App() {
         if (!isCurrent(gen)) return;
         setJobId(job.id);
         if (guestMode) refreshGuest(gen);
+        if (accountMode) refreshAccount(gen);
+      },
+      accountChanged: () => {
+        if (isCurrent(gen) && accountMode) refreshAccount(gen);
       },
       guestChanged: () => {
         if (isCurrent(gen)) refreshGuest(gen);
@@ -300,7 +340,7 @@ export function App() {
         setAdminCheck({ key: `${gen}#${adminAttempt}`, access: "ended" });
       },
     };
-  }, [identity, auth, adminAttempt, isCurrent, expireSession, refreshGuest]);
+  }, [identity, auth, hasAccount, adminAttempt, isCurrent, expireSession, refreshGuest, refreshAccount]);
 
   // The Studio stays mounted behind the Usage page, so its form and job are as they were on
   // return. Sound does not go on without its controls on screen: the player pauses and keeps its
@@ -466,6 +506,9 @@ export function App() {
                   Paste a transcript, choose a voice and speed, then listen and download the MP3.
                 </p>
               </section>
+              {usageNow && (
+                <PlanBanner usage={usageNow} youtubeImport={meta.youtube_import?.enabled === true} />
+              )}
               {auth === "guest" && guest && (
                 <GuestBanner
                   quota={guest.quota}
@@ -500,6 +543,16 @@ export function App() {
                         imports: guestImports,
                         windowSeconds: guest.quota.ip_window_seconds,
                         onImportFinished: bound.guestChanged,
+                      }
+                    : undefined
+                }
+                account={
+                  hasAccount
+                    ? {
+                        label: usageNow ? `${planName(usageNow.plan)} plan` : "",
+                        maxWords: usageNow?.max_words ?? null,
+                        maxOutputSeconds: usageNow?.max_output_seconds ?? null,
+                        onUsageChanged: bound.accountChanged,
                       }
                     : undefined
                 }

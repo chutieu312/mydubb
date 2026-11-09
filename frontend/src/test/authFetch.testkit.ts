@@ -86,6 +86,23 @@ export const META = {
   result_ttl_seconds: 3600,
   auth: { mode: "cognito", self_registration: false, password_reset: true },
 };
+/** GET /api/account/usage of a Free account; `used` per kind. */
+export const accountUsage = (
+  generateUsed = 0,
+  importUsed = 0,
+  overrides: Record<string, unknown> = {},
+) => ({
+  plan: "free",
+  exempt: false,
+  day: "2030-01-01",
+  resets_at: "2030-01-02T00:00:00Z",
+  generate: { used: generateUsed, limit: 20, remaining: Math.max(0, 20 - generateUsed) },
+  youtube_import: { used: importUsed, limit: 5, remaining: Math.max(0, 5 - importUsed) },
+  max_words: 1000,
+  max_output_seconds: 600,
+  ...overrides,
+});
+
 export const metaWith = (auth: unknown) => () => json(200, { ...META, auth });
 export const meta = () => json(200, META);
 
@@ -107,6 +124,11 @@ export function installAuthFetch(routes: Record<string, Handler[]>) {
       // Every signed-in account asks this once. An ordinary user unless a test says otherwise.
       if (path === "/api/admin/session" && !queues.has(`${method} ${path}`)) {
         return apiError(403, "admin_required", "This requires an administrator.");
+      }
+      // Asked once per signed-in account and after a Generate or an import: a fresh Free day
+      // unless a test says otherwise.
+      if (path === "/api/account/usage" && !queues.has(`${method} ${path}`)) {
+        return json(200, accountUsage());
       }
       const queue = queues.get(`${method} ${path}`);
       const first = queue?.[0];

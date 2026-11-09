@@ -11,6 +11,7 @@ from app.db import session_scope
 from app.guest.imports import release_stale_imports
 from app.guest.service import GuestPolicy, delete_stale_rows, settle_jobs
 from app.jobs.service import fail_interrupted_jobs, fail_stale_jobs, heartbeat_jobs
+from app.quotas.service import delete_old_counters
 from app.services import AppServices
 from app.usage.store import delete_usage_older_than, limit_waits
 
@@ -117,6 +118,11 @@ def run_cleanup(services: AppServices) -> None:
         guest_rows = delete_stale_rows(db, _guest_retention(services))
     if settled:
         logger.warning("Settled %d guest quota place(s) of jobs that had ended", settled)
+    # Daily usage counters of past days (only today's are enforced).
+    with session_scope(services.session_factory) as db:
+        counters = delete_old_counters(db)
+    if counters:
+        logger.info("Cleanup removed %d old daily usage counter(s)", counters)
     _purge_usage(services)
     if removed or sessions or auth_rows or guest_rows:
         logger.info(

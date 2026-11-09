@@ -2,9 +2,9 @@
 
 An import holds a provider connection (and briefly a thread for the rate limiter and for parsing)
 while it waits, so only a few may run at once; one more is refused straight away
-(`youtube_import_busy`) instead of waiting in a queue. This bounds resources, not usage: accounts
-have no import quota; guests have one of their own (guest/imports.py), checked after admission so
-a refused import writes nothing.
+(`youtube_import_busy`) instead of waiting in a queue. This bounds resources, not usage: the
+usage limits (app/quotas: the plan's daily imports, the shared cap) and the guests' own quota
+(guest/imports.py) are checked after a slot is taken, so a busy refusal counts nothing.
 """
 
 import contextlib

@@ -170,6 +170,18 @@ function installBackend(overrides: Record<string, Handler> = {}): Fake {
     "GET /api/meta": () => json(200, META_WITH_LANGUAGES),
     "GET /api/auth/me": () => json(200, session()),
     "GET /api/admin/session": () => json(200, { role: "admin" }),
+    // Asked once per signed-in account (the plan banner of the Studio).
+    "GET /api/account/usage": () =>
+      json(200, {
+        plan: "free",
+        exempt: true,
+        day: "2030-01-01",
+        resets_at: "2030-01-02T00:00:00Z",
+        generate: { used: 0, limit: null, remaining: null },
+        youtube_import: { used: 0, limit: null, remaining: null },
+        max_words: null,
+        max_output_seconds: null,
+      }),
     "POST /api/auth/logout": () => new Response(null, { status: 204 }),
     "GET /api/admin/usage/summary": (url) => json(200, summaryOf(url)),
     "GET /api/admin/usage/jobs": (url) => json(200, jobsOf(url)),
