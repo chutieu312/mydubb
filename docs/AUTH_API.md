@@ -165,6 +165,11 @@ Requires the session and `X-CSRF-Token`. `204`, revokes the session server-side 
 cookie. `401 not_authenticated` when the session is already invalid (treat as logged out, like the
 Access Code logout). `403 csrf_failed` leaves the session active.
 
+### `GET /api/account/usage`
+The account's usage limits for today (plan, used / limit / remaining jobs and imports, the 00:00
+UTC reset, per-job limits; `exempt: true` for an administrator). Website session only.
+Contract: [API.md, Usage limits](API.md#get-apiaccountusage).
+
 ### `GET /api/admin/session`
 Whether the caller is a MyDubb administrator right now ([AUTHENTICATION.md](AUTHENTICATION.md#administrators)).
 It returns nothing else and lists nobody.

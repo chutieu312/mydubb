@@ -287,6 +287,82 @@ Responses:
 - `503 server_at_capacity` + `Retry-After` when running + queued jobs are at
   `JOB_MAX_CONCURRENCY + JOB_MAX_QUEUED`.
 - `401` / `403` for missing session / CSRF.
+- The [usage limits](#usage-limits): `422 plan_word_limit_exceeded` /
+  `422 plan_duration_limit_exceeded` (an account plan's per-job limits),
+  `429 daily_generate_quota_exhausted` (the account's daily jobs), `503 generate_daily_cap_reached`
+  (MyDubb's shared daily cap). Guests have their own codes ([Jobs as a guest](#jobs-as-a-guest)).
+
+## Usage limits
+
+Who may start how much, decided by the backend at admission (`backend/app/quotas/`). The client
+never chooses them: a `role`, `plan` or `user_id` in a request body is ignored.
+
+| Caller | Limits |
+|---|---|
+| Account, plan **Free** (every account today, invited or not; `users.plan`, set by the backend) | **20 jobs** (`POST /api/jobs`, website and extension together) and **5 YouTube imports** a day, counted apart; per job at most **1,000 words** and **600 s** of audio. Plus the shared cap |
+| Account with the **administrator** role (`users.role = 'admin'`, [AUTHENTICATION.md](AUTHENTICATION.md#administrators)) | None of MyDubb's usage limits: no daily quota, no per-job word or length limit, not the shared cap. Capacity (`server_at_capacity`, `youtube_import_busy`), timeouts and the providers' own limits still apply. Its jobs and imports are still counted (and its jobs still have usage records) |
+| Guest | The guest quotas ([Guest access](#guest-access)), plus the shared cap |
+| Access Code session (`AUTH_MODE=access_code`, the rollback path) | No account, so no account quota: the shared cap only |
+
+**When a job or an import counts.** Once, when the backend accepts it: the job's row and its
+counts are committed in one transaction before the worker starts; an import's counts are committed
+before Supadata is called. A job that then fails (any stage, `interrupted` included) or an import
+whose provider fails, times out or returns unusable captions **still counts** (accounts and the
+shared cap; a guest's own quota gives a failed job or import back as before). A request refused
+before admission counts nothing: validation, authentication, CSRF, a per-job limit, a quota or cap
+refusal, `server_at_capacity`, `youtube_import_busy`. Polling a job, reading its result and playing
+or downloading the audio never count. Nothing is retried by the client or the server.
+
+**The day.** The UTC date of the database clock at admission; every count starts again at
+**00:00 UTC**. A job accepted at 23:59 UTC counts on that day, whenever it ends. Counts are in the
+database, so signing in again, another device, the extension, a restart or a deploy change nothing.
+
+**Order of the checks** for `POST /api/jobs`: validation → `timing_mode_unavailable` → the guest's
+or the plan's per-job limits → (guests) network → `server_at_capacity` → in one transaction: the
+guest quotas or the account quota, then the shared cap, then the job row → commit. Any refusal
+rolls the whole transaction back, so no count, place or job is left behind and the executor slot
+is given back. For `POST /api/transcripts/youtube`: validation → `youtube_import_busy` → in one
+transaction: the guest import quota or the account quota, then the shared cap → commit → Supadata.
+
+| Status | Code | When | Extra |
+|---|---|---|---|
+| `422` | `plan_word_limit_exceeded` | An account's plan (Free: 1,000) allows fewer words in the text to translate; counted like the guest limit (timestamp lines and markup not counted) | `plan`, `word_count`, `max_words`, `fields: [{field: "transcript"}]` |
+| `422` | `plan_duration_limit_exceeded` | The audio would be longer than the plan allows (Free: 600 s): baseline (last − first sentence start) / speed; exactly the limit is accepted. Nothing is clamped or cut | `plan`, `output_seconds`, `max_output_seconds`, `baseline_seconds`, `speed`, `fields: [{field: "last_sentence_start"}]` |
+| `429` | `daily_generate_quota_exhausted` / `daily_import_quota_exhausted` | The account's jobs (or imports) of today are used up | `plan`, `limit`, `resets_at` (ISO 8601, 00:00 UTC), `retry_after_seconds` = `Retry-After` |
+| `503` | `generate_daily_cap_reached` / `import_daily_cap_reached` | MyDubb's shared daily cap for everyone but administrators is reached. Jobs already accepted go on; signing in, results and audio still work | `resets_at`, `retry_after_seconds` = `Retry-After` |
+
+A YouTube import is never shortened to fit a job: it keeps every caption, its order and its
+milliseconds even when it is longer than the plan allows a job; the user shortens it before
+generating, and the import still counted.
+
+**The shared cap** (`USAGE_CAPS_ENABLED`, off by default): `USAGE_CAP_GENERATES_PER_DAY` jobs and
+`USAGE_CAP_YOUTUBE_IMPORTS_PER_DAY` imports per UTC day, summed over every caller that is not an
+administrator, counted at admission and never given back (unlike a guest's own quota, which gives a
+failed job or import back). With the caps on, both numbers are required (whole numbers ≥ 1); a
+missing or invalid one stops the application from starting. It counts operations, not money or
+provider credits.
+
+### `GET /api/account/usage`
+`AUTH_MODE=cognito`; the website session of an account (`401` otherwise). Read only, `no-store`.
+
+```json
+{
+  "plan": "free",
+  "exempt": false,
+  "day": "2026-11-08",
+  "resets_at": "2026-11-09T00:00:00Z",
+  "generate": { "used": 3, "limit": 20, "remaining": 17 },
+  "youtube_import": { "used": 0, "limit": 5, "remaining": 5 },
+  "max_words": 1000,
+  "max_output_seconds": 600
+}
+```
+
+For an administrator `exempt` is `true` and `limit`, `remaining`, `max_words` and
+`max_output_seconds` are `null` (`used` still counts). A preview only: the backend decides each
+admission on its own. The shared cap is not reported. After `resets_at` the answer describes a
+past day: a client asks again (the website does it once at that instant, or when the tab comes
+back to the foreground) and never resets the numbers on its own.
 
 ### `GET /api/jobs/{id}`
 Requires session. Returns the Job body. `404 job_not_found` if the job does not exist **or
@@ -510,9 +586,11 @@ checks, in this order, before anything is written:
 | `503` | `server_at_capacity` | As for everyone; nothing is charged |
 | `429` | `guest_session_quota_exhausted` | The guest session has used (or holds) all its jobs. Extra: `limit` |
 | `429` | `guest_ip_quota_exhausted` | Guests on this network used (or hold) all jobs of the window. `Retry-After` and `retry_after_seconds` when a completed job will leave the window; extra `limit`, `window_seconds` |
+| `503` | `generate_daily_cap_reached` | The shared daily cap, when on ([Usage limits](#usage-limits)); the guest's place is not taken |
 
 A `202` reserves one place in both quotas: completed → used, failed (any reason, including
-`interrupted`) → given back.
+`interrupted`) → given back. With the shared cap on, the same `202` also counts once in the cap,
+which is never given back.
 
 ### YouTube import as a guest
 `POST /api/transcripts/youtube` (below) with the guest session + CSRF: the same request, answer,
@@ -528,6 +606,7 @@ before Supadata is called:
 | `503` | `youtube_import_busy` | As for everyone; nothing written |
 | `429` | `guest_import_session_quota_exhausted` | The guest session has used (or holds) all its imports. Extra: `limit` |
 | `429` | `guest_import_ip_quota_exhausted` | Guests on this network used (or hold) all imports of the window. `Retry-After` and `retry_after_seconds` when a used import will leave the window; extra `limit`, `window_seconds` |
+| `503` | `import_daily_cap_reached` | The shared daily cap, when on ([Usage limits](#usage-limits)); no place is reserved |
 
 An accepted import holds one place in both import quotas while it runs. It counts as used once the
 captions were fetched, checked and written as the transcript, before the `200` is sent, also when
@@ -609,6 +688,7 @@ returned as `401`, so the UI does not take it for an ended session:
 | 503 | `youtube_import_busy` + `Retry-After: 10` | `YOUTUBE_IMPORT_MAX_CONCURRENT` imports already running (admission control, not a quota) |
 | 503 | `youtube_import_cancelled` | The server is shutting down |
 | 429 / 503 | `guest_import_*`, `guest_network_unknown`, `youtube_import_not_recorded` | Guests only: [YouTube import as a guest](#youtube-import-as-a-guest) |
+| 429 / 503 | `daily_import_quota_exhausted`, `import_daily_cap_reached` | The account's daily imports, or the shared cap: [Usage limits](#usage-limits). Once an import is accepted it counts, whatever Supadata answers |
 | 504 | `youtube_import_timeout` | A request not complete within `SUPADATA_TIMEOUT_SECONDS`, the import not complete within `SUPADATA_DEADLINE_SECONDS` (an asynchronous job still running, a stalled or slowly dripping answer, an answer that finished or was checked after the deadline), or no request slot free before the deadline |
 
 How the request is served:

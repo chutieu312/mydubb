@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
+import { ACCOUNT_QUOTA_CODES } from "../../api/accountApi";
 import { ApiError, api } from "../../api/client";
 import { GUEST_QUOTA_CODES, guestImportsLeft, type GuestImportQuota } from "../../api/guestApi";
 import type { Job, TargetLanguageOption, VoiceOption, YouTubeImport } from "../../api/types";
@@ -46,6 +47,19 @@ interface Props {
   onDraftChange?: (draft: StudioDraft) => void;
   // Guest mode: the word limit preview, and what to do when the server says no job is left.
   guest?: GuestLimits;
+  // A signed-in account: its plan's per-job limits (a preview; null when it has none) and what
+  // to do when its daily counts may have changed.
+  account?: AccountLimits;
+}
+
+export interface AccountLimits {
+  // "Free plan"; used in the preview texts.
+  label: string;
+  maxWords: number | null;
+  maxOutputSeconds: number | null;
+  // A job or import was answered with a daily quota refusal, or an import ended: the caller
+  // refreshes the numbers it shows (no polling).
+  onUsageChanged: () => void;
 }
 
 export interface GuestLimits {
@@ -74,6 +88,7 @@ export function DubbingForm({
   initialDraft,
   onDraftChange,
   guest,
+  account,
 }: Props) {
   const [transcript, setTranscript] = useState(initialDraft?.transcript ?? "");
   const [firstStart, setFirstStart] = useState(initialDraft?.firstStart ?? "");
@@ -103,7 +118,16 @@ export function DubbingForm({
   const [quotaRefused, setQuotaRefused] = useState(false);
   const [source, setSource] = useState<Source>("paste");
   const [youtubeUrl, setYoutubeUrl] = useState("");
-  const importer = useYouTubeImport(onSessionExpired, guest?.onImportFinished);
+  const importer = useYouTubeImport(
+    onSessionExpired,
+    guest?.onImportFinished ?? account?.onUsageChanged,
+  );
+  // The per-job limits the preview shows: the guest's, or the account plan's.
+  const limits = guest
+    ? { label: "Guest", maxWords: guest.maxWords, maxOutputSeconds: guest.maxOutputSeconds }
+    : account && account.maxWords !== null && account.maxOutputSeconds !== null
+      ? { label: account.label, maxWords: account.maxWords, maxOutputSeconds: account.maxOutputSeconds }
+      : null;
   const cancelledSuffix = guest ? GUEST_CANCELLED_MAY_COUNT : "";
 
   useEffect(() => {
@@ -129,9 +153,10 @@ export function DubbingForm({
   const selectedLanguage = languages.find((l) => l.id === targetLanguage) ?? VIETNAMESE;
 
   const timing = useMemo(() => analyzeTranscriptTiming(transcript), [transcript]);
+  const counting = limits !== null;
   const wordCount = useMemo(
-    () => (guest ? previewWordCount(transcript) : 0),
-    [guest, transcript],
+    () => (counting ? previewWordCount(transcript) : 0),
+    [counting, transcript],
   );
   const preview = previewTargetDuration(firstStart, lastStart);
   const captionFields = timing.kind === "timed" ? fieldsFromCaptions(timing) : null;
@@ -278,6 +303,7 @@ export function DubbingForm({
         setQuotaRefused(true);
         guest?.onQuotaExhausted();
       }
+      if (err instanceof ApiError && ACCOUNT_QUOTA_CODES.has(err.code)) account?.onUsageChanged();
       setFormError(err instanceof ApiError ? err.message : "Could not start dubbing.");
     } finally {
       setSubmitting(false);
@@ -317,15 +343,16 @@ export function DubbingForm({
           placeholder="Paste the English transcript (with or without timestamps)…"
           aria-invalid={Boolean(fieldErrors.transcript)}
         />
-        {guest && (
+        {limits && (
           <p
-            className={wordCount > guest.maxWords ? "small error" : "small muted"}
+            className={wordCount > limits.maxWords ? "small error" : "small muted"}
             id="word-count"
             aria-live="polite"
           >
-            About {wordCount.toLocaleString("en-US")} of {guest.maxWords.toLocaleString("en-US")}{" "}
+            About {wordCount.toLocaleString("en-US")} of {limits.maxWords.toLocaleString("en-US")}{" "}
             words (timestamps not counted).
-            {wordCount > guest.maxWords && " Guest jobs are limited to this length; shorten it."}
+            {wordCount > limits.maxWords &&
+              ` ${limits.label} jobs are limited to this length; shorten it.`}
           </p>
         )}
         <FieldMessage message={fieldErrors.transcript} />
@@ -390,7 +417,8 @@ export function DubbingForm({
         <LengthSummary
           baselineSeconds={preview}
           speed={speed}
-          maxOutputSeconds={guest?.maxOutputSeconds}
+          maxOutputSeconds={limits?.maxOutputSeconds}
+          limitLabel={limits?.label}
         />
 
         {formError && (

@@ -25,6 +25,11 @@ class Principal:
 
     `is_admin` is read from the user row by each request, and only for a website session: a guest,
     an extension token or an Access Code session is never an administrator.
+
+    `plan` and `quota_exempt` (app/quotas) are read from the same user row by each request, for a
+    website session and for an extension token alike: an administrator's jobs are exempt from the
+    usage limits from either client, while only `is_admin` opens the administration endpoints.
+    Never taken from the request. Without a user (guest, Access Code) they keep their defaults.
     """
 
     session_id: uuid.UUID
@@ -34,6 +39,8 @@ class Principal:
     guest: bool = False
     bearer: bool = False
     is_admin: bool = False
+    plan: str = "free"
+    quota_exempt: bool = False
 
     @property
     def user_id(self) -> uuid.UUID | None:

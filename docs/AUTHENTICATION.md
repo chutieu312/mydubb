@@ -329,8 +329,24 @@ read or changed.
   `403 admin_required` for a signed-in ordinary user. State-changing calls also get the usual
   `403 csrf_failed` and `403 origin_rejected`. Administration exists only with `AUTH_MODE=cognito`:
   an Access Code session has no user and no role.
-- **What it does not change:** quotas, Generate, job ownership (another user's job stays `404`),
-  guest and extension behaviour. `GET /api/auth/me` and the sign-in responses do not show the role.
+- **Usage limits:** the role exempts the account from every MyDubb usage limit (the plan's daily
+  quotas and per-job limits, and the shared cap; [API.md, Usage limits](API.md#usage-limits)), on
+  the website and with the extension's token alike. The exemption is read from the same user row
+  by each admission, so a revoked role applies to the next Generate or import (the day's earlier
+  admissions still count against the plan). Capacity, timeouts and provider limits still apply,
+  and the account's jobs and imports are still counted and recorded. The exemption never opens
+  administration to the extension: the `Authorization` rule above is unchanged.
+- **What it does not change:** job ownership (another user's job stays `404`), guest behaviour,
+  the account's plan (`users.plan` stays as it is). `GET /api/auth/me` and the sign-in responses
+  do not show the role; `GET /api/account/usage` says `exempt: true`.
+
+**Plan.** `users.plan` (migration `0021_free_quotas`; only `free` today, with a CHECK) is the
+customer plan that sets an account's quotas, separate from the role. Every account gets `free`
+from the column's server default when its row is first written, by any sign-in or later
+self-registration; existing accounts were set to `free` by the migration. No API writes it and a
+request never chooses it (a `plan` field in a body is ignored). A self-registration flow must keep
+it that way: create the user row without naming `plan` (or with `free`), never from client data.
+There is no tool to change a plan yet; that comes with paid plans.
 
 ### Granting and revoking
 

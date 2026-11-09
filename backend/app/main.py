@@ -31,6 +31,7 @@ from app.maintenance import (
     job_liveness_loop,
     recover_after_restart,
 )
+from app.quotas.router import router as account_router
 from app.services import AppServices, build_services
 from app.system.router import router as system_router
 from app.youtube_import.router import router as youtube_import_router
@@ -256,6 +257,7 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
         app.include_router(auth_router)
         app.include_router(admin_router)
         app.include_router(admin_usage_router)
+        app.include_router(account_router)
         # With EXTENSION_IDS empty it answers 404 extension_disabled.
         app.include_router(extension_router)
     else:

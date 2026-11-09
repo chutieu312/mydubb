@@ -101,9 +101,12 @@ queued → translating → synthesizing → processing → completed
    └──────────┴──────────────┴─────────────┴──────→ failed (error code + safe message)
 ```
 
-1. `POST /api/jobs` validates input, **reserves an executor slot** (or returns
-   `503 server_at_capacity`), inserts the job (`queued`), commits, starts the pipeline and
-   returns `202` immediately.
+1. `POST /api/jobs` validates input (including the guest's or the account plan's per-job
+   limits), **reserves an executor slot** (or returns `503 server_at_capacity`), counts the job in
+   the usage limits (`app/quotas`: the account's daily quota or the guest quotas, then the shared
+   cap; [API.md, Usage limits](API.md#usage-limits)) and inserts the job (`queued`) in one
+   transaction, commits, starts the pipeline and returns `202` immediately. A refusal rolls the
+   transaction back and gives the slot back.
 2. The pipeline runs in a worker thread (never on the asyncio event loop). Each status change
    is a short committed compare-and-set update (`UPDATE … WHERE status = <expected>`), so a job
    that was already marked failed (e.g. by restart recovery) can never be moved forward by a

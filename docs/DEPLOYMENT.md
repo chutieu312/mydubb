@@ -693,6 +693,20 @@ longer a supported Render rollback target; check with `docker/rollback-target-ch
 0020`. Recording can be turned off with `USAGE_RECORDING_ENABLED=false` (no code rollback needed);
 the report is a local command, never an API ([USAGE_COSTS.md](USAGE_COSTS.md)).
 
+The Free quotas pull request adds migration `0021_free_quotas` after `0020`: the column
+`users.plan varchar(10) NOT NULL DEFAULT 'free'` with a CHECK (`plan IN ('free')`; every existing
+account becomes `free`, roles are not touched) and the table `usage_counters` (one row per subject,
+kind and UTC day). Expand-only: the previous version never reads the table and its user upsert does
+not name `plan`, so it keeps working against the new schema. Its downgrade drops both, losing the
+day's counts (quotas start again from zero) and the plans (all `free` today). Once it is deployed,
+every deploy built before it is no longer a supported Render rollback target; check with
+`docker/rollback-target-check.sh <commit> 0021_free_quotas`. The Free quotas and the administrator
+exemption are on as soon as the code runs (no setting); the shared cap stays off until
+`USAGE_CAPS_ENABLED=true` is set with `USAGE_CAP_GENERATES_PER_DAY` and
+`USAGE_CAP_YOUTUBE_IMPORTS_PER_DAY` (both required, whole numbers ≥ 1; otherwise the application
+does not start). Turning the cap off again is `USAGE_CAPS_ENABLED=false`, no code rollback.
+See [API.md, Usage limits](API.md#usage-limits).
+
 **Before rolling back** (read-only checks):
 
 1. Read the production revision: Neon SQL Editor → `SELECT version_num FROM alembic_version;`

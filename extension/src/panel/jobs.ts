@@ -99,6 +99,9 @@ export function jobErrorMessage(error: unknown): string {
       return "Your MyDubb connection ended. Connect again to continue.";
     case "server_at_capacity":
       return "MyDubb is busy with the maximum number of jobs it can run. Try again in a minute.";
+    // generate_daily_cap_reached: MyDubb's daily limit for everyone (503, not the account's
+    // quota); the server's words say when it resets, so "try again" would be wrong.
+    case "generate_daily_cap_reached":
     case "result_expired":
     case "job_failed":
     case "timing_mode_unavailable":

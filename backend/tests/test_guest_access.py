@@ -311,14 +311,29 @@ def test_signing_in_ends_the_guest_session_and_keeps_jobs_apart(guest_client, fa
     assert guest_client.get(f"/api/jobs/{job}").status_code == 401
 
 
-def test_invitation_accounts_have_no_guest_limits(guest_client, fake_cognito, db_engine):
+def _make_admin(db_engine) -> None:
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE users SET role = 'admin' WHERE email_normalized = :e"), {"e": EMAIL}
+        )
+
+
+def test_accounts_have_their_plans_limits_not_the_guest_ones(guest_client, fake_cognito, db_engine):
+    """Accounts never use the guest quotas; their own limits are their plan's (app/quotas)."""
     fake_cognito.add_user(EMAIL, PASSWORD)
     csrf = sign_in(guest_client, EMAIL, PASSWORD)["csrf_token"]
     headers = {"X-CSRF-Token": csrf}
-    for _ in range(6):
+    for _ in range(6):  # more than a guest session's 5
         created = guest_client.post("/api/jobs", json=VALID_JOB, headers=headers)
         assert created.status_code == 202
         assert wait_for_terminal(guest_client, created.json()["id"])["status"] == "completed"
+    long = guest_client.post(
+        "/api/jobs", json={**VALID_JOB, "transcript": words(1500)}, headers=headers
+    )
+    assert long.status_code == 422
+    assert long.json()["error"]["code"] == "plan_word_limit_exceeded"
+    # An administrator has no such limit.
+    _make_admin(db_engine)
     long = guest_client.post(
         "/api/jobs", json={**VALID_JOB, "transcript": words(1500)}, headers=headers
     )
@@ -443,14 +458,15 @@ def test_a_short_transcript_with_a_ten_hour_baseline_is_refused_before_anything(
     assert no_ip.json()["error"]["code"] == "guest_duration_limit_exceeded"
 
 
-def test_accounts_keep_long_audio(guest_client, fake_cognito, db_engine):
+def test_long_audio_is_for_administrators(guest_client, fake_cognito, db_engine):
     fake_cognito.add_user(EMAIL, PASSWORD)
     csrf = sign_in(guest_client, EMAIL, PASSWORD)["csrf_token"]
-    response = guest_client.post(
-        "/api/jobs",
-        json={**VALID_JOB, "first_sentence_start": "00:00:00", "last_sentence_start": "10:00:00"},
-        headers={"X-CSRF-Token": csrf},
-    )
+    long = {**VALID_JOB, "first_sentence_start": "00:00:00", "last_sentence_start": "10:00:00"}
+    refused = guest_client.post("/api/jobs", json=long, headers={"X-CSRF-Token": csrf})
+    # A Free account: its plan's limit, not the guest one.
+    assert refused.json()["error"]["code"] == "plan_duration_limit_exceeded"
+    _make_admin(db_engine)
+    response = guest_client.post("/api/jobs", json=long, headers={"X-CSRF-Token": csrf})
     assert response.status_code == 202
     assert response.json()["output_duration_seconds"] == 36000
     wait_for_terminal(guest_client, response.json()["id"])

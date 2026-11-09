@@ -941,13 +941,15 @@ select[aria-invalid="true"] {
   border-top: 1px solid var(--line);
 }
 
-.guest-banner {
+.guest-banner,
+.plan-banner {
   display: grid;
   gap: 4px;
   margin-bottom: 16px;
 }
 
-.guest-banner p {
+.guest-banner p,
+.plan-banner p {
   margin: 0;
 }
 

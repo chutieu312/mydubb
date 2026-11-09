@@ -31,6 +31,13 @@ class UserRole(StrEnum):
     ADMIN = "admin"
 
 
+class AccountPlan(StrEnum):
+    """What a customer account may use (app/quotas). Separate from the role: an administrator is
+    exempt from MyDubb's usage limits because of the role, whatever the plan says."""
+
+    FREE = "free"
+
+
 class User(Base):
     """A MyDubb account linked to one Amazon Cognito user.
 
@@ -43,6 +50,7 @@ class User(Base):
     __table_args__ = (
         UniqueConstraint("cognito_issuer", "cognito_sub", name="uq_users_cognito_identity"),
         CheckConstraint("role IN ('user','admin')", name="role_valid"),
+        CheckConstraint("plan IN ('free')", name="plan_valid"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -58,6 +66,11 @@ class User(Base):
     # (scripts/auth_users.py); a sign-in or any API request never writes it.
     role: Mapped[str] = mapped_column(
         String(10), server_default=text("'user'"), default=UserRole.USER.value
+    )
+    # The account's plan (its quotas). Assigned by the backend only: every new account gets the
+    # default, Free; no API request writes it, and a client never chooses it.
+    plan: Mapped[str] = mapped_column(
+        String(10), server_default=text("'free'"), default=AccountPlan.FREE.value
     )
     # Sessions whose sign-in started at or before this instant are invalid (password reset).
     sessions_valid_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
