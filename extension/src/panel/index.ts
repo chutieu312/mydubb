@@ -35,12 +35,6 @@ const NO_LECTURE_LINK =
   "No Udemy lecture is linked to this tab, so there are no video controls. You can still paste a transcript, generate and listen here.";
 const RETRY_DELAY_MS = 1000;
 const MAX_RETRIES = 15;
-// Failed attempts in a row (on a finished page) after which nothing answers because the page has no
-// content script: an ordinary web page. Before that the tab may be a lecture that has not
-// attached its script yet, and Generate waits (see Dubbing: a job filed too early is dropped).
-const ORDINARY_AFTER_FAILURES = 3;
-// How long an open connection may stay without a page state before the panel says so.
-const STATE_WAIT_MS = 5000;
 const SAVE_DEBOUNCE_MS = 250;
 const SEEK_SECONDS = 5;
 // How long a "place" command may wait for the tab's answer (the page itself waits up to 10 s).
@@ -100,13 +94,8 @@ class Panel {
   private receivedState = false;
   private retries = 0;
   private retryTimer: number | null = null;
-  private stateTimer: number | null = null;
   private saveTimer: number | null = null;
   private tabClosed = false;
-  // Known to be an ordinary page (no content script answered); cleared by any page state and when
-  // the tab starts loading again. Neither this nor a state: the source is not known yet.
-  private ordinary = false;
-  private tabLoading = false;
   private state: PageState | null = null;
   private draft: DraftRecord | null = null;
   private awaitingConfirm: PendingSelection | null = null;
@@ -167,7 +156,7 @@ class Panel {
     chrome.tabs.onUpdated.addListener(this.onTabUpdated);
 
     try {
-      this.tabLoading = (await chrome.tabs.get(this.tabId)).status === "loading";
+      await chrome.tabs.get(this.tabId);
     } catch {
       this.markTabClosed();
       return;
@@ -193,7 +182,6 @@ class Panel {
     chrome.tabs.onRemoved.removeListener(this.onTabRemoved);
     chrome.tabs.onUpdated.removeListener(this.onTabUpdated);
     if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
-    this.clearStateTimer();
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);
       this.saveDraftNow();
@@ -220,22 +208,11 @@ class Panel {
       return;
     }
     this.port = port;
-    // Only a Udemy page has a script to answer, so an open connection is a lecture page (or a
-    // Udemy page that is not one) whose state is on its way: Generate waits for it. If it is slow,
-    // the panel says so; it never turns the tab into an ordinary page meanwhile.
-    this.clearStateTimer();
-    this.stateTimer = window.setTimeout(() => {
-      this.stateTimer = null;
-      if (this.port === port && !this.receivedState) {
-        this.setLinkStatus("The Udemy tab has not reported its page yet, so Generate is waiting. Reload the tab if this stays.");
-      }
-    }, STATE_WAIT_MS);
     port.onMessage.addListener((message: unknown) => {
       if (this.port !== port || !isContentToPanel(message)) return;
       if (message.type === "state") {
         const first = !this.receivedState;
         this.receivedState = true;
-        this.clearStateTimer();
         this.retries = 0;
         this.applyState(message.state);
         if (first) this.dubbing.pageConnected();
@@ -254,30 +231,17 @@ class Panel {
   private onDisconnect(): void {
     for (const answer of [...this.placing.values()]) answer({ type: "result", requestId: -1, ok: false, error: "no-video" });
     const hadState = this.receivedState;
-    this.clearStateTimer();
     this.port = null;
     this.state = null;
     this.renderVideo();
     if (this.tabClosed) return;
     if (hadState) {
       this.setLinkStatus("Connection to the Udemy tab was lost (reload or navigation). Reconnecting…");
-    } else if (this.retries === 0 && !this.ordinary) {
-      this.setLesson("Checking this tab…", "Looking for a Udemy lecture in this tab.");
-      this.setLinkStatus("Looking for a Udemy lecture in this tab…");
-    }
-    // An ordinary web page has no content script, so nothing answers: that is not an error. A
-    // lecture that has not attached its script yet looks the same for a moment, so the panel
-    // decides only after several failed attempts on a finished page (or the last retry). Until
-    // then Generate is unavailable; afterwards it works without a video, and keeps looking in case
-    // the tab becomes a lecture (which then replaces the page's job and audio, as a changed lecture).
-    const failures = this.retries + 1;
-    if (!this.ordinary && ((failures >= ORDINARY_AFTER_FAILURES && !this.tabLoading) || failures > MAX_RETRIES)) {
-      this.ordinary = true;
+    } else if (this.retries === 0) {
+      // An ordinary web page has no content script, so nothing answers: that is not an error. The
+      // panel works there without a video; it keeps looking in case the tab becomes a lecture.
       this.setLesson("Not a Udemy lecture", "This tab shows no Udemy lecture.");
       this.setLinkStatus(NO_LECTURE_LINK);
-      this.dubbing.lessonState(null);
-    } else {
-      this.dubbing.sourceChanged();
     }
     if (this.retries >= MAX_RETRIES) {
       if (hadState) {
@@ -301,30 +265,17 @@ class Panel {
   private readonly onTabUpdated = (tabId: number, change: { status?: string }): void => {
     if (tabId !== this.tabId || this.tabClosed) return;
     if (change.status === "loading") {
-      this.tabLoading = true;
+      // Another page is loading in this tab: a result made before it was not made on that page.
+      this.dubbing.pageNavigated();
       if (this.port) this.setLinkStatus("The Udemy tab is loading…");
-      // A new page is loading in this tab: what it shows is not known until it has finished.
-      if (this.ordinary) {
-        this.ordinary = false;
-        this.dubbing.sourceChanged();
-      }
     }
-    if (change.status === "complete") {
-      this.tabLoading = false;
-      if (!this.port) this.connect(true);
-    }
+    if (change.status === "complete" && !this.port) this.connect(true);
   };
-
-  private clearStateTimer(): void {
-    if (this.stateTimer !== null) window.clearTimeout(this.stateTimer);
-    this.stateTimer = null;
-  }
 
   private markTabClosed(): void {
     this.tabClosed = true;
     if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
     this.retryTimer = null;
-    this.clearStateTimer();
     this.port?.disconnect();
     this.port = null;
     this.state = null;
@@ -344,7 +295,6 @@ class Panel {
     const prevKey = previous?.lesson?.key ?? null;
     const nextKey = next.lesson?.key ?? null;
     this.state = next;
-    this.ordinary = false; // the state says what the tab shows
 
     const lessonChanged = previous !== null && prevKey !== nextKey;
     if (lessonChanged) this.setVideoError("");
@@ -567,13 +517,9 @@ class Panel {
     this.setDraftStatus(`Selection received (${pending.text.length} characters, ${lines} line${lines === 1 ? "" : "s"}).`);
   }
 
-  /**
-   * The lecture now shown; null for a tab that shows none; undefined while that is not known (the
-   * tab has not reported a state and is not yet known to be an ordinary page).
-   */
+  /** The lecture now shown; undefined until the tab has reported a state. */
   private currentLesson(): CurrentLesson {
-    if (this.state) return this.state.lesson?.key ?? null;
-    return this.ordinary ? null : undefined;
+    return this.state ? (this.state.lesson?.key ?? null) : undefined;
   }
 
   private onEdit(): void {

@@ -101,9 +101,7 @@ const LESSON_CHANGED =
   "The lecture changed. A job already sent keeps running on MyDubb, but its result is not shown under this lecture.";
 const ACCOUNT_CHANGED = "The MyDubb account changed, so the previous job and result were cleared from this panel.";
 const CONNECTION_ENDED = "Your MyDubb connection ended (expired or disconnected). Connect again to continue.";
-const SOURCE_UNKNOWN =
-  "Checking whether this tab shows a Udemy lecture. Generate is available in a moment; if it stays unavailable, reload the tab.";
-const AUDIO_READY ="Ready. Press play when you want to listen.";
+const AUDIO_READY = "Ready. Press play when you want to listen.";
 const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
   "play-blocked": "Chrome blocked playback. Press Play again.",
   "play-failed": "The audio could not start playing. Press Play to try again, or Load audio.",
@@ -370,6 +368,12 @@ export class Dubbing {
   private authGen = 0;
   private lessonGen = 0;
   private lastLesson: CurrentLesson = undefined;
+  // A result made before the tab's first report belongs to the tab on its own (key "page"). When
+  // that first report names a lecture and the tab has not navigated since the click, it is the page
+  // the click was made on, so the result stays with the tab as long as that lecture is shown
+  // (`adopted`). It is never linked to the video or Sync: only a real change of lecture ends it.
+  private carryPage = false;
+  private adopted: string | null = null;
   private form: FormRecord = { ...EMPTY_FORM };
   private record: JobRecord | null = null;
   // The Generate click whose request has not been answered yet (one at a time).
@@ -454,10 +458,10 @@ export class Dubbing {
     if (isFormRecord(form) && this.formEdits === 0) this.form = form;
     this.applyAuth(stored[AUTH_KEY], false);
     const loaded = stored[loadedKey(this.deps.tabId)];
-    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), sourceOf(this.host.currentLesson()))) this.loaded = loaded;
+    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), this.sourceFor(loaded.lessonKey))) this.loaded = loaded;
     else if (loaded !== undefined) this.clearLoaded(); // another owner, an older shape or no account
     const record = stored[jobKey(this.deps.tabId)];
-    if (isJobRecord(record) && recordBelongs(record, this.account(), sourceOf(this.host.currentLesson()))) {
+    if (isJobRecord(record) && recordBelongs(record, this.account(), this.sourceFor(record.lessonKey))) {
       this.record = record;
       this.renderRecord();
       if (record.state === "created") {
@@ -516,18 +520,27 @@ export class Dubbing {
       this.heldLesson = { key };
       return;
     }
+    const first = this.lastLesson === undefined;
     if (key !== this.lastLesson) {
       if (this.lastLesson !== undefined) this.lessonGen += 1;
       this.lastLesson = key;
     }
-    const source = sourceOf(key);
-    if (this.record && !recordBelongs(this.record, this.account(), source)) {
+    if (this.adopted !== null && key !== this.adopted) {
+      // The tab left the lecture its first report named: a real change, what was made for it goes.
+      this.adopted = null;
+      this.dropJob(LESSON_CHANGED);
+    }
+    // The first report of a tab on which something was generated before it came: the same page.
+    if (first && this.carryPage && key !== null) this.adopted = key;
+    this.carryPage = false;
+    if (this.record && !recordBelongs(this.record, this.account(), this.sourceFor(this.record.lessonKey, key))) {
       this.dropJob(LESSON_CHANGED);
     }
     // The translation of the loaded audio goes with its lecture, with or without a job record.
-    if (this.loaded && !loadedBelongs(this.loaded, this.account(), source)) this.clearLoaded();
+    if (this.loaded && !loadedBelongs(this.loaded, this.account(), this.sourceFor(this.loaded.lessonKey, key))) {
+      this.clearLoaded();
+    }
     this.checkPlayer();
-    this.renderGenerate();
     if (this.form.lessonKey !== key) {
       // The times belong to the transcript of one lecture; the language, voice and speed stay.
       if (this.form.lessonKey !== null) {
@@ -537,6 +550,19 @@ export class Dubbing {
       this.scheduleSave();
       this.renderForm();
     }
+  }
+
+  /** The tab started loading another page: a result made before it is not that page's. */
+  pageNavigated(): void {
+    this.carryPage = false;
+  }
+
+  /**
+   * What an item with this key is compared with: the tab's source, except that a result made for
+   * the tab before its first report stays the tab's while that report's lecture is shown.
+   */
+  private sourceFor(itemKey: string | null, tabKey: CurrentLesson = this.host.currentLesson()): string | undefined {
+    return itemKey === PAGE_SOURCE && this.adopted !== null && this.adopted === tabKey ? PAGE_SOURCE : sourceOf(tabKey);
   }
 
   transcriptChanged(): void {
@@ -837,19 +863,11 @@ export class Dubbing {
 
   private renderGenerate(): void {
     const ui = this.ui;
-    const checking = this.host.currentLesson() === undefined;
-    ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null || checking;
+    ui.generate.disabled = this.disposed || !this.meta || !this.auth || this.sendingOp !== null;
     ui.generate.textContent = this.sendingOp !== null ? "Sending…" : "Generate audio";
-    ui.generateHint.textContent = !this.auth
-      ? "Connect MyDubb (top of the panel) to generate audio."
-      : checking
-        ? SOURCE_UNKNOWN
-        : "Your text is sent to MyDubb only when you choose Generate audio.";
-  }
-
-  /** The tab stopped being known (or became known) as a lecture or an ordinary page. */
-  sourceChanged(): void {
-    if (this.restored) this.renderGenerate();
+    ui.generateHint.textContent = this.auth
+      ? "Your text is sent to MyDubb only when you choose Generate audio."
+      : "Connect MyDubb (top of the panel) to generate audio.";
   }
 
   private scheduleSave(): void {
@@ -886,17 +904,15 @@ export class Dubbing {
     if (this.sendingOp !== null || !this.meta) return;
     const auth = this.auth;
     if (!auth) return;
-    // A click is tied to what the tab shows (a lecture, or an ordinary page). While that is not
-    // known yet nothing is sent: a job filed under "page" would be dropped when the tab then turns
-    // out to be a lecture.
-    const lessonKey = sourceOf(this.host.currentLesson());
+    // A tab without a Udemy lecture (or not yet reporting one) generates for itself: its result is
+    // tied to this tab, account and click like any other, and dropped if a lecture shows up.
+    const lesson = this.host.currentLesson();
+    const lessonKey = sourceOf(lesson) ?? PAGE_SOURCE;
+    // Nothing waits for the page: before its first report the click belongs to the tab on its own.
+    if (lesson === undefined) this.carryPage = true;
+    const transcript = this.host.transcript();
     this.setFieldErrors([]);
     ui.formError.textContent = "";
-    if (lessonKey === undefined) {
-      ui.formError.textContent = SOURCE_UNKNOWN;
-      return;
-    }
-    const transcript = this.host.transcript();
     if (transcript.trim() === "") {
       ui.formError.textContent = "There is no transcript. Paste one above, or select text on the page and choose “Send to MyDubb”.";
       return;
@@ -1376,7 +1392,7 @@ export class Dubbing {
 
   private sessionBelongs(view: PanelPlayerView): boolean {
     const auth = this.auth;
-    const lesson = sourceOf(this.host.currentLesson());
+    const lesson = this.sourceFor(view.lessonKey);
     return (
       !!auth &&
       view.owner.userId === auth.user.id &&

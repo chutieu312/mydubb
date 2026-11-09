@@ -1690,15 +1690,11 @@ describe("an ordinary web page (no Udemy lecture, no video)", () => {
   const mp3 = () => new Blob(["mp3"], { type: "audio/mpeg" });
   const text = (id: string) => $(id).textContent;
 
-  /**
-   * The panel of a tab that never reports a state (Loom, any site without a content script) once
-   * the panel has settled that no script answers: the tab shows no lecture.
-   */
+  /** The panel of a tab whose page never reported a state: Loom, any site without a content script. */
   async function onWebPage(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
-    lesson = null;
+    lesson = undefined;
     const made = make(storage, api);
     await made.dubbing.start();
-    made.dubbing.lessonState(null);
     return made;
   }
 
@@ -1876,6 +1872,7 @@ describe("an ordinary web page (no Udemy lecture, no video)", () => {
     const { dubbing, storage } = await onWebPage(undefined, api);
     $<HTMLButtonElement>("generate").click();
     await settle();
+    dubbing.pageNavigated(); // the tab loaded another page (a Udemy lecture) after the click
     dubbing.lessonState("demo-course/2");
     finish(job("completed"));
     await settle(10);
@@ -1891,6 +1888,7 @@ describe("an ordinary web page (no Udemy lecture, no video)", () => {
     $<HTMLButtonElement>("generate").click();
     await settle(12);
     expect(player.view?.lessonKey).toBe("page");
+    dubbing.pageNavigated();
     dubbing.lessonState("demo-course/2");
     expect(player.view).toBeNull();
     expect($("player-section").hidden).toBe(true);
@@ -1953,136 +1951,168 @@ describe("an ordinary web page (no Udemy lecture, no video)", () => {
   });
 });
 
-describe("a tab whose page state has not arrived yet", () => {
+describe("the tab's first report arrives after Generate (the video or lecture is found late)", () => {
   const text = (id: string) => $(id).textContent;
   const generate = () => $<HTMLButtonElement>("generate");
 
-  /** The panel before the tab says anything: not a lecture, and not yet known to be an ordinary page. */
-  async function unknownSource(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
+  /** The panel before the tab has reported anything: Generate is allowed all the same. */
+  async function beforeReport(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
     lesson = undefined;
     const made = make(storage, api);
     await made.dubbing.start();
     return made;
   }
 
-  /** What the panel does when the tab reports a state: the host answers it first, then Dubbing hears of it. */
   function tabReports(dubbing: Dubbing, key: string | null) {
     lesson = key;
     dubbing.lessonState(key);
   }
 
-  it("does not send anything, says why, and keeps the form editable", async () => {
-    const { api } = await unknownSource();
-    expect(generate().disabled).toBe(true);
-    expect(text("generate-hint")).toMatch(/Checking whether this tab shows a Udemy lecture/);
-    expect(text("generate-hint")).toMatch(/reload the tab/);
+  it("Generate is available without any report, and sends one request under the tab's own key", async () => {
+    const { api, storage } = await beforeReport();
+    expect(generate().disabled).toBe(false);
+    generate().click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page", userId: "u1", connectionId: "conn-a" });
+    expect(player.opened[0]?.request).toMatchObject({ lessonKey: "page", sync: null });
+  });
+
+  it("a report that arrives while the request is on its way keeps the job: followed, translated, loaded, one POST", async () => {
+    let answer!: (value: unknown) => void;
+    const api = fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) });
+    const { dubbing, storage } = await beforeReport(undefined, api);
+    generate().click();
+    await settle();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    tabReports(dubbing, "demo-course/2");
+    answer(job("queued"));
+    await settle(14);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.getJob).toHaveBeenCalledWith(AUTH.token, "job-1", expect.any(AbortSignal));
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page", state: "created", jobId: "job-1" });
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(player.opened).toHaveLength(1);
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: true, currentTime: 0 });
+    // Not tied to the video that was found: no link, no placement, no Sync.
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(player.opened[0]?.request.sync).toBeNull();
+    expect($("sync").hidden).toBe(true);
+  });
+
+  it("a report that arrives while the job is still running keeps following it", async () => {
+    let finish!: (value: unknown) => void;
+    const api = fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+    const { dubbing } = await beforeReport(undefined, api);
+    generate().click();
+    await settle();
+    tabReports(dubbing, "demo-course/2");
+    expect(text("listen-notice")).toBe("");
+    finish(job("completed"));
+    await settle(14);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.getResult).toHaveBeenCalledTimes(1);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(player.view?.owner.jobId).toBe("job-1");
+  });
+
+  it("a report after the audio is loaded or playing leaves it as it is: no Sync, no seek, no link", async () => {
+    const { dubbing } = await beforeReport();
+    generate().click();
+    await settle(12);
+    player.set({ ...player.view!, paused: false, currentTime: 7 });
+    tabReports(dubbing, "demo-course/2");
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: false, currentTime: 7 });
+    expect(player.ended).toEqual([]);
+    expect(player.commands).toEqual([]);
+    expect(player.syncs).toEqual([]);
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect($("sync").hidden).toBe(true);
+    // The same lecture reported again, or the page port reconnecting, changes nothing.
+    tabReports(dubbing, "demo-course/2");
+    dubbing.pageConnected();
+    expect(player.view?.lessonKey).toBe("page");
+    expect(player.ended).toEqual([]);
+  });
+
+  it("a real change afterwards ends it: another lecture, or leaving the lecture", async () => {
+    for (const next of ["demo-course/3", null]) {
+      player = new FakePlayer();
+      const { dubbing, storage } = await beforeReport();
+      generate().click();
+      await settle(12);
+      tabReports(dubbing, "demo-course/2");
+      expect(player.view).not.toBeNull();
+      tabReports(dubbing, next);
+      expect(player.view).toBeNull();
+      await settle();
+      expect(storage.data[`job:${TAB}`]).toBeUndefined();
+      expect($("result-section").hidden).toBe(true);
+      expect(text("listen-notice")).toMatch(/lecture changed/);
+      document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    }
+  });
+
+  it("a tab that navigated after the click is not the page the click was made on", async () => {
+    const { dubbing, storage } = await beforeReport();
+    generate().click();
+    await settle(12);
+    dubbing.pageNavigated();
+    tabReports(dubbing, "demo-course/2");
+    expect(player.view).toBeNull();
+    await settle();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+  });
+
+  it("a click made after the report files under the lecture; the earlier audio plays until the new one is loaded", async () => {
+    let deliver!: (blob: Blob) => void;
+    const api = fakeApi({
+      createJob: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "job-1", status: "queued" })
+        .mockResolvedValueOnce({ id: "job-2", status: "queued" }),
+      getJob: vi.fn(async (_t: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_t: string, id: string) => ({
+        ...RESULT,
+        job_id: id,
+        audio: { ...RESULT.audio, url: `/api/jobs/${id}/result/audio` },
+        translation: { ...RESULT.translation, text: `Bản dịch ${id}` },
+      })),
+    });
+    api.getAudio.mockResolvedValueOnce(new Blob(["a"], { type: "audio/mpeg" })).mockImplementationOnce(() => new Promise((resolve) => (deliver = resolve)));
+    const { dubbing, storage } = await beforeReport(undefined, api);
+    generate().click();
+    await settle(12);
+    tabReports(dubbing, "demo-course/2");
     typeTime("first-start", "000010");
     typeTime("last-start", "000610");
     generate().click();
     await settle(12);
-    expect(api.createJob).not.toHaveBeenCalled();
-    expect($<HTMLInputElement>("first-start").value).toBe("00:00:10");
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "demo-course/2", jobId: "job-2" });
+    expect(player.view?.owner.jobId).toBe("job-1"); // still the earlier audio
+    expect(text("translation")).toBe("Bản dịch job-1");
+    deliver(new Blob(["b"], { type: "audio/mpeg" }));
+    await settle(12);
+    expect(player.view).toMatchObject({ lessonKey: "demo-course/2", owner: { jobId: "job-2" } });
+    expect(text("translation")).toBe("Bản dịch job-2");
+    expect(api.createJob).toHaveBeenCalledTimes(2);
   });
 
-  it("a Udemy state that arrives late enables Generate: one job, filed under the lecture, whose result loads", async () => {
-    const { dubbing, api, storage } = await unknownSource();
-    generate().click(); // too early: nothing is sent
-    await settle();
-    expect(api.createJob).not.toHaveBeenCalled();
-
+  it("an account change or a closed tab ends it as before", async () => {
+    const { dubbing } = await beforeReport();
+    generate().click();
+    await settle(12);
     tabReports(dubbing, "demo-course/2");
-    expect(generate().disabled).toBe(false);
-    expect(text("generate-hint")).toMatch(/only when you choose Generate audio/);
-    generate().click();
-    await settle(12);
-    expect(api.createJob).toHaveBeenCalledTimes(1);
-    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "demo-course/2", state: "created", jobId: "job-1" });
-    expect(player.opened).toHaveLength(1);
-    expect(player.opened[0]?.request.lessonKey).toBe("demo-course/2");
-    expect(text("translation")).toBe("<b>نص</b>");
-    expect(links).toEqual(["demo-course/2"]);
-  });
-
-  it("a page that is settled as ordinary enables Generate with no state at all", async () => {
-    const { dubbing, api } = await unknownSource();
-    expect(generate().disabled).toBe(true);
-    tabReports(dubbing, null);
-    expect(generate().disabled).toBe(false);
-    generate().click();
-    await settle(12);
-    expect(api.createJob).toHaveBeenCalledTimes(1);
-    expect(player.opened[0]?.request.lessonKey).toBe("page");
-  });
-
-  it("a lecture that changes while the first click is being sent drops its answer instead of attaching it", async () => {
-    let answer!: (value: unknown) => void;
-    const api = fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) });
-    const { dubbing } = await unknownSource(undefined, api);
-    tabReports(dubbing, "demo-course/2");
-    generate().click();
-    await settle();
-    expect(api.createJob).toHaveBeenCalledTimes(1);
-    tabReports(dubbing, "demo-course/3");
-    answer(job("queued"));
-    await settle(12);
-    expect(api.getJob).not.toHaveBeenCalled();
-    expect(player.opened).toHaveLength(0);
-    expect(api.createJob).toHaveBeenCalledTimes(1); // never sent again by itself
-  });
-
-  it("an account change while waiting leaves the click to the account that is connected when the state arrives", async () => {
-    const { dubbing, api, storage } = await unknownSource();
     dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
-    expect(generate().disabled).toBe(true);
-    tabReports(dubbing, "demo-course/2");
+    expect(player.view).toBeNull();
+    const second = await beforeReport();
     generate().click();
     await settle(12);
-    expect(api.createJob).toHaveBeenCalledTimes(1);
-    expect(api.createJob.mock.calls[0]?.[0]).toBe(OTHER.token);
-    expect(storage.data[`job:${TAB}`]).toMatchObject({ userId: OTHER.user.id, lessonKey: "demo-course/2" });
-  });
-
-  it("a tab that loads a new page makes the source unknown again; the followed job keeps being followed", async () => {
-    let finish!: (value: unknown) => void;
-    const api = fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
-    const { dubbing } = await unknownSource(undefined, api);
-    tabReports(dubbing, null);
-    generate().click();
-    await settle();
-    expect(api.createJob).toHaveBeenCalledTimes(1);
-
-    lesson = undefined; // the tab started loading another page
-    dubbing.sourceChanged();
+    tabReports(second.dubbing, "demo-course/2");
+    second.dubbing.tabClosed();
     expect(generate().disabled).toBe(true);
-    finish(job("completed"));
-    await settle(12);
-    expect(player.opened).toHaveLength(1);
-    expect(player.opened[0]?.request.lessonKey).toBe("page");
-
-    tabReports(dubbing, null); // still an ordinary page: the same job and audio
-    expect(generate().disabled).toBe(false);
-    expect(player.view).not.toBeNull();
-  });
-
-  it("a stored job of the page is neither dropped nor attached to a lecture only because a state arrives", async () => {
-    const record: JobRecord = {
-      operationId: "op-1",
-      userId: "u1",
-      connectionId: "conn-a",
-      lessonKey: "page",
-      state: "created",
-      jobId: "job-1",
-      sentAt: 0,
-      choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1, timed: false, firstStart: "00:00:10", lastStart: "00:06:10" },
-    };
-    const storage = fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record });
-    const { dubbing, api } = await unknownSource(storage);
-    await settle(10);
-    // Kept while the source is unknown, then dropped for the lecture: never re-filed under it.
-    tabReports(dubbing, "demo-course/2");
-    await settle(10);
-    expect(storage.data[`job:${TAB}`]).toBeUndefined();
-    expect(api.createJob).not.toHaveBeenCalled();
-    expect(player.view?.lessonKey).not.toBe("demo-course/2");
   });
 });
