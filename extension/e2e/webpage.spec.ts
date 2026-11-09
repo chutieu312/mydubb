@@ -4,7 +4,7 @@
 // only: the native "Send to MyDubb" context menu cannot be clicked by Playwright, so those tests
 // call the real worker handler with the text Chrome would pass; the menu itself is accepted by hand.
 
-import type { BrowserContext, Worker } from "@playwright/test";
+import type { BrowserContext, Page, Worker } from "@playwright/test";
 import {
   HTTP_ORIGIN,
   allowConnect,
@@ -20,6 +20,7 @@ import {
   selectTranscript,
   sendMenuSelection,
   sessionGet,
+  tabIdFor,
   test,
   webUrl,
 } from "./harness";
@@ -515,4 +516,115 @@ test("a tab that navigates to a lecture after Generate on a page: the page's res
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
   expect(mydubb.posts("/api/jobs")).toHaveLength(2);
   expect(await sessionGet(worker, `job:${tabId}`)).toMatchObject({ lessonKey: "demo-course/604" });
+});
+
+// ---- The panel is closed and opened again after the early result was confirmed for a lecture ------
+
+/** Early Generate on a Udemy tab whose video is not known yet, then the tab reports the lecture. */
+async function earlyGenerate(
+  context: BrowserContext,
+  worker: Worker,
+  extensionId: string,
+  mydubb: Parameters<typeof connectAccount>[1],
+  id: number,
+) {
+  const { page, tabId, held, loaded } = await openHeldLecture(context, worker, id);
+  const panel = await openPanel(context, extensionId, tabId);
+  await connectAccount(panel, mydubb, extensionId);
+  await panel.getByRole("textbox", { name: "English transcript" }).fill("Generated before the video.");
+  await fillTimes(panel);
+  await panel.getByRole("button", { name: GENERATE }).click();
+  await expect.poll(() => mydubb.posts("/api/jobs").length).toBe(1);
+  return { page, tabId, panel, held, loaded };
+}
+
+async function reopenedPanel(context: BrowserContext, extensionId: string, tabId: number, first: Page) {
+  await first.close();
+  const panel = await openPanel(context, extensionId, tabId);
+  await expect(panel.locator("#account-status")).toHaveText("Connected as Lan");
+  return panel;
+}
+
+test("reopened panel, job still running: it follows the job, then shows the translation and plays the audio", async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  mydubb.advance = false;
+  const { page, tabId, panel, held, loaded } = await earlyGenerate(context, worker, extensionId, mydubb, 607);
+  const [jobId] = [...mydubb.jobs.keys()];
+  held.release();
+  await loaded;
+  await expect(panel.locator("#lesson-label")).toHaveText("Lecture 607");
+  await expect.poll(async () => await sessionGet(worker, `adopted:${tabId}`)).toMatchObject({ lessonKey: "demo-course/607" });
+  const video = await page.evaluate(() => window.fixture.state());
+
+  // Closed and opened again on the same tab, lecture and account, with the job still running.
+  const again = await reopenedPanel(context, extensionId, tabId, panel);
+  await expect(again.locator("#lesson-label")).toHaveText("Lecture 607");
+  await expect(again.locator("#result-section")).toBeVisible();
+  expect(await sessionGet(worker, `job:${tabId}`)).toMatchObject({ jobId, state: "created", lessonKey: "page" });
+  mydubb.complete(jobId!);
+  await expect(again.getByText("Ready. Press play when you want to listen.")).toBeVisible({ timeout: 20_000 });
+  await expect(again.locator("#translation")).toHaveText(`Bản dịch <b>${jobId}</b>`);
+  await again.locator("#player-play").click();
+  await expect.poll(async () => (await playerSessions(worker))[0]?.paused).toBe(false);
+  expect(await playerSessions(worker)).toMatchObject([{ tabId, lessonKey: "page", rate: 1 }]);
+  // One POST in all; not tied to the video: no Sync, nothing moved.
+  expect(mydubb.posts("/api/jobs")).toHaveLength(1);
+  await expect(again.locator("#sync")).toBeHidden();
+  expect(await page.evaluate(() => window.fixture.state())).toEqual(video);
+});
+
+test("reopened panel, audio already loaded and playing: the same result is shown and the audio is not touched", async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  const { page, tabId, panel, held, loaded } = await earlyGenerate(context, worker, extensionId, mydubb, 608);
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  held.release();
+  await loaded;
+  await expect(panel.locator("#lesson-label")).toHaveText("Lecture 608");
+  await panel.locator("#player-play").click();
+  await expect.poll(async () => (await playerSessions(worker))[0]?.paused).toBe(false);
+  const video = await page.evaluate(() => window.fixture.state());
+
+  const again = await reopenedPanel(context, extensionId, tabId, panel);
+  await expect(again.locator("#lesson-label")).toHaveText("Lecture 608");
+  await expect(again.locator("#translation")).toHaveText("Bản dịch <b>job-1</b>");
+  await expect(again.locator("#result-section")).toBeVisible();
+  await expect(again.locator("#player")).toBeVisible();
+  const sessions = await playerSessions(worker);
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0]).toMatchObject({ tabId, lessonKey: "page", paused: false, rate: 1 });
+  expect(mydubb.posts("/api/jobs")).toHaveLength(1);
+  await expect(again.locator("#sync")).toBeHidden();
+  expect(await page.evaluate(() => window.fixture.state())).toEqual(video);
+});
+
+test("reopened panel after the tab went to another lecture: nothing is restored, nothing is sent", async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  const { page, tabId, panel, held, loaded } = await earlyGenerate(context, worker, extensionId, mydubb, 609);
+  await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+  held.release();
+  await loaded;
+  await expect(panel.locator("#lesson-label")).toHaveText("Lecture 609");
+  await panel.close();
+
+  // While the panel is closed the tab goes to a different lecture.
+  await page.goto(lectureUrl(610, "?seconds=60"));
+  await expect.poll(() => tabIdFor(worker, "demo-course/610").catch(() => -1)).toBe(tabId);
+  const again = await openPanel(context, extensionId, tabId);
+  await expect(again.locator("#lesson-label")).toHaveText("Lecture 610");
+  await expect(again.locator("#result-section")).toBeHidden();
+  await expect.poll(() => playerSessions(worker)).toEqual([]);
+  for (const key of ["job", "loaded", "adopted"]) await expect.poll(() => sessionGet(worker, `${key}:${tabId}`)).toBeNull();
+  expect(mydubb.posts("/api/jobs")).toHaveLength(1);
 });

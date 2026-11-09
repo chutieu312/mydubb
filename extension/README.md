@@ -450,7 +450,8 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   sleep orders the events): Paste, Generate, exactly one POST while the video is unknown, the video
   information released while the job runs (still followed, its translation and audio load and play, no
   second POST, no Sync, the video untouched), and released after the audio is loaded and playing (the
-  result stays); a tab that navigates to a lecture after a page Generate (the page's result goes when
+  result stays); the panel closed and opened again after that (job still running, audio loaded and
+  playing, tab moved to another lecture); a tab that navigates to a lecture after a page Generate (the page's result goes when
   the lecture shows); and a Udemy lecture regression (the content script's
   selection, the lecture key, the video paused at the start of the audio, Sync turned on). Autoplay is allowed
   by a browser flag in these tests, so Chrome's autoplay blocking is only unit-tested, and
@@ -549,7 +550,10 @@ use the Azure free allowance.
   tab's first report then names a lecture and the tab has not navigated since the click, the job, its
   translation and its audio are kept and keep working (listening only; the video is not linked, moved
   or synced). A different lecture, leaving the lecture, a navigation after the click, another account
-  or closing the tab still ends it. Sync is for results generated while the lecture and its video are
+  or closing the tab still ends it. The confirmation is kept for the tab (session storage, with the
+  account), so closing and opening the panel again on the same tab, lecture and account restores the
+  running job, the translation and the loaded audio (listening only, nothing resent); another lecture or
+  account while it was closed restores nothing. Sync is for results generated while the lecture and its video are
   known. A navigation still in flight (the old page on screen) is not seen by the panel.
 - Invitation accounts only (no guest), no YouTube import, no automatic transcript extraction, no
   playback speed control (the speed is chosen at Generate), no MP3 download button.

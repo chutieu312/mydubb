@@ -2116,3 +2116,143 @@ describe("the tab's first report arrives after Generate (the video or lecture is
     expect(generate().disabled).toBe(true);
   });
 });
+
+describe("the panel is closed and opened again after the early result was confirmed for a lecture", () => {
+  const text = (id: string) => $(id).textContent;
+  const generate = () => $<HTMLButtonElement>("generate");
+
+  /** First panel: Generate before any report, then the tab reports lecture 2; returns the shared storage. */
+  async function earlyResult(api: ReturnType<typeof fakeApi>) {
+    lesson = undefined;
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    const first = make(storage, api);
+    await first.dubbing.start();
+    generate().click();
+    await settle(12);
+    lesson = "demo-course/2";
+    first.dubbing.lessonState("demo-course/2");
+    return { storage, first };
+  }
+
+  /** The second panel on the same tab: the page state arrives while the stored snapshot is read. */
+  async function reopen(storage: ReturnType<typeof fakeStorage>, api: ReturnType<typeof fakeApi>, key: string | null) {
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    lesson = key;
+    const second = make(storage, api);
+    if (key !== undefined) second.dubbing.lessonState(key);
+    await second.dubbing.start();
+    await settle(14);
+    return second;
+  }
+
+  it("stores the confirmed lecture with the account, next to the job", async () => {
+    const { storage } = await earlyResult(fakeApi());
+    await settle();
+    expect(storage.data[`adopted:${TAB}`]).toEqual({ userId: "u1", connectionId: "conn-a", lessonKey: "demo-course/2" });
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page" });
+  });
+
+  it("a job still running: the reopened panel follows it and gets its translation and audio, with one POST", async () => {
+    let first = true;
+    const api = fakeApi({
+      getJob: vi.fn(async () => (first ? job("processing") : job("completed"))),
+    });
+    // The first panel stops while the job runs (the fake answers "processing").
+    const { storage, first: p1 } = await earlyResult(api);
+    await settle(4);
+    p1.dubbing.dispose();
+    first = false;
+    expect(player.opened).toHaveLength(0);
+    await reopen(storage, api, "demo-course/2");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(player.opened).toHaveLength(1);
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: true, currentTime: 0 });
+    expect(player.opened[0]?.request.sync).toBeNull();
+    // Nothing of the video: no link, no placement, no Sync, no command.
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(player.syncs).toEqual([]);
+    expect(player.commands).toEqual([]);
+    expect($("sync").hidden).toBe(true);
+  });
+
+  it("audio already loaded: the reopened panel shows the same result and does not touch the playing audio", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    player.set({ ...player.view!, paused: false, currentTime: 5 });
+    first.dubbing.dispose();
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    await reopen(storage, api, "demo-course/2");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: false, currentTime: 5, owner: { jobId: "job-1" } });
+    expect(player.ended).toEqual([]);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect($("result-section").hidden).toBe(false);
+    expect($("player").hidden).toBe(false);
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(player.syncs).toEqual([]);
+    expect(player.commands).toEqual([]);
+    expect(storage.data[`adopted:${TAB}`]).toMatchObject({ lessonKey: "demo-course/2" });
+  });
+
+  it("another lecture while the panel was closed: nothing is restored, the audio ends, nothing is sent", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    first.dubbing.dispose();
+    await reopen(storage, api, "demo-course/3");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(player.view).toBeNull();
+    expect($("result-section").hidden).toBe(true);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(storage.data[`loaded:${TAB}`]).toBeUndefined();
+    expect(storage.data[`adopted:${TAB}`]).toBeUndefined();
+  });
+
+  it("a state that arrives after the restore is judged against the stored lecture", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    first.dubbing.dispose();
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    lesson = undefined;
+    const second = make(storage, api);
+    await second.dubbing.start();
+    await settle(8);
+    expect(player.view?.lessonKey).toBe("page"); // not decided yet: kept
+    lesson = "demo-course/3";
+    second.dubbing.lessonState("demo-course/3");
+    await settle(8);
+    expect(player.view).toBeNull();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(storage.data[`adopted:${TAB}`]).toBeUndefined();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("another account: nothing is restored", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    first.dubbing.dispose();
+    storage.data[AUTH_KEY] = OTHER;
+    await reopen(storage, api, "demo-course/2");
+    expect(player.view).toBeNull();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(storage.data[`adopted:${TAB}`]).toBeUndefined();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("a page result that was never confirmed for a lecture is still dropped when a lecture reports", async () => {
+    lesson = undefined;
+    const api = fakeApi();
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    const first = make(storage, api);
+    await first.dubbing.start();
+    generate().click();
+    await settle(12);
+    first.dubbing.dispose(); // closed before any report: no proof of which page it was
+    await reopen(storage, api, "demo-course/2");
+    expect(player.view).toBeNull();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+});
