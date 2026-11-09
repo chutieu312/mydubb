@@ -19,7 +19,7 @@ export const PLAYER_PANEL_PORT = "mydubb-player-panel";
 export const PLAYER_PAGE_PORT = "mydubb-player-page";
 export const AUDIO_CHANNEL = "mydubb-audio";
 export const OFFSCREEN_PAGE = "offscreen.html";
-import { isPageKey } from "./lesson";
+import { isPageKey, isVideoKey } from "./lesson";
 import { SYNC_NOTICES, isSyncSource, type SyncSource, type SyncView } from "./sync";
 
 export const PLAYER_SEEK_SECONDS = 5;
@@ -67,6 +67,8 @@ export interface PanelPlayerView extends PlayerView {
   linked: boolean;
   /** An ordinary page's session: the page (pageKeyOf) whose video it may sync with; null: none. */
   syncPage: string | null;
+  /** With syncPage: the key of that very video (element and media source). */
+  syncVideo: string | null;
 }
 
 export type PlayerCommandName = "play" | "pause" | "seek-by" | "seek-to";
@@ -211,8 +213,9 @@ export interface VideoEvent {
 }
 
 export type PageToPlayer =
-  // `page`: an ordinary page's fingerprint (pageKeyOf), sent with lessonKey PAGE_SOURCE.
-  | { type: "hello"; lessonKey: string; page?: string }
+  // `page` and `video`: an ordinary page's fingerprint (pageKeyOf) and its video's key, sent with
+  // lessonKey PAGE_SOURCE.
+  | { type: "hello"; lessonKey: string; page?: string; video?: string }
   | ({ type: "command"; sessionId: string; lessonKey: string } & PlayerCommand)
   | { type: "close"; sessionId: string; lessonKey: string }
   | { type: "lesson"; lessonKey: string | null }
@@ -228,8 +231,9 @@ export type PlayerToPage = { type: "view"; view: PlayerView } | { type: "ended" 
 export interface PlaybackLinkMessage {
   type: "playback-link";
   lessonKey: string;
-  /** An ordinary page: the page the session may sync with (the content script checks it is shown). */
+  /** An ordinary page: the page and the video the session may sync with (the content script checks both are shown). */
   page?: string;
+  video?: string;
 }
 
 // ---- Service worker -> offscreen (runtime.sendMessage) ---------------------------------------
@@ -309,7 +313,11 @@ export function isPageToPlayer(value: unknown): value is PageToPlayer {
   if (!isObject(value)) return false;
   switch (value.type) {
     case "hello":
-      return isLessonKey(value.lessonKey) && (value.page === undefined || isPageKey(value.page));
+      return (
+        isLessonKey(value.lessonKey) &&
+        (value.page === undefined || isPageKey(value.page)) &&
+        (value.video === undefined || isVideoKey(value.video))
+      );
     case "command":
       return isId(value.sessionId) && isLessonKey(value.lessonKey) && isCommand(value);
     case "close":
@@ -400,7 +408,8 @@ export function isPlaybackLinkMessage(value: unknown): value is PlaybackLinkMess
     isObject(value) &&
     value.type === "playback-link" &&
     isLessonKey(value.lessonKey) &&
-    (value.page === undefined || isPageKey(value.page))
+    (value.page === undefined || isPageKey(value.page)) &&
+    (value.video === undefined || isVideoKey(value.video))
   );
 }
 
@@ -441,7 +450,8 @@ export function isPlayerToPanel(value: unknown): value is PlayerToPanel {
         (isView(value.view) &&
           isOwner((value.view as unknown as PanelPlayerView).owner) &&
           typeof (value.view as unknown as PanelPlayerView).linked === "boolean" &&
-          ((value.view as unknown as PanelPlayerView).syncPage === null || isPageKey((value.view as unknown as PanelPlayerView).syncPage)))
+          ((value.view as unknown as PanelPlayerView).syncPage === null || isPageKey((value.view as unknown as PanelPlayerView).syncPage)) &&
+          ((value.view as unknown as PanelPlayerView).syncVideo === null || isVideoKey((value.view as unknown as PanelPlayerView).syncVideo)))
       );
     case "send-audio":
       return isId(value.transferId);

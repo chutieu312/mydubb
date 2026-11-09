@@ -47,11 +47,18 @@ function load(video, src, at) {
   video.addEventListener("loadedmetadata", () => (video.currentTime = at), { once: true });
 }
 
-const main = makeVideo("main", 640, 360);
+const current = () => document.getElementById("main");
+
+/** The main video element; like a site player, a click on it starts or pauses it. */
+function makeMain() {
+  const video = makeVideo("main", 640, 360);
+  video.addEventListener("click", () => void (video.paused ? video.play() : video.pause()));
+  return video;
+}
+
+const main = makeMain();
 load(main, params.get("media") === "http" ? "/media.wav" : silentWav(120), Number(params.get("at") ?? "100"));
 player.append(main);
-// Like a site player: a click on the video starts or pauses it.
-main.addEventListener("click", () => void (main.paused ? main.play() : main.pause()));
 
 if (params.has("preview")) {
   const preview = makeVideo("preview", 200, 112);
@@ -78,7 +85,17 @@ window.fixture = {
   /** YouTube-style: another video in the same tab and the same element, new address, no reload. */
   next(id, at = 0) {
     history.pushState({}, "", `${location.pathname}?v=${id}`);
-    load(main, silentWav(120), at);
+    load(current(), silentWav(120), at);
+  },
+  /** The player rebuilds its element (another video), the address stays. */
+  replaceElement(at = 30) {
+    const video = makeMain();
+    load(video, silentWav(120), at);
+    current().replaceWith(video);
+  },
+  /** Another media source in the same element, the address stays. */
+  swapSource(at = 30) {
+    load(current(), silentWav(120), at);
   },
   /** Back to an earlier address (and its video). */
   back(id, at = 0) {
@@ -86,6 +103,6 @@ window.fixture = {
   },
   /** The page's own speed control. */
   setRate(rate) {
-    main.playbackRate = rate;
+    current().playbackRate = rate;
   },
 };

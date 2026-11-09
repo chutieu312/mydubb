@@ -188,7 +188,7 @@ export interface DubbingHost {
    * Asks the tab's content script to link its page to the playback session of that lecture (an
    * ordinary page: PAGE_SOURCE and the page the session may sync with).
    */
-  linkPlayback(lessonKey: string, page?: string): void;
+  linkPlayback(lessonKey: string, page?: string, video?: string): void;
   /** An ordinary page, for Sync: whether MyDubb can reach it, and the page and video shown now. */
   pageVideo(): { access: PageAccess; page: string | null; video: VideoState | null };
   /** Pauses the lecture video at `at` seconds; null once done, otherwise why it was not done. */
@@ -988,10 +988,13 @@ export class Dubbing {
     );
     const timed = usesTimestamps(timing, this.form.ignoreTimestamps);
     let sync = syncSourceFor(timing, timed, body.first_sentence_start, body.last_sentence_start, body.speed);
-    // An ordinary page: Sync later only with the page whose one video is identified now, at the
-    // click. A video that shows up after it does not make this result syncable.
+    // An ordinary page: Sync later only with the page and the one video (element and media source,
+    // its key) identified now, at the click. A video that shows up after it, another element or
+    // another source at the same address does not make this result syncable.
     const shown = lessonKey === PAGE_SOURCE ? this.host.pageVideo() : null;
-    if (sync && shown?.page && shown.video?.status === "ready") sync = { ...sync, page: shown.page };
+    if (sync && shown?.page && shown.video?.status === "ready" && shown.video.key) {
+      sync = { ...sync, page: shown.page, video: shown.video.key };
+    }
     const choices: JobChoices = {
       languageLabel: (this.languages.find((l) => l.id === targetLanguage) ?? VIETNAMESE).label,
       voiceLabel: this.voices.find((v) => v.id === voice)?.label ?? voice,
@@ -1271,7 +1274,7 @@ export class Dubbing {
     const lessonKey = target?.record.lessonKey ?? sourceOf(this.host.currentLesson());
     // Sync moves a lecture video, or an ordinary page's video only when the result was made with it
     // (its snapshot names that page); otherwise the audio is listened to on its own.
-    const sync = lessonKey === PAGE_SOURCE ? (target?.sync?.page ? target.sync : null) : (target?.sync ?? null);
+    const sync = lessonKey === PAGE_SOURCE ? (target?.sync?.page && target.sync.video ? target.sync : null) : (target?.sync ?? null);
     const jobId = target?.record.jobId;
     if (!target || !jobId || typeof lessonKey !== "string") return;
     const ui = this.ui;
@@ -1484,14 +1487,16 @@ export class Dubbing {
     ) {
       this.linkedFor = view.sessionId;
       this.host.linkPlayback(view.lessonKey);
-    } else if (view && view.lessonKey === PAGE_SOURCE && view.syncPage !== null && !view.linked) {
-      // An ordinary page: linked for Sync only while it shows the page and the one video the result
-      // was made with (the content script and the player check it again). Asked once per video.
+    } else if (view && view.lessonKey === PAGE_SOURCE && view.syncPage !== null && view.syncVideo !== null && !view.linked) {
+      // An ordinary page: linked for Sync only while it shows the page and the very video (element
+      // and source) the result was made with (the content script and the player check it again).
+      // Asked once per session and video.
       const shown = this.host.pageVideo();
-      const key = shown.video?.status === "ready" ? `${view.sessionId}|${shown.page}|${shown.video.id}` : null;
-      if (key && shown.page === view.syncPage && this.linkedFor !== key) {
+      const video = shown.video?.status === "ready" ? shown.video.key : undefined;
+      const key = `${view.sessionId}|${video}`;
+      if (shown.page === view.syncPage && video === view.syncVideo && this.linkedFor !== key) {
         this.linkedFor = key;
-        this.host.linkPlayback(PAGE_SOURCE, view.syncPage);
+        this.host.linkPlayback(PAGE_SOURCE, view.syncPage, view.syncVideo);
       }
     }
     const shown = this.sessionView();
@@ -1584,11 +1589,18 @@ export class Dubbing {
     const ui = this.ui;
     const shown = this.host.pageVideo();
     const record = this.resultAudio?.record.jobId === view.owner.jobId ? this.resultAudio.record : null;
-    const made = !record ? "unknown" : !record.choices.sync ? "without-span" : record.choices.sync.page ? "with-video" : "without-video";
+    const made = !record
+      ? "unknown"
+      : !record.choices.sync
+        ? "without-span"
+        : record.choices.sync.page && record.choices.sync.video
+          ? "with-video"
+          : "without-video";
     const state = pageSyncState({
       sync: view.sync,
       linked: view.linked,
       syncPage: view.syncPage,
+      syncVideo: view.syncVideo,
       made,
       access: shown.access,
       page: shown.page,

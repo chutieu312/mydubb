@@ -141,7 +141,7 @@ class Panel {
       {
         currentLesson: () => this.currentLesson(),
         transcript: () => ui.transcript.value,
-        linkPlayback: (lessonKey, page) => this.linkPlayback(lessonKey, page),
+        linkPlayback: (lessonKey, page, video) => this.linkPlayback(lessonKey, page, video),
         pageVideo: () => ({
           access: this.access,
           page: this.port && this.state ? this.state.page : null,
@@ -498,8 +498,9 @@ class Panel {
   }
 
   /** Over the tab port: the page links itself to the playback session of this lecture (or page). */
-  private linkPlayback(lessonKey: string, page?: string): void {
-    const message: PlaybackLinkMessage = page === undefined ? { type: "playback-link", lessonKey } : { type: "playback-link", lessonKey, page };
+  private linkPlayback(lessonKey: string, page?: string, video?: string): void {
+    const message: PlaybackLinkMessage =
+      page === undefined ? { type: "playback-link", lessonKey } : { type: "playback-link", lessonKey, page, ...(video ? { video } : {}) };
     try {
       this.port?.postMessage(message);
     } catch {

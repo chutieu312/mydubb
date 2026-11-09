@@ -55,6 +55,7 @@ let rects: Map<HTMLVideoElement, DOMRect>;
 let clock: number;
 let ports: FakePort[];
 let playerPorts: FakePlayerPort[];
+let keys: number;
 
 function start() {
   const session = new PageSession({
@@ -67,6 +68,7 @@ function start() {
     // jsdom's events are never trusted: here "trusted" stands for the user's real input.
     isTrusted: (event) => (event as Event & { user?: boolean }).user === true,
     now: () => clock,
+    randomKey: () => `v-${String(++keys).padStart(16, "0")}`,
     playback: {
       connect: () => {
         const port = new FakePlayerPort();
@@ -84,6 +86,8 @@ function start() {
 
 function addVideo(init: { muted?: boolean; loop?: boolean; rect?: [number, number, number, number] } = {}, parent: HTMLElement = document.body) {
   const v = fakeVideo(document);
+  let src = "blob:https://www.youtube.com/a";
+  Object.defineProperty(v, "currentSrc", { configurable: true, get: () => src, set: (next: string) => (src = next) });
   v.muted = init.muted ?? false;
   v.loop = init.loop ?? false;
   const [x, y, w, h] = init.rect ?? [0, 0, 640, 360];
@@ -111,6 +115,7 @@ beforeEach(() => {
   clock = 10_000;
   ports = [];
   playerPorts = [];
+  keys = 0;
 });
 
 // Every session stops (observer, interval, debounce) before jsdom is torn down.
@@ -200,12 +205,16 @@ describe("an ordinary page's session", () => {
     addVideo();
     const { port, session } = start();
     const page = port.state().page!;
-    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page: "p-00000000000000" });
+    const video = (port.state().video as { key?: string }).key!;
+    expect(video).toBe("v-0000000000000001");
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page: "p-00000000000000", video });
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page, video: "v-ffffffffffffffff" });
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page });
     port.receive({ type: "playback-link", lessonKey: "demo-course/1" });
     expect(playerPorts).toHaveLength(0);
-    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page });
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page, video });
     expect(playerPorts).toHaveLength(1);
-    expect(playerPorts[0]!.sent).toEqual([{ type: "hello", lessonKey: PAGE_SOURCE, page }]);
+    expect(playerPorts[0]!.sent).toEqual([{ type: "hello", lessonKey: PAGE_SOURCE, page, video }]);
 
     // YouTube's next video in the same tab: another address, the link to the old one ends.
     history.pushState(null, "", "/watch?v=BBBB");
@@ -217,6 +226,45 @@ describe("an ordinary page's session", () => {
     history.pushState(null, "", "/watch?v=BBBB#t=30");
     session.refresh();
     expect(port.state().page).toBe(pageKeyOf("https://www.youtube.com/watch?v=BBBB"));
+  });
+
+  it("another element or another source at the same address is another video: new key, the link ends with Sync off", () => {
+    const a = addVideo();
+    const { port, session } = start();
+    const page = port.state().page!;
+    const keyOf = () => (port.state().video as { key?: string }).key;
+    const keyA = keyOf()!;
+    // Nothing changed: the same key, again and again.
+    session.refresh();
+    expect(keyOf()).toBe(keyA);
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page, video: keyA });
+    expect(playerPorts).toHaveLength(1);
+
+    // Another source in the same element (same address): a new key, the link made for A ends.
+    (a as { currentSrc: string }).currentSrc = "blob:https://www.youtube.com/b";
+    a.dispatchEvent(new Event("emptied"));
+    const keyB = keyOf()!;
+    expect(keyB).not.toBe(keyA);
+    expect(playerPorts[0]!.sent.at(-1)).toEqual({ type: "lesson", lessonKey: null });
+    expect(playerPorts[0]!.disconnected).toBe(true);
+    // A link asked for A now is refused.
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page, video: keyA });
+    expect(playerPorts).toHaveLength(1);
+
+    // The same source loaded again (load() fires loadstart): still another video for MyDubb.
+    a.dispatchEvent(new Event("loadstart"));
+    expect(keyOf()).not.toBe(keyB);
+
+    // Another element replaces it (the player rebuilt): another key again.
+    const keyC = keyOf()!;
+    port.receive({ type: "playback-link", lessonKey: PAGE_SOURCE, page, video: keyC });
+    expect(playerPorts).toHaveLength(2);
+    a.remove();
+    visible.delete(a);
+    addVideo();
+    session.refresh();
+    expect(keyOf()).not.toBe(keyC);
+    expect(playerPorts[1]!.disconnected).toBe(true);
   });
 
   it("does not link while several videos are ambiguous", () => {

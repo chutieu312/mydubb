@@ -38,6 +38,8 @@ interface VideoFixture {
   state(id?: string): { paused: boolean; currentTime: number; duration: number; muted: boolean; rate: number; waiting: boolean } | null;
   next(id: string, at?: number): void;
   back(id: string, at?: number): void;
+  replaceElement(at?: number): void;
+  swapSource(at?: number): void;
   setRate(rate: number): void;
 }
 const video = (page: Page, id = "main") =>
@@ -172,7 +174,7 @@ test("Loom-like page: Generate, Sync moves the video to the job's start, both pl
   expect(mydubb.posts("/api/jobs")).toHaveLength(1);
 });
 
-test("YouTube-like page: another video in the same tab ends Sync; the old audio never drives the new video; back to the first video, Sync again", async ({
+test("YouTube-like page: another video in the same tab ends Sync; the old audio never drives the new video, nor the first one loaded again", async ({
   context,
   worker,
   extensionId,
@@ -201,11 +203,11 @@ test("YouTube-like page: another video in the same tab ends Sync; the old audio 
   expect(await video(page)).toMatchObject({ paused: true, currentTime: 7 });
   await playButton(panel).click();
 
-  // The first video's address again (the user went back): the same page, Sync is offered again.
+  // The first video's address again (the user went back): the player loads it as a new source, so
+  // MyDubb cannot confirm it is the video of the click; the audio stays on its own.
   await onPage(page, `window.fixture.back("AAAA", 100)`);
-  await expect(panel.locator("#sync-status")).toHaveText("OFF");
-  await turnOnSync(panel, false);
-  expect((await video(page)).currentTime).toBeGreaterThanOrEqual(V0);
+  await expect(panel.locator("#sync-status")).toHaveText(/the page's video is not the one this audio was made with/);
+  await expect(panel.locator("#sync-toggle")).toBeHidden();
 });
 
 test("the page changes the video's speed while it plays: Sync turns off and says so; the video keeps the page's speed", async ({
@@ -320,7 +322,9 @@ test("no access, reload and account change: listening goes on, Sync only where M
   await plain.page.close();
   await plainPanel.close();
 
-  // Reload of the page with Sync on: Sync ends, the audio stays; the same page again offers Sync.
+  // Reload of the page with Sync on: Sync ends, the audio stays. The reloaded page's video cannot be
+  // confirmed to be the one of the click (a new document, a new element): Sync is not offered again
+  // for this result; Generate again to sync.
   const { page, tabId, panel } = await openVideoPage(context, worker, extensionId, mydubb, loomVideoUrl("reload"));
   await generate(panel, worker, tabId);
   await turnOnSync(panel);
@@ -328,8 +332,10 @@ test("no access, reload and account change: listening goes on, Sync only where M
   await expect(panel.locator("#sync-notice")).toHaveText(/Sync turned off/);
   expect(await sessionOf(worker, tabId)).not.toBeNull();
   await expect.poll(async () => (await video(page))?.duration ?? 0).toBeGreaterThan(100);
-  await expect(panel.locator("#sync-status")).toHaveText("OFF", { timeout: 15_000 });
-  await turnOnSync(panel, false);
+  await expect(panel.locator("#sync-status")).toHaveText(/the page's video is not the one this audio was made with/, { timeout: 15_000 });
+  expect(await video(page)).toMatchObject({ muted: false, rate: 1 });
+  await generate(panel, worker, tabId);
+  await turnOnSync(panel);
   expect(await video(page)).toMatchObject({ muted: true });
 
   // The account connection ends with Sync on: the session ends and the video gets its sound back.
@@ -338,3 +344,42 @@ test("no access, reload and account change: listening goes on, Sync only where M
   await expect.poll(async () => (await video(page)).muted).toBe(false);
   expect((await video(page)).rate).toBe(1);
 });
+
+for (const change of ["replaceElement", "swapSource"] as const) {
+  test(`same address, Sync OFF, the page ${change === "replaceElement" ? "replaces the video element" : "loads another source into the same element"}: Sync is not offered and video B is never touched; audio A plays on its own`, async ({
+    context,
+    worker,
+    extensionId,
+    mydubb,
+  }) => {
+    test.setTimeout(60_000);
+    const { page, tabId, panel } = await openVideoPage(context, worker, extensionId, mydubb, videoSiteUrl(change));
+    await generate(panel, worker, tabId);
+    // The video of the click, unchanged: Sync is offered (OFF, never turned on).
+    await expect(panel.locator("#sync-status")).toHaveText("OFF");
+    await expect(panel.locator("#sync-toggle")).toBeVisible();
+    const url = page.url();
+
+    // Video B at the same address, 0:30, paused, with sound, 1x.
+    await onPage(page, `window.fixture.${change}(30)`);
+    await expect.poll(async () => (await video(page)).currentTime).toBeCloseTo(30, 1);
+    expect(page.url()).toBe(url);
+    await expect(panel.locator("#sync-toggle")).toBeHidden();
+    await expect(panel.locator("#sync-status")).toHaveText(/the page's video is not the one this audio was made with/);
+    expect((await sessionOf(worker, tabId))!.sync.status).toBe("unavailable");
+
+    // Trying anyway (the hidden toggle forced visible and clicked): nothing happens to video B.
+    await panel.locator("#sync-toggle").evaluate((b: HTMLButtonElement) => (b.hidden = false));
+    await panel.locator("#sync-toggle").click();
+    await panel.locator("#sync-on").evaluate((b: HTMLButtonElement) => b.click());
+    // Audio A plays on its own, for a while.
+    await playButton(panel).click();
+    await expect.poll(async () => (await sessionOf(worker, tabId))!.paused).toBe(false);
+    await page.waitForTimeout(2000);
+    expect((await sessionOf(worker, tabId))!.sync.status).toBe("unavailable");
+    expect(await video(page)).toMatchObject({ paused: true, muted: false, rate: 1 });
+    expect((await video(page)).currentTime).toBeCloseTo(30, 1);
+    await playButton(panel).click();
+    await expect.poll(async () => (await sessionOf(worker, tabId))!.paused).toBe(true);
+  });
+}

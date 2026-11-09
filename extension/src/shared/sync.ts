@@ -12,7 +12,7 @@
 //
 // V1 is the START of the last sentence/caption (the job's contract): no tail is added.
 
-import { isPageKey } from "./lesson";
+import { isPageKey, isVideoKey } from "./lesson";
 
 /** What a job's Generate click fixed about its source span; copied at the click, never the form later. */
 export interface SyncSource {
@@ -30,6 +30,11 @@ export interface SyncSource {
    * Udemy lecture (the lecture key is the identity).
    */
   page?: string;
+  /**
+   * With `page`: the key (isVideoKey) of the one video, element and media source, that the page
+   * showed at the click. The same address with another element or source is not this video.
+   */
+  video?: string;
 }
 
 export interface SyncMapping {
@@ -71,7 +76,8 @@ export function isSyncSource(value: unknown): value is SyncSource {
     finite(v.speed) &&
     v.speed > 0 &&
     v.speed <= 10 &&
-    (v.page === undefined || isPageKey(v.page))
+    (v.page === undefined || isPageKey(v.page)) &&
+    (v.video === undefined || isVideoKey(v.video))
   );
 }
 

@@ -10,8 +10,8 @@
 // when a newer result replaces it. With no session left, the document closes itself.
 //
 // An ordinary page's session (PAGE_SOURCE) plays on its own and outlives its page; its page may be
-// linked only for Sync, only while it shows the page whose video the result was made with
-// (`syncPage`, the Generate snapshot's fingerprint). That page going away, or showing another
+// linked only for Sync, only while it shows the page and the very video the result was made with
+// (`syncPage`, `syncVideo`: the Generate snapshot's address fingerprint and video key). That page going away, or showing another
 // address, only unlinks it: Sync ends, the audio and the session stay.
 //
 // Sync with video (story 4): each session has a SyncController (sync.ts), off until the user turns
@@ -128,6 +128,8 @@ class Session {
     syncSource: SyncSource | null,
     /** An ordinary page's session: the page it may sync with (null: none, it plays on its own). */
     readonly syncPage: string | null,
+    /** With syncPage: the key of the video (element and media source) the result was made with. */
+    readonly syncVideo: string | null,
     private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now" | "randomId" | "setTimeout" | "clearTimeout" | "log">,
     private readonly onChange: (session: Session) => void,
     page: { post(message: VideoCommand): boolean; linked(): boolean; claim(): void },
@@ -369,9 +371,11 @@ export class PlaybackHub {
       this.deps.createAudio(),
       this.deps.createObjectURL(data.blob),
       floating,
-      // An ordinary page's result syncs only with the page its snapshot names; without one it has none.
-      open.lessonKey === PAGE_SOURCE && !open.sync?.page ? null : open.sync,
-      open.lessonKey === PAGE_SOURCE ? (open.sync?.page ?? null) : null,
+      // An ordinary page's result syncs only with the page and video its snapshot names; without
+      // both it has none.
+      open.lessonKey === PAGE_SOURCE && !(open.sync?.page && open.sync.video) ? null : open.sync,
+      open.lessonKey === PAGE_SOURCE && open.sync?.video ? (open.sync.page ?? null) : null,
+      open.lessonKey === PAGE_SOURCE && open.sync?.page ? (open.sync.video ?? null) : null,
       this.deps,
       (s) => this.sessions.get(s.tabId) === s && this.publish(s.tabId),
       {
@@ -399,7 +403,7 @@ export class PlaybackHub {
       if (!isPageToPlayer(message)) return;
       if (!linked) {
         if (message.type !== "hello") return;
-        linked = this.linkPage(tabId, port, message.lessonKey, message.page, udemy);
+        linked = this.linkPage(tabId, port, message.lessonKey, message.page, message.video, udemy);
         return;
       }
       if (this.pages.get(tabId) === port) this.onPageMessage(tabId, message);
@@ -432,17 +436,33 @@ export class PlaybackHub {
     }
   }
 
-  private linkPage(tabId: number, port: HubPort<PlayerToPage>, lessonKey: string, page: string | undefined, udemy: boolean): boolean {
+  private linkPage(
+    tabId: number,
+    port: HubPort<PlayerToPage>,
+    lessonKey: string,
+    page: string | undefined,
+    video: string | undefined,
+    udemy: boolean,
+  ): boolean {
     const session = this.sessions.get(tabId);
     if (!udemy) {
-      // An ordinary page: linked only to an ordinary page's session made with this very page's
-      // video. Anything else is refused, and the session (listened to on its own) stays.
-      if (!session || session.lessonKey !== PAGE_SOURCE || lessonKey !== PAGE_SOURCE || page === undefined || session.syncPage !== page) {
+      // An ordinary page: linked only to an ordinary page's session made with this very page and
+      // this very video (element and source). Anything else is refused; the session (listened to
+      // on its own) stays.
+      if (
+        !session ||
+        session.lessonKey !== PAGE_SOURCE ||
+        lessonKey !== PAGE_SOURCE ||
+        page === undefined ||
+        video === undefined ||
+        session.syncPage !== page ||
+        session.syncVideo !== video
+      ) {
         this.safePost(port, { type: "ended" });
         port.disconnect();
         return false;
       }
-    } else if (!session || session.lessonKey !== lessonKey || page !== undefined) {
+    } else if (!session || session.lessonKey !== lessonKey || page !== undefined || video !== undefined) {
       // Nothing to show for this page; a session of another lecture must not survive either.
       if (session) this.endSession(tabId);
       this.safePost(port, { type: "ended" });
@@ -673,7 +693,7 @@ export class PlaybackHub {
   private panelView(tabId: number): PanelPlayerView | null {
     const session = this.sessions.get(tabId);
     if (!session) return null;
-    return { ...session.view(), owner: session.owner, linked: this.pages.has(tabId), syncPage: session.syncPage };
+    return { ...session.view(), owner: session.owner, linked: this.pages.has(tabId), syncPage: session.syncPage, syncVideo: session.syncVideo };
   }
 
   private publish(tabId: number): void {

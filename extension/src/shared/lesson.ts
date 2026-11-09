@@ -42,6 +42,14 @@ function fingerprint(text: string): string {
 
 export const isPageKey = (value: unknown): value is string => typeof value === "string" && /^p-[0-9a-f]{14}$/.test(value);
 
+/**
+ * The identity of one video on an ordinary page: a random key the content script gives to one
+ * <video> element showing one media source, for as long as that document lives. Another element,
+ * another source in the same element (`emptied`, `loadstart`) or a reload gives another key, so a
+ * result made with one video is never taken for another one at the same address.
+ */
+export const isVideoKey = (value: unknown): value is string => typeof value === "string" && /^v-[0-9a-f]{16}$/.test(value);
+
 export interface LessonInfo {
   /** Stable key for one lecture: "<course slug>/<lecture id>". */
   key: string;

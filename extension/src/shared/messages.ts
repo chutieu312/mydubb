@@ -1,7 +1,7 @@
 // Message contracts between the service worker, the side panel and the content script, with
 // validators. Every receiver validates shape and sender before acting; nothing here trusts the page.
 
-import { isPageKey, type LessonInfo } from "./lesson";
+import { isPageKey, isVideoKey, type LessonInfo } from "./lesson";
 
 export const PANEL_PORT_NAME = "mydubb-panel";
 export const MAX_SELECTION_CHARS = 100_000;
@@ -90,6 +90,8 @@ export type VideoState =
       readyState: number;
       waiting: boolean;
       error: string | null;
+      /** An ordinary page: this element and its media source (isVideoKey); absent on Udemy. */
+      key?: string;
     };
 
 export interface PageState {
@@ -228,7 +230,8 @@ function isVideoState(value: unknown): value is VideoState {
     isNullableNumber(value.seekEnd) &&
     Number.isSafeInteger(value.readyState) &&
     typeof value.waiting === "boolean" &&
-    (value.error === null || isString(value.error, 300))
+    (value.error === null || isString(value.error, 300)) &&
+    (value.key === undefined || isVideoKey(value.key))
   );
 }
 

@@ -730,16 +730,18 @@ describe("audio of an ordinary web page (no lecture, no page link)", () => {
 describe("Sync with an ordinary page's video (the page the result was made with)", () => {
   const PAGE = "p-0123456789abcd";
   const OTHER = "p-fedcba98765432";
-  const SOURCE: SyncSource = { mode: "timed", start: 19, end: 83, baseline: 64, speed: 1, page: PAGE };
+  const VIDEO = "v-00112233445566aa";
+  const VIDEO_B = "v-bbccddeeff001122";
+  const SOURCE: SyncSource = { mode: "timed", start: 19, end: 83, baseline: 64, speed: 1, page: PAGE, video: VIDEO };
   const WEB = { url: "https://www.loom.com/share/abc" };
   const settle = async () => {
     for (let i = 0; i < 6; i += 1) await Promise.resolve();
   };
-  /** An ordinary page's content script says hello with its fingerprint (null: none). */
-  const webPage = (hub: PlaybackHub, page: string | null = PAGE, tabId = 4) => {
+  /** An ordinary page's content script says hello with its fingerprint and video key (null: none). */
+  const webPage = (hub: PlaybackHub, page: string | null = PAGE, video: string | null = VIDEO, tabId = 4) => {
     const port = pagePort(tabId, WEB);
     expect(hub.acceptPage(port)).toBe(true);
-    port.receive(page === null ? { type: "hello", lessonKey: PAGE_SOURCE } : { type: "hello", lessonKey: PAGE_SOURCE, page });
+    port.receive({ type: "hello", lessonKey: PAGE_SOURCE, ...(page ? { page } : {}), ...(video ? { video } : {}) });
     return port;
   };
   const videoOps = (page: FakePort<PlayerToPage>) =>
@@ -748,7 +750,7 @@ describe("Sync with an ordinary page's video (the page the result was made with)
   it("links only the page of its snapshot; Sync then attaches the video at the span's start", async () => {
     const hub = makeHub();
     const { panel, sessionId } = opened(hub, 4, OWNER, PAGE_SOURCE, SOURCE, 64);
-    expect(lastView(panel)).toMatchObject({ syncPage: PAGE, linked: false, sync: { status: "unavailable", unavailable: "not-linked" } });
+    expect(lastView(panel)).toMatchObject({ syncPage: PAGE, syncVideo: VIDEO, linked: false, sync: { status: "unavailable", unavailable: "not-linked" } });
     const page = webPage(hub);
     expect(page.disconnected).toBe(false);
     expect(lastView(panel)).toMatchObject({ linked: true, sync: { status: "off", start: 19, end: 83, rate: 1 } });
@@ -761,16 +763,17 @@ describe("Sync with an ordinary page's video (the page the result was made with)
   it("refuses another page, a page without a fingerprint and a result made without a page's video; the audio stays", () => {
     const hub = makeHub();
     const { panel } = opened(hub, 4, OWNER, PAGE_SOURCE, SOURCE, 64);
-    for (const key of [OTHER, null]) {
-      const page = webPage(hub, key);
+    // Another address, no address, the same address with another video (element or source), no video key.
+    for (const [key, video] of [[OTHER, VIDEO], [null, VIDEO], [PAGE, VIDEO_B], [PAGE, null]] as const) {
+      const page = webPage(hub, key, video);
       expect(page.sent).toEqual([{ type: "ended" }]);
       expect(page.disconnected).toBe(true);
     }
     expect(lastView(panel)).toMatchObject({ linked: false, status: "ready" });
 
     const plain = makeHub();
-    const noVideo = opened(plain, 4, OWNER, PAGE_SOURCE, { ...SOURCE, page: undefined }, 64);
-    expect(lastView(noVideo.panel)).toMatchObject({ syncPage: null, sync: { status: "unavailable", unavailable: "no-metadata" } });
+    const noVideo = opened(plain, 4, OWNER, PAGE_SOURCE, { ...SOURCE, page: undefined, video: undefined }, 64);
+    expect(lastView(noVideo.panel)).toMatchObject({ syncPage: null, syncVideo: null, sync: { status: "unavailable", unavailable: "no-metadata" } });
     const page = webPage(plain);
     expect(page.disconnected).toBe(true);
     expect(lastView(noVideo.panel)).toMatchObject({ linked: false, status: "ready" });
@@ -778,7 +781,7 @@ describe("Sync with an ordinary page's video (the page the result was made with)
 
   it("an ordinary page cannot link to a lecture's session, which stays", () => {
     const hub = makeHub();
-    const lecture = opened(hub, 4, OWNER, LESSON, { ...SOURCE, page: undefined }, 64);
+    const lecture = opened(hub, 4, OWNER, LESSON, { ...SOURCE, page: undefined, video: undefined }, 64);
     const page = webPage(hub);
     expect(page.disconnected).toBe(true);
     expect(lastView(lecture.panel)).toMatchObject({ lessonKey: LESSON, linked: false });
@@ -818,5 +821,12 @@ describe("Sync with an ordinary page's video (the page the result was made with)
     const second = opened(hub, 4, { ...OWNER, jobId: "job-2", operationId: "op-2" }, PAGE_SOURCE, { ...SOURCE, page: OTHER }, 64);
     expect(page.disconnected).toBe(true);
     expect(lastView(second.panel)).toMatchObject({ syncPage: OTHER, linked: false });
+  });
+
+  it("a snapshot with the page but without its video's key has no Sync", () => {
+    const hub = makeHub();
+    const { panel } = opened(hub, 4, OWNER, PAGE_SOURCE, { ...SOURCE, video: undefined }, 64);
+    expect(lastView(panel)).toMatchObject({ syncPage: null, syncVideo: null, sync: { status: "unavailable", unavailable: "no-metadata" } });
+    expect(webPage(hub).disconnected).toBe(true);
   });
 });

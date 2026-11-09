@@ -14,6 +14,8 @@ export interface PageSyncInput {
   linked: boolean;
   /** The page the session may sync with; null: the result was not made with a page's video. */
   syncPage: string | null;
+  /** With syncPage: the key of that video (element and media source) at the click. */
+  syncVideo: string | null;
   /**
    * What the loaded result's Generate snapshot had, when this panel knows it: a page's video, only
    * source times, or neither.
@@ -36,7 +38,7 @@ export function pageSyncState(input: PageSyncInput): { show: boolean; controls: 
   const reason = (text: string) => ({ show: true, controls: false, text });
   // Sync is on: the control stays, to turn it off.
   if (sync.status !== "off" && sync.status !== "unavailable") return { show: true, controls: true, text: "" };
-  if (input.syncPage === null) {
+  if (input.syncPage === null || input.syncVideo === null) {
     // Said only where it helps: a result with source times, made while no single video was
     // identified, on a page that has a video now (or that MyDubb cannot reach). Anything else, a page
     // without any video included, plays on its own as it always did, without a word.
@@ -59,6 +61,15 @@ export function pageSyncState(input: PageSyncInput): { show: boolean; controls: 
   if (video.status === "ambiguous") {
     return reason(
       prefix(`this page has ${video.candidates} videos and MyDubb cannot tell which one this audio belongs to. Start that video once on the page.`),
+    );
+  }
+  // The same address, but not the video of the click: another element or media source (a player
+  // rebuilt, a source switched, a reload). It cannot be confirmed to be that video, so no Sync.
+  if (video.key !== input.syncVideo) {
+    return reason(
+      prefix(
+        "the page's video is not the one this audio was made with (the player or its video changed, or the page was reloaded), so this audio plays on its own. To sync, Generate again with the video you want.",
+      ),
     );
   }
   if (sync.status === "unavailable" && sync.unavailable !== "not-linked") return reason(syncStatusText(sync));

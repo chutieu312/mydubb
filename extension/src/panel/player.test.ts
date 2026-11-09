@@ -19,6 +19,7 @@ const VIEW: PanelPlayerView = {
   owner: { userId: "u1", connectionId: "c1", jobId: "job-1", operationId: "op-1" },
   linked: false,
   syncPage: null,
+  syncVideo: null,
 };
 const REQUEST = { lessonKey: "demo-course/1", owner: VIEW.owner, choices: VIEW.choices, sync: null };
 

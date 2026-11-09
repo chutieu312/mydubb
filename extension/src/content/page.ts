@@ -19,6 +19,7 @@ import {
   type CommandMessage,
   type ContentToPanel,
   type PageState,
+  type VideoState,
   type SelectionReply,
 } from "../shared/messages";
 import { isPlaybackLinkMessage } from "../shared/playback";
@@ -52,6 +53,14 @@ export interface PageEnv {
   isTrusted?: (event: Event) => boolean;
   /** Milliseconds (default: performance.now). */
   now?: () => number;
+  /** A new video key (isVideoKey); default: 8 random bytes. */
+  randomKey?: () => string;
+}
+
+function randomVideoKey(): string {
+  // getRandomValues works on http pages too (randomUUID needs a secure context).
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  return `v-${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
 const REFRESH_INTERVAL_MS = 1000;
@@ -115,6 +124,9 @@ export class PageSession {
   private lastPlayed: HTMLVideoElement | null = null;
   private lesson: LessonInfo | null = null;
   private page: string | null = null;
+  // An ordinary page: the key of the identified video, for that element and that media source. A
+  // new element, a new source (`currentSrc`, or `emptied`/`loadstart` on it) gives a new key.
+  private videoKey: { video: HTMLVideoElement; src: string; key: string } | null = null;
   // The user's last real pointerdown (where) or keydown (in which element), ordinary pages only.
   private lastInput: { at: number; x: number; y: number; target: EventTarget | null; key: boolean } | null = null;
   private ambiguousCount = 0;
@@ -130,7 +142,8 @@ export class PageSession {
     this.link = env.playback
       ? new PlaybackLink(env.playback, () => this.stopIfUnused(), {
           doc: env.doc,
-          current: () => this.attached?.video ?? null,
+          // An ordinary page's video is driven only while it is the video the link was made for.
+          current: () => this.syncTarget(),
         })
       : null;
   }
@@ -212,6 +225,19 @@ export class PageSession {
         },
         { ...options, passive: true },
       );
+      // Another source in the identified element: another video, even at the same address.
+      for (const name of ["emptied", "loadstart"]) {
+        doc.addEventListener(
+          name,
+          (event) => {
+            if (this.attached && event.target === this.attached.video) {
+              this.videoKey = null;
+              this.refresh();
+            }
+          },
+          options,
+        );
+      }
     }
     win.addEventListener("online", () => this.broadcast(), options);
     win.addEventListener("offline", () => this.broadcast(), options);
@@ -240,7 +266,26 @@ export class PageSession {
     this.lastInput = null;
     this.lesson = null;
     this.page = null;
+    this.videoKey = null;
     this.lastSent = "";
+  }
+
+  /** The key of the identified video now (ordinary pages); a new one for a new element or source. */
+  private currentVideoKey(): string | null {
+    const video = this.attached?.video;
+    if (!this.env.web || !video) return null;
+    const known = this.videoKey;
+    if (known && known.video === video && known.src === video.currentSrc) return known.key;
+    this.videoKey = { video, src: video.currentSrc, key: (this.env.randomKey ?? randomVideoKey)() };
+    return this.videoKey.key;
+  }
+
+  /** The video Sync may drive: on an ordinary page only the one whose key the link was made with. */
+  private syncTarget(): HTMLVideoElement | null {
+    const video = this.attached?.video ?? null;
+    if (!this.env.web || !video) return video;
+    const linked = this.link?.videoKey;
+    return linked !== undefined && linked === this.currentVideoKey() ? video : null;
   }
 
   private readonly now = (): number => (this.env.now ? this.env.now() : this.env.win.performance.now());
@@ -301,6 +346,9 @@ export class PageSession {
       this.attached?.detach();
       this.attached = next ? new AttachedVideo(next, this.nextVideoId++, () => this.broadcast()) : null;
     }
+    // An ordinary page's link was made for one video: another element or source ends it, Sync on or
+    // off, so the result's audio never drives that other video.
+    if (this.env.web && this.link?.active && this.link.videoKey !== this.currentVideoKey()) this.link.lesson(null);
     // A synced video that is no longer the identified one: the sync ends, nothing follows the new one.
     this.link?.videoChanged();
     this.ambiguousCount = pick.kind === "ambiguous" ? pick.candidates : 0;
@@ -313,7 +361,9 @@ export class PageSession {
       page: this.page,
       online: this.env.win.navigator.onLine,
       video: this.attached
-        ? this.attached.state()
+        ? this.env.web
+          ? { ...(this.attached.state() as Extract<VideoState, { status: "ready" }>), key: this.currentVideoKey()! }
+          : this.attached.state()
         : this.ambiguousCount > 0
           ? { status: "ambiguous", candidates: this.ambiguousCount }
           : { status: "none" },
@@ -341,9 +391,17 @@ export class PageSession {
     if (isPlaybackLinkMessage(message)) {
       this.refresh();
       if (this.env.web) {
-        // Only for the page shown now, and only while its one main video is identified.
-        if (message.lessonKey === PAGE_SOURCE && message.page !== undefined && message.page === this.page && this.attached) {
-          this.link?.link(PAGE_SOURCE, message.page);
+        // Only for the page shown now, and only while its one main video is identified and is the
+        // video (element and source) the result was made with.
+        if (
+          message.lessonKey === PAGE_SOURCE &&
+          message.page !== undefined &&
+          message.page === this.page &&
+          this.attached &&
+          message.video !== undefined &&
+          message.video === this.currentVideoKey()
+        ) {
+          this.link?.link(PAGE_SOURCE, message.page, message.video);
         }
         return;
       }

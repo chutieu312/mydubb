@@ -5,6 +5,7 @@ import type { SyncView } from "../shared/sync";
 import { NO_ACCESS, pageSyncState, type PageSyncInput } from "./pageSync";
 
 const PAGE = "p-0123456789abcd";
+const KEY = "v-00112233445566aa";
 const OFF: SyncView = { status: "off", unavailable: null, start: 19, end: 83, duration: 64, rate: 1, confirmed: false, notice: null };
 const READY: VideoState = {
   status: "ready",
@@ -18,8 +19,9 @@ const READY: VideoState = {
   readyState: 4,
   waiting: false,
   error: null,
+  key: KEY,
 };
-const good: PageSyncInput = { sync: OFF, linked: true, syncPage: PAGE, made: "with-video", access: "granted", page: PAGE, video: READY };
+const good: PageSyncInput = { sync: OFF, linked: true, syncPage: PAGE, syncVideo: KEY, made: "with-video", access: "granted", page: PAGE, video: READY };
 const state = (over: Partial<PageSyncInput>) => pageSyncState({ ...good, ...over });
 
 describe("Sync on an ordinary page", () => {
@@ -32,6 +34,16 @@ describe("Sync on an ordinary page", () => {
       controls: false,
       text: expect.stringMatching(/3 videos .* Start that video once on the page/),
     });
+  });
+
+  it("the same address with another video (element or source, a reload): no control, said why", () => {
+    expect(state({ video: { ...READY, key: "v-ffffffffffffffff" } })).toMatchObject({
+      show: true,
+      controls: false,
+      text: expect.stringMatching(/the page's video is not the one this audio was made with/),
+    });
+    // Also when the page happens to be linked (it never should be): the key decides.
+    expect(state({ video: { ...READY, key: undefined } }).controls).toBe(false);
   });
 
   it("without access to the page, tells the user to click the MyDubb button", () => {
@@ -49,7 +61,7 @@ describe("Sync on an ordinary page", () => {
   });
 
   it("a result made without the page's video: one line where it helps, otherwise nothing", () => {
-    const none = { syncPage: null, linked: false };
+    const none = { syncPage: null, syncVideo: null, linked: false };
     expect(state({ ...none, made: "without-video" })).toMatchObject({ show: true, controls: false, text: expect.stringMatching(/no single video was identified/) });
     expect(state({ ...none, made: "without-span" }).show).toBe(false);
     expect(state({ ...none, made: "unknown" }).show).toBe(false);

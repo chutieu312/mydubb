@@ -36,6 +36,7 @@ export class PlaybackLink {
   private port: PlayerPort | null = null;
   private lessonKey: string | null = null;
   private page: string | undefined = undefined;
+  private video: string | undefined = undefined;
   private view: PlayerView | null = null;
   private player: FloatingView | null = null;
   private readonly sync: VideoSync | null;
@@ -63,12 +64,17 @@ export class PlaybackLink {
     return this.sync?.attached ?? null;
   }
 
+  /** An ordinary page's link: the key of the video it was made for (undefined: none, or Udemy). */
+  get videoKey(): string | undefined {
+    return this.port ? this.video : undefined;
+  }
+
   /**
-   * Links this page (showing `lessonKey`; an ordinary page: PAGE_SOURCE and its fingerprint `page`)
-   * to the tab's session; a second call is a no-op.
+   * Links this page (showing `lessonKey`; an ordinary page: PAGE_SOURCE, its fingerprint `page` and
+   * the key of its video `video`) to the tab's session; a second call is a no-op.
    */
-  link(lessonKey: string, page?: string): void {
-    if (this.port && this.lessonKey === lessonKey && this.page === page) return;
+  link(lessonKey: string, page?: string, video?: string): void {
+    if (this.port && this.lessonKey === lessonKey && this.page === page && this.video === video) return;
     if (this.port) this.end();
     let port: PlayerPort;
     try {
@@ -79,6 +85,7 @@ export class PlaybackLink {
     this.port = port;
     this.lessonKey = lessonKey;
     this.page = page;
+    this.video = video;
     port.onMessage.addListener((message) => {
       if (this.port !== port || !isPlayerToPage(message)) return;
       if (message.type === "ended") return this.end();
@@ -91,7 +98,7 @@ export class PlaybackLink {
     port.onDisconnect.addListener(() => {
       if (this.port === port) this.end();
     });
-    this.post(page === undefined ? { type: "hello", lessonKey } : { type: "hello", lessonKey, page });
+    this.post(page === undefined ? { type: "hello", lessonKey } : { type: "hello", lessonKey, page, ...(video ? { video } : {}) });
   }
 
   /** Every lecture change seen by the page: another lecture (or none) ends the session. */
@@ -107,6 +114,7 @@ export class PlaybackLink {
     this.port = null;
     this.lessonKey = null;
     this.page = undefined;
+    this.video = undefined;
     this.view = null;
     this.sync?.release();
     this.player?.hide();

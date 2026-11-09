@@ -157,22 +157,29 @@ player on the lecture page alike.
    HTML5 `<video>` in the page itself). Clicking the MyDubb toolbar button, or **Send to MyDubb**, on
    the page lets MyDubb reach that page (Chrome's `activeTab`): it then looks for the page's one main
    video. **Generate** while the page shows it: the result remembers that page (a fingerprint of its
-   address, not the address) and its source span. With that result loaded, **Sync with video** works
+   address, not the address), that very video (a key the page's MyDubb script gives to that element
+   showing that media source) and its source span. With that result loaded, **Sync with video** works
    as on Udemy (step 7): it moves the video to the span's start (or the audio's position) whatever
    position it had, mutes it, sets its speed; MyDubb's and the page's Play/Pause/seek drive both;
    off gives sound and speed back. Loading the audio does not pause or move the page's video. The
-   control is shown only while the page shows that same address and its one video, and MyDubb can
-   reach it; otherwise one line says why and the audio plays on its own:
+   control is shown only while the page shows that same address and that same video, and MyDubb can
+   reach it, checked again before Sync can be turned on (also if it was never on); otherwise one line
+   says why and the audio plays on its own:
    - another video or address in the tab (YouTube's next video, another share): Sync ends, the old
-     audio never plays, pauses or moves the new video; back on the same address it is offered again;
+     audio never plays, pauses or moves the new video;
+   - the same address with another video: the player rebuilt its element, loaded another source (or
+     the same one again) into it, or the page was reloaded. MyDubb cannot confirm it is the video of
+     the click, so Sync is not offered for that result ("the page's video is not the one this audio
+     was made with"); Generate again with the video you want. This also holds after going back to a
+     YouTube video: the player loads it anew;
    - several videos and none chosen ("Start that video once on the page": a click on it, or a key in
      its player, right before it starts); a muted looping preview is never taken for the video, and a
      video the page starts by itself, with or without sound, is not taken as your choice;
    - a result made while no single video was identified (or with a video that appeared only after
      Generate) plays on its own: Generate again while the page shows its video;
    - after going to **another site** in the tab MyDubb may no longer reach it: "Click the MyDubb
-     button in Chrome's toolbar on this page"; a reload of the same site keeps the access (the
-     content script is put back by itself) and Sync is offered again, OFF.
+     button in Chrome's toolbar on this page". A reload of the same site keeps the access (the
+     content script is put back by itself), so a result generated after the reload can be synced.
    A reload or a new page ends Sync, never the audio. A video inside an iframe (a Loom player
    embedded in another site) is not supported.
 
@@ -383,15 +390,21 @@ does not download video, does not intercept network requests and does not use Ud
   playing"; with several candidates only the one Sync is bound to or the one the user chose (its
   `play` within 1.5 s after a trusted pointerdown inside its box, or a keydown in an element holding
   it and no other video; not playing, not being unmuted, not the page's user activation); else
-  ambiguous. Generate on such a page stores the fingerprint in the job's Sync snapshot only if one
-  video was identified at the click (`choices.sync.page`); the offscreen hub gives the session that
-  `syncPage` and keeps no mapping for a page result without one. The page links to the session only
-  by `hello {lessonKey: "page", page}` matching `syncPage` (the panel asks, the content script and the
-  hub both check), and only an http(s) top frame of this extension's content script is accepted. That
-  link going away (reload, navigation) or a new address (`lesson` message) only unlinks: Sync off
-  with "video-replaced", the video given back, the audio session kept; a new result drops the old
-  link. The panel's Sync block for these sessions comes from `pageSyncState` (panel/pageSync.ts):
-  the control only with the link, the same address and one video; otherwise one reason. No floating
+  ambiguous. The identified video has a **video key** (`v-` + 8 random bytes): one per element and
+  media source in this document; a new element, a different `currentSrc`, or `emptied`/`loadstart`
+  on it gives a new key, and a reload is a new document, so new keys. Generate on such a page stores
+  the fingerprint and the key in the job's Sync snapshot only if one video was identified at the
+  click (`choices.sync.page`, `choices.sync.video`); the offscreen hub gives the session that
+  `syncPage`/`syncVideo` and keeps no mapping for a page result without both. The page links to the
+  session only by `hello {lessonKey: "page", page, video}` matching both (the panel asks, the content
+  script and the hub both check), and only an http(s) top frame of this extension's content script
+  is accepted. A new key while linked ends the link at once, Sync on or off, and the page's half of
+  Sync drives only the video whose key the link was made with (`attach` finds none otherwise). That
+  link going away (reload, navigation) or a new address or video (`lesson` message) only unlinks:
+  Sync off with "video-replaced", the video given back, the audio session kept; a new result drops
+  the old link. The panel's Sync block for these sessions comes from `pageSyncState`
+  (panel/pageSync.ts): the control only with the link, the same address and the same video key;
+  otherwise one reason. No floating
   player and no `place` there. Everything else (coordinator, VideoSync, mapping, drift, ownership)
   is the Udemy code unchanged.
 - **Validation**: every message is shape-checked; the content script accepts ports only from this
@@ -526,12 +539,16 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   page's player) and seek on the page move the audio; MyDubb's Pause and −5 s move both; Sync off
   gives sound and 1x back, the audio then plays alone. YouTube-like next video in the same tab (same
   element, new source and `?v=`): Sync ends with its reason, the old audio never moves the new video,
-  the first address again offers Sync. The page setting another speed while playing: Sync off,
+  nor the first video loaded again at its address (a new source: not offered). Same address, Sync never
+  turned on, the page replaces the video element or loads another source into the same element:
+  Sync is not offered (the hidden toggle forced and clicked does nothing), video B is never muted,
+  moved, played or sped up, audio A plays on its own; the unchanged video syncs (first test). The page setting another speed while playing: Sync off,
   "speed changed", the page's speed kept. Buffering: a seek into bytes the server holds back →
   "Buffering…", audio held, both resume aligned (|d| ≈ 0.1 s) once they arrive. A muted looping
   preview left alone; a second video the page starts with sound → no single video at Generate
   (said, audio alone, nothing touched), then a real click on the main video → Generate → Sync drives
-  only it. No access (http page), reload with Sync on (Sync off, audio kept, Sync offered again) and
+  only it. No access (http page), reload with Sync on (Sync off, audio kept, not offered again for that
+  result, a new Generate after the reload syncs) and
   Disconnect (session ends, video unmuted, 1x). Chrome refusing play is unit-tested
   (`offscreen/sync.test.ts`, `content/sync.test.ts`) and was seen on real pages in the prototype
   phase; Sync mutes the video first, which Chrome lets play.
@@ -622,8 +639,9 @@ use the Azure free allowance.
    (g) **turn Sync off**: the video's sound and speed are back. On YouTube also: (h) with Sync on, click
    another video in the same tab: Sync ends, both pause, the panel says the page shows another video;
    MyDubb's Play then plays the audio alone and does not touch the new video; go back to the first
-   video: Sync is offered again. Then: reload the page (Sync off, audio still there, Sync offered
-   again); go to another site in the tab (the panel asks for a click on the MyDubb button);
+   video: Sync is not offered for this result (the player loaded it anew), the audio plays alone.
+   Then: reload the page (Sync off, audio still there, Sync not offered for that result; Generate
+   again and it syncs); go to another site in the tab (the panel asks for a click on the MyDubb button);
    **Disconnect** while synced (the video gets its sound back). Repeat steps 4 and 7 on a Udemy
    lecture (regression). On a page without a usable video (a text page, or a page with several
    videos where you started none): Generate and listen on its own; Sync is absent or one line says
@@ -645,10 +663,12 @@ use the Azure free allowance.
 - The audio of an ordinary page is tied to the tab, not to the address: if the tab goes to another
   site, it keeps playing until it is paused, replaced, or the tab closes. Sync, on the other hand,
   is tied to the address and the video: another address ends it.
-- An ordinary page's identity for Sync is its address (origin, path, query; not the fragment). A
-  page that shows another video at the same address is told apart only while Sync is on (a new
-  source or element ends it); a page that changes its query by itself (tracking parameters) makes
-  Sync unavailable for the earlier result. A site's ads played in the main video element are not
+- An ordinary page's identity for Sync is its address (origin, path, query; not the fragment) **and**
+  the video key of the click (element and media source in that document). Whatever MyDubb cannot
+  confirm is treated as another video: after a reload, a rebuilt player, another or reloaded source
+  (also a quality switch or an ad, if the player does it by changing the element's source), the
+  result plays on its own and needs a new Generate to sync. A page that changes its query by itself
+  (tracking parameters) does the same. A site's ads played in the main video element are not
   handled (not tested on YouTube). When the page replaces the media of the same element, MyDubb gives
   back sound and speed only if it still holds the media it muted (the existing ownership rule).
 - The access from your click lasts while the tab stays on that site; after another site, Sync waits
