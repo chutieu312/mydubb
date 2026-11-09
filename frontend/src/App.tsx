@@ -44,6 +44,11 @@ type Restored =
   | { kind: "user"; user: AuthUser | null; csrf: string }
   | { kind: "guest"; guest: GuestSession; csrf: string };
 
+// The account's daily numbers are asked again after the server's reset instant: this long after
+// it (the server's clock decides the day), at most this many times automatically per instant.
+const RESET_MARGIN_MS = 5_000;
+const MAX_RESET_ASKS = 2;
+
 // Drafts are kept per identity: a guest's draft never appears for an account, nor the reverse.
 const guestOwner = (guest: GuestSession) => `guest:${guest.guest.id}`;
 
@@ -291,7 +296,8 @@ export function App() {
     (gen: number) => {
       usageRequest.current += 1;
       const request = usageRequest.current;
-      accountApi
+      // Settles (never rejects) when the answer has been handled.
+      return accountApi
         .usage()
         .then((usage) => {
           if (isCurrent(gen) && request === usageRequest.current) setAccountUsage({ gen, usage });
@@ -310,6 +316,46 @@ export function App() {
   }, [hasAccount, identity, refreshAccount]);
   const usageNow =
     hasAccount && accountUsage !== null && accountUsage.gen === identity ? accountUsage.usage : null;
+
+  // Today's numbers end at the server's `resets_at` (00:00 UTC). Once it has passed they are not
+  // shown as current any more, and they are asked again through the same refresh: by a timer
+  // while the page is visible, or when it comes back to the foreground (a background tab, a
+  // computer that slept). Never two automatic asks at once and at most MAX_RESET_ASKS per reset
+  // instant, so a failing answer or one still of the old day cannot loop; Generate, an import and
+  // a quota refusal still ask as before. Timer and listener belong to one identity and one
+  // snapshot: they go with it (sign out, another account, a new snapshot, unmount).
+  const [resetPassed, setResetPassed] = useState<string | null>(null);
+  const resetAsks = useRef({ key: "", asks: 0, inFlight: false });
+  const resetsAt = usageNow?.resets_at ?? null;
+  useEffect(() => {
+    if (resetsAt === null) return;
+    const gen = identity;
+    const key = `${gen}|${resetsAt}`;
+    const due = Date.parse(resetsAt);
+    const check = () => {
+      if (!isCurrent(gen) || Date.now() < due) return;
+      setResetPassed(key);
+      if (document.visibilityState === "hidden") return; // asked when the page is back
+      if (resetAsks.current.key !== key) resetAsks.current = { key, asks: 0, inFlight: false };
+      const asks = resetAsks.current;
+      if (asks.inFlight || asks.asks >= MAX_RESET_ASKS) return;
+      asks.asks += 1;
+      asks.inFlight = true;
+      void refreshAccount(gen).finally(() => {
+        asks.inFlight = false;
+      });
+    };
+    const timer = window.setTimeout(check, Math.max(0, due - Date.now()) + RESET_MARGIN_MS);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [resetsAt, identity, isCurrent, refreshAccount]);
+  const usageStale = usageNow !== null && resetPassed === `${identity}|${usageNow.resets_at}`;
 
   // Callbacks for child components, bound to the identity they were rendered for: when a request
   // a component sent before an identity change answers, it cannot act on the new identity.
@@ -507,7 +553,11 @@ export function App() {
                 </p>
               </section>
               {usageNow && (
-                <PlanBanner usage={usageNow} youtubeImport={meta.youtube_import?.enabled === true} />
+                <PlanBanner
+                  usage={usageNow}
+                  stale={usageStale}
+                  youtubeImport={meta.youtube_import?.enabled === true}
+                />
               )}
               {auth === "guest" && guest && (
                 <GuestBanner

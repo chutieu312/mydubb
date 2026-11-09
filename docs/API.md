@@ -360,7 +360,9 @@ provider credits.
 
 For an administrator `exempt` is `true` and `limit`, `remaining`, `max_words` and
 `max_output_seconds` are `null` (`used` still counts). A preview only: the backend decides each
-admission on its own. The shared cap is not reported.
+admission on its own. The shared cap is not reported. After `resets_at` the answer describes a
+past day: a client asks again (the website does it once at that instant, or when the tab comes
+back to the foreground) and never resets the numbers on its own.
 
 ### `GET /api/jobs/{id}`
 Requires session. Returns the Job body. `404 job_not_found` if the job does not exist **or

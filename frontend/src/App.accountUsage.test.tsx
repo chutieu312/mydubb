@@ -230,3 +230,135 @@ describe("another account", () => {
     expect(screen.queryByRole("region", { name: "Your plan" })).toBeNull();
   });
 });
+
+describe("the 00:00 UTC reset", () => {
+  // The default snapshot resets at 2030-01-02T00:00:00Z; the page opens a minute before.
+  const NEXT_DAY = { day: "2030-01-02", resets_at: "2030-01-03T00:00:00Z" };
+  const nextDay = (generateUsed = 0) => usage(generateUsed, 0, NEXT_DAY);
+  let visibility: DocumentVisibilityState = "visible";
+
+  const startClock = () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2030-01-01T23:59:00Z"));
+    visibility = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    });
+  };
+  const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const setVisibility = (state: DocumentVisibilityState) =>
+    act(async () => {
+      visibility = state;
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  const clockUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    // Back to jsdom's own getter.
+    delete (document as { visibilityState?: unknown }).visibilityState;
+  });
+
+  it("asks once when the reset instant passes and shows the new day's numbers", async () => {
+    startClock();
+    setup({ [`GET ${USAGE}`]: [usage(20, 5), nextDay(2)] });
+    await waitFor(() => expect(banner().textContent).toContain("0 of 20 audio jobs left today"));
+    await advance(30_000); // still the old day: nothing asked
+    expect(usageRequests()).toHaveLength(1);
+    await advance(40_000); // past 00:00 UTC (and the margin)
+    // The server's numbers and reset instant, not 20/5 made up here.
+    await waitFor(() => expect(banner().textContent).toContain("18 of 20 audio jobs left today"));
+    expect(banner().textContent).toContain("5 of 5 YouTube imports left today");
+    expect(usageRequests()).toHaveLength(2);
+    await advance(3 * 3600_000); // no polling afterwards
+    expect(usageRequests()).toHaveLength(2);
+  });
+
+  it("a background tab asks when it is back, once, even when timer and focus come together", async () => {
+    startClock();
+    const answer = deferred();
+    setup({ [`GET ${USAGE}`]: [usage(20, 5), answer.handler] });
+    await waitFor(() => expect(banner().textContent).toContain("0 of 20 audio jobs left today"));
+    await setVisibility("hidden");
+    await advance(2 * 3600_000); // the reset passes in the background (or the computer sleeps)
+    expect(usageRequests()).toHaveLength(1);
+    // The old numbers are not shown as today's meanwhile.
+    expect(banner().textContent).toContain("A new day started at 00:00 UTC");
+    expect(banner().textContent).not.toContain("0 of 20");
+    await setVisibility("visible");
+    await setVisibility("hidden");
+    await setVisibility("visible"); // a second foreground event while the first ask is in flight
+    expect(usageRequests()).toHaveLength(2);
+    await answer.release(json(200, accountUsage(0, 0, NEXT_DAY)));
+    await waitFor(() => expect(banner().textContent).toContain("20 of 20 audio jobs left today"));
+    expect(usageRequests()).toHaveLength(2);
+  });
+
+  it("a timer of the previous account is gone after signing out", async () => {
+    startClock();
+    const user = clockUser();
+    setup({
+      [`GET ${USAGE}`]: [usage(20), usage(13, 0, NEXT_DAY)],
+      "POST /api/auth/logout": [noContent],
+      "POST /api/auth/login": [authenticated(OTHER_USER, "csrf-2")],
+    });
+    await waitFor(() => expect(banner().textContent).toContain("0 of 20 audio jobs left today"));
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.type(await screen.findByLabelText("Email"), OTHER_USER.email);
+    await user.type(screen.getByLabelText("Password"), "correct-horse-1");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(banner().textContent).toContain("7 of 20 audio jobs left today"));
+    await advance(3600_000); // past the first account's reset instant
+    expect(usageRequests()).toHaveLength(2);
+    expect(banner().textContent).toContain("7 of 20 audio jobs left today");
+  });
+
+  it("a reset ask of the previous account that answers late never shows its quota", async () => {
+    startClock();
+    const user = clockUser();
+    const late = deferred();
+    setup({
+      [`GET ${USAGE}`]: [usage(20), late.handler, usage(13, 0, NEXT_DAY)],
+      "POST /api/auth/logout": [noContent],
+      "POST /api/auth/login": [authenticated(OTHER_USER, "csrf-2")],
+    });
+    await waitFor(() => expect(banner().textContent).toContain("0 of 20 audio jobs left today"));
+    await advance(70_000); // the reset ask is sent and stays in flight
+    expect(usageRequests()).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.type(await screen.findByLabelText("Email"), OTHER_USER.email);
+    await user.type(screen.getByLabelText("Password"), "correct-horse-1");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(banner().textContent).toContain("7 of 20 audio jobs left today"));
+    await late.release(json(200, accountUsage(1, 0, NEXT_DAY)));
+    expect(banner().textContent).toContain("7 of 20 audio jobs left today");
+    expect(usageRequests()).toHaveLength(3);
+  });
+
+  it("a failing ask or an answer still of the old day does not loop", async () => {
+    startClock();
+    setup({
+      [`GET ${USAGE}`]: [
+        usage(20),
+        () => apiError(503, "internal_error", "Try later."),
+        usage(20), // the old day again (the same reset instant)
+      ],
+    });
+    await waitFor(() => expect(banner().textContent).toContain("0 of 20 audio jobs left today"));
+    await advance(70_000); // the timer's ask fails
+    await waitFor(() => expect(usageRequests()).toHaveLength(2));
+    expect(banner().textContent).toContain("A new day started at 00:00 UTC");
+    await setVisibility("hidden");
+    await setVisibility("visible"); // one more ask when the page is back: still the old day
+    await waitFor(() => expect(usageRequests()).toHaveLength(3));
+    await advance(1000);
+    expect(banner().textContent).toContain("A new day started at 00:00 UTC");
+    expect(banner().textContent).not.toContain("0 of 20");
+    // No more automatic asks: neither timers nor focus.
+    await setVisibility("hidden");
+    await setVisibility("visible");
+    await advance(6 * 3600_000);
+    expect(usageRequests()).toHaveLength(3);
+  });
+});

@@ -2,6 +2,8 @@ import { planName, type AccountUsage, type KindUsage } from "../../api/accountAp
 
 interface Props {
   usage: AccountUsage;
+  // `usage.resets_at` has passed and no newer numbers came yet: they are not today's any more.
+  stale?: boolean;
   // The server offers YouTube import (GET /api/meta); otherwise imports are not mentioned.
   youtubeImport: boolean;
 }
@@ -18,7 +20,7 @@ const left = (usage: KindUsage, one: string, many: string) =>
   `${usage.remaining ?? 0} of ${usage.limit ?? 0} ${usage.limit === 1 ? one : many} left today`;
 
 /** Today's limits of the signed-in account; numbers from the server only. */
-export function PlanBanner({ usage, youtubeImport }: Props) {
+export function PlanBanner({ usage, stale = false, youtubeImport }: Props) {
   if (usage.exempt) {
     return (
       <section className="callout plan-banner" aria-label="Your plan">
@@ -29,6 +31,18 @@ export function PlanBanner({ usage, youtubeImport }: Props) {
     );
   }
   const plan = planName(usage.plan);
+  if (stale) {
+    // Never yesterday's numbers presented as today's.
+    return (
+      <section className="callout plan-banner" aria-label="Your plan">
+        <p role="status">
+          <strong>{plan} plan.</strong> A new day started at 00:00 UTC, so the earlier counts no
+          longer apply. Today&apos;s counts show here once MyDubb reports them; they also update
+          after your next Generate or import.
+        </p>
+      </section>
+    );
+  }
   const jobsUsedUp = usage.generate.remaining === 0;
   const importsUsedUp = youtubeImport && usage.youtube_import.remaining === 0;
   return (
