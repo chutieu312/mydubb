@@ -28,6 +28,17 @@ from app.jobs.schemas import (
     TranslationOut,
 )
 from app.languages import TargetLanguage
+from app.quotas.errors import account_quota_error, usage_cap_error
+from app.quotas.service import (
+    AccountQuotaExhausted,
+    PlanLimits,
+    QuotaKind,
+    UsageCapReached,
+    UsageCaps,
+    admit,
+    limit_lock_waits,
+    plan_limits,
+)
 from app.services import AppServices
 from app.storage.result_store import StoredResult
 from app.transcript.timestamps import parse_timestamp, target_duration_seconds
@@ -112,6 +123,10 @@ def create_job(
         ip_key = guest.network_key(request)
         if ip_key is None:
             raise network_unknown()
+    elif principal.user is not None and not principal.quota_exempt:
+        # The plan's per-job limits, also checked before any slot or row.
+        _check_plan_limits(body, principal.plan, plan_limits(principal.plan))
+    caps = UsageCaps.from_settings(services.settings)
     try:
         slot = services.executor.reserve()
     except ExecutorAtCapacity:
@@ -152,10 +167,24 @@ def create_job(
                 policy=guest.policy,
                 create_job=new_job,
             )
+            # The shared cap last, under the guest's locks (lock order: app/quotas/service.py).
+            admit(db, principal, QuotaKind.GENERATE, caps)
         else:
+            limit_lock_waits(db)
+            admit(db, principal, QuotaKind.GENERATE, caps)
             job = new_job()
-        # Commit before starting so the worker always sees the queued row.
+        # Commit before starting so the worker always sees the queued row; the job and its counts
+        # are committed together, or neither is.
         db.commit()
+    except AccountQuotaExhausted as exc:
+        db.rollback()
+        slot.cancel()
+        raise account_quota_error(exc) from None
+    except UsageCapReached as exc:
+        # Also undoes the account's count, or the guest's job row and quota place.
+        db.rollback()
+        slot.cancel()
+        raise usage_cap_error(exc) from None
     except GuestQuotaExceeded as exc:
         slot.cancel()
         assert guest is not None
@@ -238,6 +267,54 @@ def _check_guest_duration(body: CreateJobRequest, guest: GuestAccess) -> None:
             "fields": [{"field": "last_sentence_start", "message": message}],
             "output_seconds": float(output),
             "max_output_seconds": limit,
+            "baseline_seconds": baseline,
+            "speed": body.speed.number,
+        },
+    )
+
+
+def _check_plan_limits(body: CreateJobRequest, plan: str, limits: PlanLimits) -> None:
+    """The plan's per-job limits: words of the text that would be translated (no timestamps or
+    markup) and the output length (baseline / speed), the same counting as for guests. Two
+    independent checks; the transcript and the times are never shortened or adjusted."""
+    name = plan.capitalize()
+    words = count_words(body.spoken_text)
+    if words > limits.max_words:
+        message = (
+            f"{name} plan jobs can have at most {limits.max_words:,} words; this transcript has "
+            f"{words:,} (timestamps not counted). Shorten it and generate again."
+        )
+        raise ApiError(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "plan_word_limit_exceeded",
+            message,
+            extra={
+                "fields": [{"field": "transcript", "message": message}],
+                "plan": plan,
+                "word_count": words,
+                "max_words": limits.max_words,
+            },
+        )
+    baseline = target_duration_seconds(
+        parse_timestamp(body.first_sentence_start), parse_timestamp(body.last_sentence_start)
+    )
+    output = DurationTarget(baseline, body.speed).output_seconds
+    if output <= limits.max_output_seconds:
+        return
+    message = (
+        f"{name} plan audio can be at most {_clock(limits.max_output_seconds)} long; this job "
+        f"would make {_clock(output)} ({_clock(baseline)} between the two start times at "
+        f"{body.speed.label}). Choose a shorter stretch or a faster speed."
+    )
+    raise ApiError(
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        "plan_duration_limit_exceeded",
+        message,
+        extra={
+            "fields": [{"field": "last_sentence_start", "message": message}],
+            "plan": plan,
+            "output_seconds": float(output),
+            "max_output_seconds": limits.max_output_seconds,
             "baseline_seconds": baseline,
             "speed": body.speed.number,
         },

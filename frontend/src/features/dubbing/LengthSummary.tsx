@@ -5,12 +5,14 @@ interface Props {
   // Seconds between the two timestamps (the length at 1x); null until both are valid.
   baselineSeconds: number | null;
   speed: number;
-  // Guest mode: the longest audio the server accepts (seconds). A preview only; never blocks.
+  // Guest mode or an account plan: the longest audio the server accepts (seconds), and whose
+  // limit it is ("Guest", "Free plan"). A preview only; never blocks.
   maxOutputSeconds?: number;
+  limitLabel?: string;
 }
 
 /** Instant estimate of the audio length; the server validates and calculates the real one. */
-export function LengthSummary({ baselineSeconds, speed, maxOutputSeconds }: Props) {
+export function LengthSummary({ baselineSeconds, speed, maxOutputSeconds, limitLabel = "Guest" }: Props) {
   const output = baselineSeconds === null ? null : previewOutputSeconds(baselineSeconds, speed);
   const overLimit = maxOutputSeconds !== undefined && output !== null && output > maxOutputSeconds;
   return (
@@ -40,7 +42,7 @@ export function LengthSummary({ baselineSeconds, speed, maxOutputSeconds }: Prop
       )}
       {maxOutputSeconds !== undefined && (
         <p className={overLimit ? "callout error small" : "small muted"}>
-          Guest audio can be at most {formatClock(maxOutputSeconds)} long
+          {limitLabel} audio can be at most {formatClock(maxOutputSeconds)} long
           {overLimit
             ? ". Choose a shorter stretch between the start times or a faster speed."
             : "."}

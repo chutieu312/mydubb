@@ -16,8 +16,18 @@ from app.guest.imports import (
 )
 from app.guest.router import network_unknown
 from app.guest.service import GuestSessionGone
+from app.quotas.errors import account_quota_error, usage_cap_error
+from app.quotas.service import (
+    AccountQuotaExhausted,
+    QuotaKind,
+    UsageCapReached,
+    UsageCaps,
+    admit,
+    limit_lock_waits,
+)
 from app.services import AppServices
 from app.youtube_import.base import ImportFailure
+from app.youtube_import.captions import CaptionTrack
 from app.youtube_import.schemas import YouTubeImportRequest, YouTubeImportResponse
 from app.youtube_import.service import YouTubeImporter
 
@@ -49,10 +59,50 @@ async def import_youtube_captions(
     try:
         if principal.guest:
             return await _guest_import(body, request, principal, importer, services)
-        track = await importer.import_captions(body.video)
+        track = await _account_import(body, principal, importer, db, services)
     except ImportFailure as exc:
         raise _failure(exc) from None
     return YouTubeImportResponse.from_track(track, importer.provider.name)
+
+
+async def _account_import(
+    body: YouTubeImportRequest,
+    principal: Principal,
+    importer: YouTubeImporter,
+    db: Session,
+    services: AppServices,
+) -> CaptionTrack:
+    """An account (or Access Code) import: a slot first (`youtube_import_busy` counts nothing),
+    then the usage counts in one short transaction committed before the provider is called (a
+    refusal counts nothing and gives the slot back). Once committed the import counts, whatever
+    the provider then answers; no connection or lock is held while it does."""
+    slot = importer.admit()
+    caps = UsageCaps.from_settings(services.settings)
+
+    def count() -> None:
+        try:
+            limit_lock_waits(db)
+            admit(db, principal, QuotaKind.YOUTUBE_IMPORT, caps)
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+
+    try:
+        await run_in_threadpool(count)
+    except AccountQuotaExhausted as exc:
+        slot.release()
+        raise account_quota_error(exc) from None
+    except UsageCapReached as exc:
+        slot.release()
+        raise usage_cap_error(exc) from None
+    except BaseException:
+        slot.release()
+        raise
+    try:
+        return await importer.provider.english_captions(body.video)
+    finally:
+        slot.release()
 
 
 async def _guest_import(
@@ -78,16 +128,21 @@ async def _guest_import(
         raise network_unknown()
     video = body.video
     slot = importer.admit()
+    caps = UsageCaps.from_settings(services.settings)
 
     def reserve(db: Session) -> uuid.UUID:
         # Run by the import runner in its own bounded transaction.
-        return reserve_import(
+        operation_id = reserve_import(
             db,
             guest_session_id=guest_session_id,
             ip_key=ip_key,
             policy=guest.policy,
             runner_id=services.instance_id,
         )
+        # The shared cap last, under the guest's locks, in the same transaction: a refusal also
+        # undoes the guest's reserved place. Never given back: it counts at admission.
+        admit(db, principal, QuotaKind.YOUTUBE_IMPORT, caps)
+        return operation_id
 
     async def work() -> YouTubeImportResponse:
         track = await importer.provider.english_captions(video)
@@ -96,6 +151,8 @@ async def _guest_import(
 
     try:
         return await runner.run(reserve, work, on_done=slot.release)
+    except UsageCapReached as exc:
+        raise usage_cap_error(exc) from None
     except GuestImportQuotaExceeded as exc:
         raise _quota_error(exc, guest) from None
     except GuestSessionGone:

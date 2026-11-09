@@ -1401,6 +1401,21 @@ describe("one page: English transcript, Translate to, Your audio", () => {
     expect($("form-error").textContent).not.toBe("");
   });
 
+  it.each([
+    [429, "daily_generate_quota_exhausted", "Your Free plan includes 20 audio jobs a day, and today's are used up."],
+    [422, "plan_word_limit_exceeded", "Free plan jobs can have at most 1,000 words; this transcript has 1,001."],
+    [503, "generate_daily_cap_reached", "MyDubb has reached today's limit on new audio jobs, shared by all users."],
+  ])("a usage limit refusal (%s %s) shows the server's words and is not sent again", async (status, code, message) => {
+    const refusal = new MyDubbError(status, code, message);
+    const createJob = vi.fn(async () => Promise.reject(refusal));
+    const { storage } = await started(undefined, fakeApi({ createJob }));
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect($("form-error").textContent).toBe(message);
+    expect(createJob).toHaveBeenCalledTimes(1);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+  });
+
   it("a job that completes while the user edits the form leaves the focus and the edit alone", async () => {
     let finish!: (value: unknown) => void;
     const { api } = await started(undefined, fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) }));
