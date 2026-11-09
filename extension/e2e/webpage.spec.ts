@@ -7,7 +7,10 @@
 import type { BrowserContext, Page, Worker } from "@playwright/test";
 import {
   HTTP_ORIGIN,
+  LOOM_TRANSCRIPT_URL,
+  YOUTUBE_TRANSCRIPT_URL,
   allowConnect,
+  collapsedSelection,
   connectAccount,
   disconnect,
   expect,
@@ -148,25 +151,98 @@ test("Send to MyDubb on a normal page: right tab, draft to check, Generate and P
   await expect(panelB.locator("#player-section")).toBeHidden();
 });
 
-test("an http page works too, and the text Chrome flattened is kept as received, never re-timed", async ({ context, worker, extensionId, mydubb }) => {
+test("an http page works too, and the timestamps of text Chrome flattened are put back on their own lines", async ({ context, worker, extensionId, mydubb }) => {
   const { page, tabId } = await openWebPage(context, worker, `${HTTP_ORIGIN}/notes`);
   const panel = await openPanel(context, extensionId, tabId);
   await connectAccount(panel, mydubb, extensionId);
-  // Chrome gave the text on one line: the timestamps are plain words now.
+  // Chrome gave the text on one line.
   const flattened = "0:05 Welcome back to the dashboard tour. 0:21 That is the whole tour.";
   await sendMenuSelection(worker, tabId, flattened, page.url());
   const textarea = panel.getByRole("textbox", { name: "English transcript" });
-  await expect(textarea).toHaveValue(flattened);
-  await expect(panel.locator("#timing")).toBeHidden();
-  await expect(panel.getByLabel("First sentence starts")).toHaveValue("");
-  // The user can fix it: put the line breaks back (or Copy -> Paste) and the timestamps are read again.
-  const fixed = "0:05\nWelcome back to the dashboard tour.\n0:21\nThat is the whole tour.";
-  await textarea.fill(fixed);
+  const restored = "0:05\nWelcome back to the dashboard tour.\n0:21\nThat is the whole tour.";
+  await expect(textarea).toHaveValue(restored);
+  await expect(panel.getByText(/each caption timestamp was put back on its own line/)).toBeVisible();
   await expect(panel.getByLabel("First sentence starts")).toHaveValue("00:00:05");
+  await expect(panel.getByLabel("Last sentence starts")).toHaveValue("00:00:21");
+  // Send to MyDubb only fills the draft: nothing is sent until Generate.
+  expect(mydubb.posts("/api/jobs")).toHaveLength(0);
   await panel.getByRole("button", { name: GENERATE }).click();
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
-  expect(mydubb.posts("/api/jobs")[0]?.body).toMatchObject({ transcript: fixed, timing_mode: "timed" });
+  expect(mydubb.posts("/api/jobs")[0]?.body).toMatchObject({ transcript: restored, timing_mode: "timed" });
 });
+
+for (const site of [
+  { name: "YouTube-like", url: YOUTUBE_TRANSCRIPT_URL, captions: 6, from: "1:19", to: "1:27", first: "00:01:19", last: "00:01:27", spoken: "The meeting starts at 9:30." },
+  { name: "Loom-like", url: LOOM_TRANSCRIPT_URL, captions: 3, from: "0:00", to: "0:38", first: "00:00:00", last: "00:00:38", spoken: "the date filter starts at 9:30 by default." },
+]) {
+  test(`${site.name} transcript: Chrome's one-line selection gives the same draft as Copy -> Paste, fills First/Last and Generates timed`, async ({
+    context,
+    worker,
+    extensionId,
+    mydubb,
+  }) => {
+    const { page, tabId } = await openWebPage(context, worker, site.url);
+    const panel = await openPanel(context, extensionId, tabId);
+    await connectAccount(panel, mydubb, extensionId);
+    const selected = await selectTranscript(page);
+    const oneLine = collapsedSelection(selected);
+    expect(oneLine).not.toContain("\n");
+    // What a Copy -> Paste of the same selection reads (line breaks kept, spacing aside).
+    const pasted = selected
+      .split("\n")
+      .map((line) => line.trim().replace(/\s+/g, " "))
+      .filter((line) => line !== "")
+      .join("\n");
+    await sendMenuSelection(worker, tabId, oneLine, page.url());
+
+    const textarea = panel.getByRole("textbox", { name: "English transcript" });
+    await expect(textarea).toHaveValue(pasted);
+    await expect(panel.getByText(/each caption timestamp was put back on its own line/)).toBeVisible();
+    await expect(panel.locator("#timing-text")).toContainText(`Timestamps detected: ${site.captions} captions from ${site.from} to ${site.to}`);
+    await expect(panel.getByLabel("First sentence starts")).toHaveValue(site.first);
+    await expect(panel.getByLabel("Last sentence starts")).toHaveValue(site.last);
+    // A time that is part of the spoken words stays in the caption text.
+    expect(await textarea.inputValue()).toContain(site.spoken);
+    expect(mydubb.posts("/api/jobs")).toHaveLength(0);
+
+    await panel.getByRole("button", { name: GENERATE }).click();
+    await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
+    expect(mydubb.posts("/api/jobs")[0]?.body).toMatchObject({
+      transcript: pasted,
+      timing_mode: "timed",
+      first_sentence_start: site.first,
+      last_sentence_start: site.last,
+    });
+  });
+}
+
+for (const unsure of [
+  // "9:30" is shaped like a timestamp but goes back in time.
+  "1:22 The meeting starts at 9:30 sharp 1:24 so please be on time.",
+  // PR #55 review (P2): in order and at a plausible pace, but "at 9:30" is a time that was said.
+  "9:20 We meet at 9:30 every day. 9:40 Bring your notes.",
+  "09:20 We meet at 09:30 every day. 09:40 Bring your notes.",
+]) {
+  test(`a one-line selection whose timestamps cannot be told apart from the words is kept as sent, with the Copy -> Paste hint: ${unsure}`, async ({
+  context,
+  worker,
+  extensionId,
+  mydubb,
+}) => {
+  const { page, tabId } = await openWebPage(context, worker, YOUTUBE_TRANSCRIPT_URL);
+  const panel = await openPanel(context, extensionId, tabId);
+  await connectAccount(panel, mydubb, extensionId);
+  // Nothing is split and nothing is removed.
+  await sendMenuSelection(worker, tabId, unsure, page.url());
+  const textarea = panel.getByRole("textbox", { name: "English transcript" });
+  await expect(textarea).toHaveValue(unsure);
+  await expect(panel.getByText(/copy the selection on the page \(Ctrl\+C\) and paste it here \(Ctrl\+V\)/)).toBeVisible();
+  await expect(panel.locator("#timing")).toBeHidden();
+  await expect(panel.getByLabel("First sentence starts")).toHaveValue("");
+  await expect(panel.getByLabel("Last sentence starts")).toHaveValue("");
+  expect(mydubb.posts("/api/jobs")).toHaveLength(0);
+  });
+}
 
 test("an empty or too long selection is reported, and an edited draft is only replaced after confirmation", async ({
   context,

@@ -100,6 +100,12 @@ export interface PendingSelection {
   text: string;
   /** Why no text arrived, when text is empty. */
   problem: "empty" | "too-long" | null;
+  /**
+   * Chrome's selectionText (whitespace collapsed) had timestamps: "restored" when each was put back
+   * on its own line, "kept" when they could not be told apart from the spoken words and the text was
+   * kept as sent. Null otherwise (no timestamps, or the exact selection from the content script).
+   */
+  captionLines: "restored" | "kept" | null;
   /** Lecture the selection came from; null when the content script could not be reached. */
   lessonKey: string | null;
   at: number;
@@ -234,6 +240,7 @@ export function isPendingSelection(value: unknown): value is PendingSelection {
     isString(value.id, 100) &&
     isString(value.text, MAX_SELECTION_CHARS) &&
     (value.problem === null || value.problem === "empty" || value.problem === "too-long") &&
+    (value.captionLines === null || value.captionLines === "restored" || value.captionLines === "kept") &&
     (value.lessonKey === null || isString(value.lessonKey, 250)) &&
     isFiniteNumber(value.at)
   );

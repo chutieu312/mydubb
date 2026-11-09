@@ -224,7 +224,7 @@ test("opening the panel with a new timestamped selection is not undone by the st
           speed: 1.5,
           filledFrom: null,
         },
-        [`pending:${tab}`]: { id: "sel-1", text: "0:01\nFirst caption.\n0:21\nLast caption.", problem: null, lessonKey: lesson, at: Date.now() },
+        [`pending:${tab}`]: { id: "sel-1", text: "0:01\nFirst caption.\n0:21\nLast caption.", problem: null, captionLines: null, lessonKey: lesson, at: Date.now() },
       });
     },
     [tabId, "demo-course/307"] as const,

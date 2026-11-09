@@ -14,6 +14,8 @@ const extensionDir = join(here, "..", "dist-test");
 const fixtureHtml = readFileSync(join(here, "fixtures", "lecture.html"), "utf8");
 const fixtureJs = readFileSync(join(here, "fixtures", "fixture.js"), "utf8");
 const webpageHtml = readFileSync(join(here, "fixtures", "webpage.html"), "utf8");
+const youtubeTranscriptHtml = readFileSync(join(here, "fixtures", "youtube-transcript.html"), "utf8");
+const loomTranscriptHtml = readFileSync(join(here, "fixtures", "loom-transcript.html"), "utf8");
 // A real MP3: the backend's 3 s mock-provider fixture (CBR, no header frame) ten times over, so
 // the player really decodes a 30 s MP3 and seeking has room.
 const fixtureMp3 = Buffer.concat(
@@ -25,6 +27,9 @@ export const MYDUBB = "https://mydubb.test";
 export const WEB_ORIGIN = "https://www.loom.com";
 export const HTTP_ORIGIN = "http://intranet.test";
 export const webUrl = (id: string | number) => `${WEB_ORIGIN}/share/${id}`;
+/** Synthetic transcript panels shaped like YouTube's (M:SS per caption row) and Loom's (MM:SS per paragraph). */
+export const YOUTUBE_TRANSCRIPT_URL = "https://www.youtube.com/watch?v=synthetic";
+export const LOOM_TRANSCRIPT_URL = `${WEB_ORIGIN}/share/transcript-fixture`;
 export const lectureUrl = (id: number, query = "") => `${ORIGIN}/course/demo-course/learn/lecture/${id}${query}`;
 
 export const META = {
@@ -281,6 +286,8 @@ export const test = base.extend<Fixtures>({
       if (url.origin === ORIGIN && /^\/course\/demo-course\/?$/.test(url.pathname)) {
         return route.fulfill({ contentType: "text/html", body: fixtureHtml.replace("Lecture __LECTURE__", "Course overview") });
       }
+      if (url.href === YOUTUBE_TRANSCRIPT_URL) return route.fulfill({ contentType: "text/html", body: youtubeTranscriptHtml });
+      if (url.href === LOOM_TRANSCRIPT_URL) return route.fulfill({ contentType: "text/html", body: loomTranscriptHtml });
       // Ordinary web pages: a page without a video, served over https and over plain http.
       const shared = /^\/share\/([\w-]+)$/.exec(url.pathname);
       if (url.origin === WEB_ORIGIN && shared) {
@@ -355,6 +362,15 @@ export function selectTranscript(page: Page): Promise<string> {
     selection.addRange(range);
     return selection.toString();
   });
+}
+
+/**
+ * A model of the selectionText Chrome passes to the menu for this selection: its whitespace, line
+ * breaks included, collapsed to single spaces (what the Product Owner saw on YouTube and Loom). It
+ * is derived from the page's real selection, but it is not Chrome's own value.
+ */
+export function collapsedSelection(selected: string): string {
+  return selected.replace(/\s+/g, " ").trim();
 }
 
 /**
