@@ -473,6 +473,25 @@ export async function disconnect(panel: Page) {
   await panel.getByRole("button", { name: "Disconnect" }).click();
 }
 
+/**
+ * On any page that is not a connected Udemy lecture the panel says nothing about lectures: no
+ * "Current lesson" block, no video box, no Udemy notice in the visible text (Details closed or open).
+ */
+export async function expectNoLectureNotice(panel: Page) {
+  await expect(panel.locator("#lesson-box")).toBeHidden();
+  await expect(panel.locator("#video-box")).toBeHidden();
+  await expect(panel.locator("#lesson-label")).toBeHidden();
+  await expect(panel.locator("#link-status")).toBeHidden();
+  const open = await panel.locator("#header-details").evaluate((d) => (d as HTMLDetailsElement).open);
+  if (!open) await panel.locator("#header-details > summary").click();
+  await expect(panel.locator("#lesson-term")).toBeHidden();
+  await expect(panel.locator("#link-term")).toBeHidden();
+  await expect(panel.locator("#tab-label")).toBeVisible(); // the account and tab details stay
+  const visible = await panel.evaluate(() => document.body.innerText);
+  expect(visible).not.toMatch(/Not a Udemy lecture|No Udemy lecture is linked|Current lesson|Page link/);
+  if (!open) await panel.locator("#header-details > summary").click();
+}
+
 export async function fillTimes(panel: Page) {
   await panel.getByLabel("First sentence starts").fill("000010");
   await panel.getByLabel("Last sentence starts").fill("000610");

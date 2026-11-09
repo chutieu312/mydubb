@@ -517,8 +517,9 @@ use the Azure free allowance.
    as a regression. Reload the extension and the tab first. (a) Open the panel with the toolbar
    button **Open MyDubb**, paste an English transcript (try one with `0:05` timestamps on their own
    lines: the timing note and the two start times must fill; try one without), connect, **Generate
-   audio**: the job runs, the audio loads paused at 0:00, Play works at 1x, there is **no** video
-   row, Sync or floating player, and nothing else on the page changes. (b) On the page, select
+   audio**: the job runs, the audio loads paused at 0:00, Play works at 1x. The panel starts with the
+   transcript box under the header: no "Current lesson" block and no word about Udemy; there is **no**
+   video row, Sync or floating player, and nothing else on the page changes. (b) On the page, select
    transcript text, right-click → **Send to MyDubb** (this is the native menu the browser tests
    cannot click): the panel opens for that tab with Chrome's text; note whether the line breaks
    survived. If a timestamp ended up on one line, check the text is kept as received (not re-timed),

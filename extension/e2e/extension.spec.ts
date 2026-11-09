@@ -1,12 +1,15 @@
 // Browser tests of the real extension build in Chromium against synthetic fixture pages.
 // They prove the local behaviour only; they are not evidence that it works on udemy.com.
 
-import { ORIGIN, expect, openLecture, openPanel, sendTranscriptSelection, sessionGet, test } from "./harness";
+import { ORIGIN, expect, expectNoLectureNotice, openLecture, openPanel, sendTranscriptSelection, sessionGet, test } from "./harness";
 
 test("selection reaches the panel unchanged; edited drafts are only replaced after confirmation", async ({ context, worker, extensionId }) => {
   const { page, tabId } = await openLecture(context, worker, 101);
   const panel = await openPanel(context, extensionId, tabId);
   // The header names the lecture briefly; the full title, its id and the tab are under Details.
+  // A connected Udemy lecture: the lesson block and the video box are shown.
+  await expect(panel.locator("#lesson-box")).toBeVisible();
+  await expect(panel.locator("#video-box")).toBeVisible();
   await expect(panel.locator("#lesson-label")).toHaveText("Lecture 101");
   await expect(panel.locator("#lesson-label")).toHaveAttribute("title", "Lecture 101 | Demo Course | Udemy (lecture 101)");
   await expect(panel.locator("#lesson-detail")).toHaveText("Lecture 101 | Demo Course | Udemy (lecture 101)");
@@ -183,8 +186,7 @@ test("unsupported tab and missing tab are reported with controls disabled", asyn
   });
   const panel = await openPanel(context, extensionId, otherId);
   // An ordinary page is not an error: no video controls are offered, the rest of the panel works.
-  await expect(panel.getByText(/No Udemy lecture is linked to this tab/)).toBeVisible();
-  await expect(panel.locator("#video-box")).toBeHidden();
+  await expectNoLectureNotice(panel);
   await expect(panel.locator("#playpause")).toBeDisabled();
   // The web page has no channel into the extension.
   expect(await other.evaluate(() => typeof (window as { chrome?: { runtime?: { id?: string } } }).chrome?.runtime?.id)).toBe("undefined");
@@ -214,7 +216,7 @@ test("a lecture's draft never survives a detour through a non-lecture page to an
   // Reopen the panel there: leaving the lecture is confirmed, so draft A is discarded.
   panel = await openPanel(context, extensionId, tabId);
   const textarea = panel.getByRole("textbox", { name: "English transcript" });
-  await expect(panel.locator("#lesson-label")).toHaveText("Not a Udemy lecture page");
+  await expectNoLectureNotice(panel);
   await expect(panel.getByText(/You left the lecture\. The previous draft was cleared/)).toBeVisible();
   await expect(textarea).toHaveValue("");
   await expect.poll(() => sessionGet(worker, `draft:${tabId}`)).toBeNull();

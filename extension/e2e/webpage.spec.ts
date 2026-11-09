@@ -11,6 +11,7 @@ import {
   connectAccount,
   disconnect,
   expect,
+  expectNoLectureNotice,
   fillTimes,
   lectureUrl,
   openLecture,
@@ -32,10 +33,13 @@ test("paste a transcript on a page without video, Generate and listen", async ({
   const panel = await openPanel(context, extensionId, tabId);
   const textarea = panel.getByRole("textbox", { name: "English transcript" });
 
-  // No lecture: no video controls, and the panel says so without calling it an error.
-  await expect(panel.locator("#link-status")).toContainText("No Udemy lecture is linked to this tab");
-  await expect(panel.locator("#video-box")).toBeHidden();
-  await expect(panel.locator("#lesson-label")).toHaveText("Not a Udemy lecture");
+  // No lecture: the panel starts with the transcript box and says nothing about Udemy or lectures.
+  await expect(textarea).toBeVisible();
+  await expectNoLectureNotice(panel);
+  // The transcript box follows the header directly (no block in between).
+  const head = (await panel.locator(".head").boundingBox())!;
+  const card = (await panel.locator("#draft-heading").boundingBox())!;
+  expect(card.y - (head.y + head.height)).toBeLessThan(40);
   expect(await page.locator("video").count()).toBe(0);
   // The page has no channel into the extension, and the extension sent nothing anywhere.
   expect(await page.evaluate(() => typeof (window as { chrome?: { runtime?: { id?: string } } }).chrome?.runtime?.id)).toBe("undefined");
@@ -124,6 +128,8 @@ test("Send to MyDubb on a normal page: right tab, draft to check, Generate and P
   // Chrome's text lands in the draft of tab A and in no other tab; nothing was sent to MyDubb yet.
   await expect(panelA.getByRole("textbox", { name: "English transcript" })).toHaveValue(selected);
   await expect(panelA.getByText(/Selection received/)).toBeVisible();
+  await expectNoLectureNotice(panelA);
+  await expectNoLectureNotice(panelB);
   await expect(panelB.getByRole("textbox", { name: "English transcript" })).toHaveValue("");
   expect(mydubb.posts("/api/jobs")).toHaveLength(0);
   // The panel was opened for tab A (the real call needs a user gesture: the badge says it failed here).
@@ -328,7 +334,7 @@ test("a tab that becomes a Udemy lecture drops the page's result; a lecture that
 
   // Back to a plain page in the same tab: the video controls go away and Generate still works.
   await page.goto(webUrl("switch-back"));
-  await expect(panel.locator("#link-status")).toContainText("No Udemy lecture is linked", { timeout: 20_000 });
+  await expect(panel.locator("#lesson-box")).toBeHidden({ timeout: 20_000 });
   await expect(panel.locator("#video-box")).toBeHidden();
   await panel.getByRole("button", { name: GENERATE }).click();
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();

@@ -18,28 +18,29 @@
           <button id="reconnect" type="button" hidden>Reconnect</button>
           <button id="connect" type="button" class="primary" hidden>Connect MyDubb</button>
         </div>
-      </header>
-
-      <div class="lesson-box">
-        <p class="eyebrow" id="lesson-eyebrow">Current lesson</p>
-        <p id="lesson-label" class="lesson" aria-describedby="lesson-eyebrow">—</p>
-        <p id="link-status" class="status" role="status" aria-live="polite"></p>
         <details id="header-details" class="more">
           <summary>Details</summary>
           <dl class="link">
             <dt>Account</dt>
             <dd id="account-detail">—</dd>
-            <dt>Lecture</dt>
+            <dt id="lesson-term">Lecture</dt>
             <dd id="lesson-detail">—</dd>
             <dt>Tab</dt>
             <dd id="tab-label">—</dd>
-            <dt>Page link</dt>
+            <dt id="link-term">Page link</dt>
             <dd id="link-detail">—</dd>
           </dl>
           <div class="row">
             <button id="disconnect" type="button" hidden>Disconnect</button>
           </div>
         </details>
+      </header>
+
+      <!-- Only while a Udemy lecture is connected: nothing about Udemy on any other page. -->
+      <div class="lesson-box" id="lesson-box" hidden>
+        <p class="eyebrow" id="lesson-eyebrow">Current lesson</p>
+        <p id="lesson-label" class="lesson" aria-describedby="lesson-eyebrow">—</p>
+        <p id="link-status" class="status" role="status" aria-live="polite"></p>
       </div>
 
       <!-- 1. The transcript, the video's time and the two start times it helps to fill. -->
