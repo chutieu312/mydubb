@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { AppFooter } from "../../components/AppFooter";
 import { AppHeader } from "../../components/AppHeader";
@@ -8,7 +8,7 @@ import { useTheme } from "../../lib/useTheme";
 import { CasesPanel } from "./CasesPanel";
 import { CreateAccountForm } from "./CreateAccountForm";
 import { DemoStudio } from "./DemoStudio";
-import { createMockSignup } from "./mockSignup";
+import { createMockSignup, type MockSignup } from "./mockSignup";
 import { VerifyCodeForm } from "./VerifyCodeForm";
 import "./preview.css";
 
@@ -69,10 +69,17 @@ function PreviewSignIn({ onCreateAccount }: { onCreateAccount: () => void }) {
   );
 }
 
-// `delayMs` is for tests: how long each simulated request takes.
-export default function SignupPreview({ delayMs }: { delayMs?: number }) {
+// `makeService` is for tests: they hand in a mock whose requests they finish themselves.
+export default function SignupPreview({
+  makeService = () => createMockSignup(),
+}: {
+  makeService?: () => MockSignup;
+}) {
   const [theme, toggleTheme] = useTheme();
-  const [service, setService] = useState(() => createMockSignup(delayMs));
+  const [service, setService] = useState(makeService);
+  // The service of the attempt on screen. Start over replaces it, so an answer from an earlier
+  // service (a request still pending when Start over was pressed) can be told apart and ignored.
+  const liveService = useRef(service);
   const [screen, setScreen] = useState<Screen>("sign-in");
   const [email, setEmail] = useState("");
   // False for the first screen only; later screens take focus on their title.
@@ -84,10 +91,14 @@ export default function SignupPreview({ delayMs }: { delayMs?: number }) {
   };
   const startOver = () => {
     service.reset();
-    setService(createMockSignup(delayMs));
+    const next = makeService();
+    liveService.current = next;
+    setService(next);
     setEmail("");
     go("sign-in");
   };
+  // True while `mine` (the service a form was rendered with) is still the attempt on screen.
+  const stillCurrent = (mine: MockSignup) => liveService.current === mine;
 
   const common = { focusTitle: navigated };
 
@@ -127,6 +138,7 @@ export default function SignupPreview({ delayMs }: { delayMs?: number }) {
                 service={service}
                 initialEmail={email}
                 onCreated={(address) => {
+                  if (!stillCurrent(service)) return;
                   setEmail(address);
                   go("verify");
                 }}
@@ -148,7 +160,7 @@ export default function SignupPreview({ delayMs }: { delayMs?: number }) {
               <VerifyCodeForm
                 service={service}
                 email={email}
-                onVerified={() => go("verified")}
+                onVerified={() => stillCurrent(service) && go("verified")}
                 onChangeEmail={() => go("create")}
                 onBackToSignIn={() => go("sign-in")}
               />

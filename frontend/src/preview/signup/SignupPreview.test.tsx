@@ -1,8 +1,17 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BUSY_EMAIL, DEMO_CODE, EXPIRED_CODE, UNAVAILABLE_CODE } from "./mockSignup";
+import {
+  BUSY_EMAIL,
+  DEMO_CODE,
+  EXPIRED_CODE,
+  UNAVAILABLE_CODE,
+  createMockSignup,
+  type CreateResult,
+  type MockSignup,
+  type VerifyResult,
+} from "./mockSignup";
 import SignupPreview from "./SignupPreview";
 
 type User = ReturnType<typeof userEvent.setup>;
@@ -24,9 +33,31 @@ afterEach(() => {
   expect(setItemSpy).not.toHaveBeenCalled();
 });
 
-function setup() {
-  render(<SignupPreview delayMs={0} />);
+function setup(makeService: () => MockSignup = () => createMockSignup(0)) {
+  render(<SignupPreview makeService={makeService} />);
   return userEvent.setup();
+}
+
+/**
+ * A mock whose requests stay pending until the test finishes them, in the order they were sent.
+ * The preview asks `makeService` again at every Start over: the first service is this one, the
+ * next ones answer at once.
+ */
+function pendingService() {
+  const creates: Array<(result: CreateResult) => void> = [];
+  const verifies: Array<(result: VerifyResult) => void> = [];
+  const service: MockSignup = {
+    createAccount: () => new Promise((resolve) => creates.push(resolve)),
+    verify: () => new Promise((resolve) => verifies.push(resolve)),
+    resend: async () => undefined,
+    reset: () => undefined,
+  };
+  const services = [service];
+  return {
+    creates,
+    verifies,
+    makeService: () => services.shift() ?? createMockSignup(0),
+  };
 }
 
 const input = (name: string) => screen.getByLabelText(name, { selector: "input" }) as HTMLInputElement;
@@ -280,5 +311,75 @@ describe("success and the demo Studio", () => {
 
     await openCreate(user);
     expect(input("Email").value).toBe("");
+  });
+});
+
+describe("Start over while a request is pending", () => {
+  const signIn = () => screen.getByRole("heading", { name: "Sign in to MyDubb" });
+  const nowhereElse = () => {
+    expect(screen.queryByRole("heading", { name: "Verify your email" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Email verified" })).toBeNull();
+  };
+
+  it("stays on Sign in when a Create account request finishes afterwards", async () => {
+    const mock = pendingService();
+    const user = setup(mock.makeService);
+    await openCreate(user);
+    await fillCreate(user);
+    await user.click(button("Create account"));
+    await screen.findByRole("button", { name: "Creating account…" });
+
+    // Start over is still there to press while the request waits, and acts at once.
+    await user.click(button("Start over"));
+    expect(signIn()).toBeTruthy();
+
+    await act(async () => mock.creates[0]?.("created"));
+    expect(signIn()).toBeTruthy();
+    nowhereElse();
+  });
+
+  it("stays on Sign in when a Verify request finishes afterwards", async () => {
+    const mock = pendingService();
+    const user = setup(mock.makeService);
+    await openCreate(user);
+    await fillCreate(user);
+    await user.click(button("Create account"));
+    await act(async () => mock.creates[0]?.("created"));
+    await screen.findByRole("heading", { name: "Verify your email" });
+    await user.type(input("Verification code"), DEMO_CODE);
+    await user.click(button("Verify"));
+    await screen.findByRole("button", { name: "Verifying…" });
+
+    await user.click(button("Start over"));
+    expect(signIn()).toBeTruthy();
+
+    await act(async () => mock.verifies[0]?.("verified"));
+    expect(signIn()).toBeTruthy();
+    nowhereElse();
+  });
+
+  it("lets a new sign-up run after the reset, untouched by the old answer", async () => {
+    const mock = pendingService();
+    const user = setup(mock.makeService);
+    await openCreate(user);
+    await fillCreate(user, "ada@example.com");
+    await user.click(button("Create account"));
+    await screen.findByRole("button", { name: "Creating account…" });
+    await user.click(button("Start over"));
+
+    // The new attempt starts from nothing, and the old answer does not change its email.
+    await openCreate(user);
+    expect(input("Email").value).toBe("");
+    await fillCreate(user, "grace@example.com");
+    await user.click(button("Create account"));
+    await screen.findByRole("heading", { name: "Verify your email" });
+
+    await act(async () => mock.creates[0]?.("created"));
+    expect(screen.getByText("grace@example.com")).toBeTruthy();
+    expect(screen.queryByText("ada@example.com")).toBeNull();
+
+    await user.type(input("Verification code"), DEMO_CODE);
+    await user.click(button("Verify"));
+    await screen.findByRole("heading", { name: "Email verified" });
   });
 });

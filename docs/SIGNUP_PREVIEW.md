@@ -60,6 +60,10 @@ moves focus to its title; a refused code returns focus to the code box.
 - State: the mock (`mockSignup.ts`) and every screen's state live in component memory. The only
   thing written to browser storage is the light/dark choice the site already saves. The real
   Studio's drafts live in `App`, which the preview never mounts.
+- Start over works at any time, also while "Creating account…" or "Verifying…" is showing. It
+  returns to Sign in at once and starts with a new mock. An answer from a request sent before it is
+  ignored: it does not change the screen, the email or the new attempt (`SignupPreview.tsx`
+  compares the service a form was rendered with to the one on screen).
 - Reused as they are: `AuthCard`, `TextField`, `PasswordField`, `FormError`, `useSubmit`, the code
   rules in `newPasswordValidation.ts`, `AppHeader`, `AppFooter`, and the real `DubbingForm` in the
   demo Studio (with fixed sample languages and voices). No existing file was changed except
