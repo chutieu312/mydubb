@@ -1,7 +1,9 @@
 # MyDubb Chrome extension
 
-On a Udemy lecture: select transcript text → right-click → **Send to MyDubb** → the text appears in
-a side panel. There you can edit it, control the lecture video (Play/Pause, −5 s/+5 s, time),
+On any web page (Loom, a Udemy lecture, …): paste an English transcript into the side panel, or
+select text → right-click → **Send to MyDubb** → the text appears in the panel. There you can edit
+it, **Generate audio** and listen, with or without a video on the page. On a Udemy lecture the panel
+also controls the lecture video (Play/Pause, −5 s/+5 s, time),
 connect your **MyDubb invitation account**, choose the output language, voice and speed, **Generate
 audio**, follow the job, read the translation and listen to the MP3, in the panel or in a small
 **floating player** on the lecture page that keeps playing when the panel is closed. With **Sync
@@ -59,9 +61,15 @@ link to the tab (not a lecture, reloading, tab closed) is shown there without op
 Colors are the MyDubb website's (light or dark, following the system), in the panel and in the floating
 player on the lecture page alike.
 
-1. On the lecture page, select some transcript text, right-click → **Send to MyDubb**.
-   The side panel opens for that tab with the exact text in **English transcript** (line breaks
-   kept, nothing rendered as HTML).
+1. Either paste the English transcript into **English transcript** (the toolbar button **Open
+   MyDubb** opens the panel for the current tab), or on a page select some transcript text,
+   right-click → **Send to MyDubb**. The side panel opens for that tab with the text in **English
+   transcript**, nothing rendered as HTML. On a **Udemy lecture** the extension reads the selection
+   itself, so the line breaks are kept exactly. On **any other http(s) page** it can only use the
+   text Chrome passes to the menu (`selectionText`), which may lose line breaks: the text is kept as
+   received and never re-timed. If the timestamps ended up on one line, edit them back onto their own
+   lines, or select, **Copy**, then **Paste** into the box (a paste keeps the line breaks). Nothing is
+   sent to MyDubb until **Generate audio**.
 2. Edit the text if you like. Sending a new selection over an edited draft asks first
    (**Replace draft** / **Keep my draft**). **Clear** empties the draft.
 3. **Connect MyDubb** (header): Chrome opens a MyDubb window; sign in there with your invitation
@@ -134,6 +142,15 @@ player on the lecture page alike.
 8. Moving to another lecture, leaving the lecture, reloading or closing the tab, **Disconnect** or
    an account change stops the audio and removes the player. After a reload, **Load audio** in the
    panel downloads the same result again (it never creates a job).
+9. **Any other web page** (no Udemy lecture): Generate works as soon as MyDubb is connected and the
+   form is valid, with or without a `<video>` on the page. The result belongs to that tab, that
+   account and that Generate click, and plays in the panel only: there are **no** video controls, no
+   Sync and no floating player (they exist for a Udemy lecture only, and nothing is offered that
+   cannot work). The audio is the MP3 already fitted to the speed you chose, played at 1x. It ends
+   when the tab closes, the account changes or **Disconnect**, a newer result replaces it, or the tab
+   turns out to show a Udemy lecture. It does **not** follow the page: going to another site in the
+   same tab leaves it playing (the extension cannot see addresses without a broad permission), so
+   pause it or start the next one yourself.
 
 The toolbar button **Open MyDubb** opens the panel for the current tab without a selection.
 If the panel could not be opened from the menu, the button shows a **!** badge; click it.
@@ -146,13 +163,13 @@ watching (or skipping) that part of the lecture.
 
 | Permission | Why |
 |---|---|
-| `contextMenus` | The **Send to MyDubb** item, shown only for a text selection on `https://www.udemy.com/*` pages. |
+| `contextMenus` | The **Send to MyDubb** item, shown only for a text selection on `http(s)` pages (`documentUrlPatterns` `https://*/*` and `http://*/*`). It reads nothing by itself: Chrome hands the selected text to the extension when you click the item, and that needs no site permission. Not shown on `chrome://`, `file://` or extension pages; the click handler checks the address again. |
 | `sidePanel` | The tab-specific side panel. |
 | `storage` | `chrome.storage.session` only (memory, cleared when the browser quits, readable by the extension's own pages, not by content scripts): the draft, the selection hand-over, the form settings, the job a tab follows and the translation of the audio loaded in its player, and the MyDubb token. |
 | `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect MyDubb**. |
 | `offscreen` | One hidden extension page (`offscreen.html`) that plays the MyDubb audio, so it keeps playing when the side panel closes. Created when a result's audio is loaded; it closes itself when no tab has audio left. Reasons `AUDIO_PLAYBACK` and `BLOBS` (it holds the MP3 Blob and its object URL while paused; with `AUDIO_PLAYBACK` alone Chrome would close it after 30 s of silence). |
 | Host `https://mydubb.com/*` (the build's `MYDUBB_ORIGIN`) | Calls to the MyDubb API from the side panel. No other host. |
-| Content script on `https://www.udemy.com/*` | Reads the selection when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected (including pausing it where a newly loaded MyDubb audio starts), draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
+| Content script on `https://www.udemy.com/*` (the only site with a content script) | Reads the exact selection (with its line breaks) when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected (including pausing it where a newly loaded MyDubb audio starts), draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
 
 No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`, no
 `externally_connectable` and no `web_accessible_resources`. The extension does not read cookies,
@@ -163,7 +180,9 @@ does not download video, does not intercept network requests and does not use Ud
 
 - **Service worker** (`src/background`): creates the menu item; on click it opens the side panel
   for that tab only (`sidePanel.setOptions({tabId, path: "sidepanel.html?tabId=N"})` + `open`, in
-  the user gesture), asks the content script for the selection, and stores it as a *pending
+  the user gesture), asks the content script for the selection (Udemy only; any other http(s) page
+  has none and uses Chrome's `selectionText`; a selection over 100,000 characters is refused, not
+  cut), and stores it as a *pending
   selection* in `storage.session`. When a tab closes it removes that tab's draft, form and job and
   tells the offscreen document; when the stored MyDubb connection changes it tells the offscreen
   document which connection is current. It keeps no state in globals and plays no part in MyDubb
@@ -420,7 +439,24 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   a new job runs (kept, its translation and facts shown) and then replaced by the new result by
   itself (both paused, the video at 1:13 with its sound and speed back, Sync OFF), the floating
   player showing the same audio, a reopened panel that resets nothing, and a start outside the
-  video reported without moving it. Autoplay is allowed
+  video reported without moving it. Transcript, Generate and playback on an ordinary web page
+  (`e2e/webpage.spec.ts`, synthetic pages served as `https://www.loom.com/share/...` and
+  `http://intranet.test/`, neither contacted, with no `<video>` and no content script): paste (a real
+  Ctrl+C on the page and Ctrl+V in the panel) with timestamps and line breaks into the timed parser,
+  Generate → result → Play with no lecture key, no Sync and no floating player; "Send to MyDubb" with
+  Chrome's `selectionText` (the worker's click handler is called, **the native context menu is not
+  clicked by Playwright**: the real menu is accepted by hand), the right tab only, a flattened
+  selection kept as received, empty and over-100,000-character selections, the confirmation before
+  an edited draft is replaced; two tabs, an account change with a job still running, a tab closing,
+  the earlier audio kept while the next job runs, a failed download or a refused Generate; a tab
+  that becomes a Udemy lecture (and back); a Udemy tab whose content script is held back with a gate (no
+  sleep orders the events): Paste, Generate, exactly one POST while the video is unknown, the video
+  information released while the job runs (still followed, its translation and audio load and play, no
+  second POST, no Sync, the video untouched), and released after the audio is loaded and playing (the
+  result stays); the panel closed and opened again after that (job still running, audio loaded and
+  playing, tab moved to another lecture); a tab that navigates to a lecture after a page Generate (the page's result goes when
+  the lecture shows); and a Udemy lecture regression (the content script's
+  selection, the lecture key, the video paused at the start of the audio, Sync turned on). Autoplay is allowed
   by a browser flag in these tests, so Chrome's autoplay blocking is only unit-tested, and
   background-tab throttling is not reproduced (unit-tested only). These are not evidence of
   behaviour on the real Udemy site or the real MyDubb.
@@ -480,12 +516,49 @@ use the Azure free allowance.
    reload and **Disconnect** while synced (each pauses or ends both, and the video gets its sound
    and speed back). Note anything Udemy's player does that the fixture does not (its own seeks on
    load, speed menu, buffering).
+8. Ordinary web page (Loom, or any `http(s)` page), with the Udemy checks above repeated afterwards
+   as a regression. Reload the extension and the tab first. (a) Open the panel with the toolbar
+   button **Open MyDubb**, paste an English transcript (try one with `0:05` timestamps on their own
+   lines: the timing note and the two start times must fill; try one without), connect, **Generate
+   audio**: the job runs, the audio loads paused at 0:00, Play works at 1x. The panel starts with the
+   transcript box under the header: no "Current lesson" block and no word about Udemy; there is **no**
+   video row, Sync or floating player, and nothing else on the page changes. (b) On the page, select
+   transcript text, right-click → **Send to MyDubb** (this is the native menu the browser tests
+   cannot click): the panel opens for that tab with Chrome's text; note whether the line breaks
+   survived. If a timestamp ended up on one line, check the text is kept as received (not re-timed),
+   fix it by hand or Copy → Paste, and Generate. (c) Empty and very long selections are reported;
+   with an edited draft, a new selection asks before replacing it. (d) A second tab, a second
+   account (**Disconnect**, connect another), closing the tab and a second Generate while listening
+   must not mix results (the earlier audio plays until the new one is ready). (e) Open a Udemy
+   lecture in the same tab afterwards: the page's result goes, the video controls appear.
+   (f) Udemy lecture, no Send to MyDubb: copy the transcript, open the panel, **Paste**, **Generate
+   audio** (try it as soon as the panel opens, even while the lecture is loading), listen. The same
+   with **Send to MyDubb** (it only fills the box; Generate is yours). Loom and YouTube: Paste or
+   Send to MyDubb, Generate, listen. (g) Sync with video, on a Udemy lecture whose video is found,
+   for a result generated after that: turn it on in the panel as in the steps above.
 
 ## Limits
 
-- Udemy lecture pages only; quizzes/articles show "no video". Video inside an iframe is not supported.
-- When the content script cannot be reached (e.g. inside an iframe) the selection falls back to
-  Chrome's `selectionText`, which may collapse whitespace.
+- The video controls, Sync with video and the floating player work on Udemy lecture pages only;
+  quizzes/articles show "no video". Video inside an iframe is not supported. Other pages (Loom, any
+  http(s) site) get the transcript, Generate and the panel's own audio player only; there is no video
+  adapter for them.
+- Off Udemy, and when the content script cannot be reached (e.g. inside an iframe), the selection is
+  Chrome's `selectionText`, which may collapse whitespace; it is kept as received, never re-timed.
+  (A way to get exact line breaks on other sites would need `activeTab` + `scripting`, not added.)
+- The audio of an ordinary page is tied to the tab, not to the address: if the tab goes to another
+  site, it keeps playing until it is paused, replaced, or the tab closes.
+- **Generate never waits for the lecture or the video.** With MyDubb connected and a valid form it works
+  even before the panel has any page state (a Udemy page whose script has not attached yet) and on
+  pages with no video. A result made then belongs to the tab on its own (no video link, no Sync). If the
+  tab's first report then names a lecture and the tab has not navigated since the click, the job, its
+  translation and its audio are kept and keep working (listening only; the video is not linked, moved
+  or synced). A different lecture, leaving the lecture, a navigation after the click, another account
+  or closing the tab still ends it. The confirmation is kept for the tab (session storage, with the
+  account), so closing and opening the panel again on the same tab, lecture and account restores the
+  running job, the translation and the loaded audio (listening only, nothing resent); another lecture or
+  account while it was closed restores nothing. Sync is for results generated while the lecture and its video are
+  known. A navigation still in flight (the old page on screen) is not seen by the panel.
 - Invitation accounts only (no guest), no YouTube import, no automatic transcript extraction, no
   playback speed control (the speed is chosen at Generate), no MP3 download button.
 - Sync with video follows the job's span as a whole: plain mode maps the whole MP3 linearly onto

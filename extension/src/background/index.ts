@@ -2,7 +2,7 @@
 // the worker for them; no state is kept in worker globals.
 
 import { AUTH_KEY } from "../panel/auth";
-import { MENU_ID, handleAuthChanged, handleMenuClick, handleTabRemoved, openPanel, type WorkerApi } from "./handlers";
+import { MENU_ID, MENU_ITEM, handleAuthChanged, handleMenuClick, handleTabRemoved, openPanel, type WorkerApi } from "./handlers";
 
 const api: WorkerApi = {
   sidePanel: chrome.sidePanel,
@@ -16,12 +16,7 @@ const api: WorkerApi = {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: MENU_ID,
-      title: "Send to MyDubb",
-      contexts: ["selection"],
-      documentUrlPatterns: ["https://www.udemy.com/*"],
-    });
+    chrome.contextMenus.create(MENU_ITEM);
   });
 });
 

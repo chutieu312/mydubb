@@ -18,28 +18,29 @@
           <button id="reconnect" type="button" hidden>Reconnect</button>
           <button id="connect" type="button" class="primary" hidden>Connect MyDubb</button>
         </div>
-      </header>
-
-      <div class="lesson-box">
-        <p class="eyebrow" id="lesson-eyebrow">Current lesson</p>
-        <p id="lesson-label" class="lesson" aria-describedby="lesson-eyebrow">—</p>
-        <p id="link-status" class="status" role="status" aria-live="polite"></p>
         <details id="header-details" class="more">
           <summary>Details</summary>
           <dl class="link">
             <dt>Account</dt>
             <dd id="account-detail">—</dd>
-            <dt>Lecture</dt>
+            <dt id="lesson-term">Lecture</dt>
             <dd id="lesson-detail">—</dd>
             <dt>Tab</dt>
             <dd id="tab-label">—</dd>
-            <dt>Page link</dt>
+            <dt id="link-term">Page link</dt>
             <dd id="link-detail">—</dd>
           </dl>
           <div class="row">
             <button id="disconnect" type="button" hidden>Disconnect</button>
           </div>
         </details>
+      </header>
+
+      <!-- Only while a Udemy lecture is connected: nothing about Udemy on any other page. -->
+      <div class="lesson-box" id="lesson-box" hidden>
+        <p class="eyebrow" id="lesson-eyebrow">Current lesson</p>
+        <p id="lesson-label" class="lesson" aria-describedby="lesson-eyebrow">—</p>
+        <p id="link-status" class="status" role="status" aria-live="polite"></p>
       </div>
 
       <!-- 1. The transcript, the video's time and the two start times it helps to fill. -->
@@ -48,12 +49,12 @@
           <h2 id="draft-heading"><label for="transcript">English transcript</label></h2>
           <p id="draft-status" class="small" role="status" aria-live="polite"></p>
         </div>
-        <p id="draft-hint" class="sr-only">On Udemy, select transcript text, right-click, then choose “Send to MyDubb”.</p>
+        <p id="draft-hint" class="sr-only">Paste the English transcript, or select text on a page, right-click, then choose “Send to MyDubb”.</p>
         <textarea
           id="transcript"
           rows="5"
           spellcheck="false"
-          placeholder="On Udemy, select transcript text, right-click, then choose “Send to MyDubb”."
+          placeholder="Paste the English transcript here, or select text on a page, right-click and choose “Send to MyDubb”."
           aria-describedby="draft-hint transcript-error"
         ></textarea>
         <button id="clear" type="button" class="quiet">Clear</button>
@@ -129,7 +130,7 @@
         <p id="generate-hint" class="hint"></p>
         <details class="more">
           <summary>Timing &amp; details</summary>
-          <p>Use the start times shown in the Udemy transcript; the video time above helps to find them.</p>
+          <p>Use the start times shown in the transcript's source; on a Udemy lecture the video time above helps to find them.</p>
           <p id="timing-note" hidden>
             Timing follows the captions and is estimated: some sentences may be grouped together or start slightly off their caption time.
           </p>
@@ -196,8 +197,8 @@
             <details class="more">
               <summary>Playback details</summary>
               <p>
-                The audio keeps playing when this panel is closed. Sync applies to the loaded audio above and moves the Udemy video only
-                while it is on.
+                The audio keeps playing when this panel is closed. On a Udemy lecture, Sync applies to the loaded audio above and moves the
+                video only while it is on; on any other page the audio plays on its own.
               </p>
             </details>
           </div>

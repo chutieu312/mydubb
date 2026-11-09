@@ -15,7 +15,7 @@
 
 # MyDubb Chrome extension privacy policy
 
-Last updated: November 3, 2026
+Last updated: November 8, 2026
 
 Operator: Can Nguyen
 
@@ -33,18 +33,22 @@ Microsoft or Google.
 
 ## What the extension is for
 
-The extension takes English transcript text that you select on an Udemy lecture page and, when you
+The extension takes English transcript text that you paste into its side panel or select on a web page and, when you
 ask, turns it into audio in another language with your MyDubb account, so you can listen next to
 the lecture video.
 
 ## What the extension handles in your browser
 
 "Session storage" below is Chrome's session storage for the extension. Chrome clears it when the
-browser quits, and Udemy pages cannot read it.
+browser quits, and web pages cannot read it.
 
-- **The text you select.** Read when you choose Send to MyDubb on an Udemy page. It is shown in
-  the side panel and kept in session storage. It is sent to MyDubb only when you choose Generate
-  audio.
+- **The text you select or paste.** When you choose Send to MyDubb on a web page, Chrome gives
+  the extension the text you selected there (on an Udemy lecture page the extension reads it from
+  the page itself). The extension does not read anything else of a web page that is not an Udemy
+  lecture: not its content, title or other text. Chrome also tells it the address of the page at
+  that moment, only so that the menu item works on web pages and nothing else; the address is not
+  stored or sent. The text, or text you paste into the panel, is shown in the side panel and kept in
+  session storage. It is sent to MyDubb only when you choose Generate audio.
 - **Your choices.** Start times, language, voice and speed. They are kept in session storage and
   sent to MyDubb with the text when you choose Generate audio.
 - **The address and title of the current lecture.** Read from the Udemy page in that tab, to tell

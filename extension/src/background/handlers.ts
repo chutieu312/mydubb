@@ -4,6 +4,7 @@
 import { isLive, isStoredAuth } from "../panel/auth";
 import { UDEMY_ORIGIN } from "../shared/lesson";
 import {
+  MAX_SELECTION_CHARS,
   isSelectionReply,
   pendingKey,
   tabKeys,
@@ -14,6 +15,17 @@ import {
 import type { WorkerToPlayer } from "../shared/playback";
 
 export const MENU_ID = "mydubb-send-selection";
+/**
+ * The "Send to MyDubb" item: on any http(s) page that has selected text. Chrome gives the selection
+ * (selectionText) to the worker without any host permission, so no site access is needed for it;
+ * handleMenuClick checks the page again before it acts.
+ */
+export const MENU_ITEM: chrome.contextMenus.CreateProperties = {
+  id: MENU_ID,
+  title: "Send to MyDubb",
+  contexts: ["selection"],
+  documentUrlPatterns: ["https://*/*", "http://*/*"],
+};
 export const PANEL_PAGE = "sidepanel.html";
 
 /** The Chrome APIs the worker uses, injectable for tests. */
@@ -56,16 +68,23 @@ function clearOpenFailure(api: WorkerApi, tabId: number): void {
   void api.action.setTitle({ tabId, title: "Open MyDubb" }).catch(() => undefined);
 }
 
-function isUdemyUrl(url: string | undefined): boolean {
-  if (!url) return false;
+/** The page the menu was used on: Udemy (a content script lives there) or any other http(s) page. */
+function pageKind(url: string | undefined): "udemy" | "web" | null {
+  if (!url) return null;
   try {
-    return new URL(url).origin === UDEMY_ORIGIN;
+    const parsed = new URL(url);
+    if (parsed.origin === UDEMY_ORIGIN) return "udemy";
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? "web" : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-/** "Send to MyDubb": open the panel, then hand the exact selection to it via session storage. */
+/**
+ * "Send to MyDubb": open the panel, then hand the selection to it via session storage. On Udemy the
+ * content script returns the exact selection (line breaks intact); on any other http(s) page there
+ * is no content script and Chrome's own selectionText is all there is.
+ */
 export async function handleMenuClick(
   api: WorkerApi,
   info: Pick<chrome.contextMenus.OnClickData, "menuItemId" | "selectionText" | "frameId" | "pageUrl" | "frameUrl">,
@@ -73,14 +92,15 @@ export async function handleMenuClick(
 ): Promise<PendingSelection | null> {
   if (info.menuItemId !== MENU_ID) return null;
   const tabId = tab?.id;
-  if (tabId === undefined || tabId < 0 || !isUdemyUrl(info.pageUrl)) return null;
+  const kind = pageKind(info.pageUrl);
+  if (tabId === undefined || tabId < 0 || kind === null) return null;
   openPanel(api, tabId);
 
   const frameId = info.frameId ?? 0;
   let reply: SelectionReply | null = null;
-  // The content script runs only in the top frame; it returns the selection with line breaks
+  // The Udemy content script runs only in the top frame; it returns the selection with line breaks
   // intact. Elsewhere Chrome's own selectionText (which may collapse whitespace) is the fallback.
-  if (frameId === 0) {
+  if (kind === "udemy" && frameId === 0) {
     try {
       const raw = await api.tabsSendMessage(tabId, { type: "mydubb:get-selection" }, { frameId: 0 });
       if (isSelectionReply(raw)) reply = raw;
@@ -91,7 +111,7 @@ export async function handleMenuClick(
 
   let text = reply && reply.text.trim() !== "" ? reply.text : (info.selectionText ?? "");
   let problem: PendingSelection["problem"] = null;
-  if (reply?.tooLong) {
+  if (reply?.tooLong || text.length > MAX_SELECTION_CHARS) {
     text = "";
     problem = "too-long";
   } else if (text.trim() === "") {
