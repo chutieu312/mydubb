@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MyDubb Sync prototype</title>
+    <link rel="stylesheet" href="lab.css" />
+  </head>
+  <body>
+    <header>
+      <h1>MyDubb Sync prototype</h1>
+      <p class="note">Development only. Local test audio, no MyDubb account, nothing is sent anywhere.</p>
+      <p class="note" id="tab-line"></p>
+    </header>
+
+    <section aria-labelledby="h-find">
+      <h2 id="h-find">1. Find the video</h2>
+      <p>
+        <button type="button" id="scan">Scan this tab</button>
+        <button type="button" id="grant-site" hidden></button>
+      </p>
+      <p id="access" role="status"></p>
+      <ul id="frames"></ul>
+      <div id="grants"></div>
+      <p id="decision" class="decision" role="status"></p>
+      <dl id="video-state" class="facts"></dl>
+    </section>
+
+    <section aria-labelledby="h-control">
+      <h2 id="h-control">2. Play / Pause from MyDubb</h2>
+      <p class="note">Sync OFF. The video keeps its sound and speed; MyDubb only plays, pauses or moves it.</p>
+      <p>
+        <button type="button" id="v-play">Play video</button>
+        <button type="button" id="v-pause">Pause video</button>
+        <button type="button" id="v-back">−5s</button>
+        <button type="button" id="v-fwd">+5s</button>
+      </p>
+      <ol id="control-results" class="results"></ol>
+    </section>
+
+    <section aria-labelledby="h-sync">
+      <h2 id="h-sync">3. Sync with the test audio</h2>
+      <p class="note">
+        The test MP3 stands in for a MyDubb result. Turning Sync on uses the span that starts where the video is now,
+        as long as the MP3 at the chosen video speed.
+      </p>
+      <p>
+        <label>Video speed R
+          <select id="rate">
+            <option value="0.75">0.75x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+        </label>
+        <button type="button" id="sync-toggle" aria-pressed="false">Turn Sync on</button>
+      </p>
+      <p id="sync-status" role="status"></p>
+      <p id="sync-notice" class="notice"></p>
+      <p>
+        <button type="button" id="a-play">Play</button>
+        <button type="button" id="a-pause">Pause</button>
+        <button type="button" id="a-back">−5s</button>
+        <button type="button" id="a-fwd">+5s</button>
+      </p>
+      <p><input type="range" id="a-seek" min="0" max="1" step="0.1" value="0" aria-label="Audio position" /></p>
+      <dl id="drift" class="facts"></dl>
+      <audio id="audio" src="test-audio.mp3" preload="auto"></audio>
+    </section>
+
+    <section aria-labelledby="h-report">
+      <h2 id="h-report">4. Log and report</h2>
+      <p>
+        <label>Page name for the report <input type="text" id="page-name" placeholder="e.g. Loom share page" /></label>
+      </p>
+      <p>
+        <button type="button" id="copy-report">Copy report</button>
+        <button type="button" id="save-report">Save report</button>
+        <span id="report-status" role="status"></span>
+      </p>
+      <ol id="log" class="log"></ol>
+    </section>
+    <script src="lab.js"></script>
+  </body>
+</html>

@@ -1,6 +1,9 @@
 // Side panel for one tab (sidepanel.html?tabId=N). It talks only to the content script of that tab
-// through a port, so commands can never reach another tab. The draft lives in
-// chrome.storage.session (memory only); it is sent to MyDubb only when the user chooses Generate
+// through a port, so commands can never reach another tab. On an ordinary page that content script
+// is injected (chrome.scripting) while the user's click on the MyDubb button or "Send to MyDubb"
+// gives access to the page (activeTab): by the service worker at the click, and again here after
+// the page reloads (the access stays on the same origin; another origin needs a new click). The
+// draft lives in chrome.storage.session (memory only); it is sent to MyDubb only when the user chooses Generate
 // audio (panel/dubbing.ts). Nothing of the MyDubb account ever reaches the content script. The
 // MyDubb audio plays in the offscreen document (panel/player.ts), so it outlives this panel.
 
@@ -9,6 +12,7 @@ import {
   draftKey,
   isContentToPanel,
   isDraftRecord,
+  isPageInjected,
   isPendingSelection,
   pendingKey,
   type CommandError,
@@ -29,6 +33,7 @@ import {
   type CurrentLesson,
 } from "./draft";
 import { Dubbing } from "./dubbing";
+import type { PageAccess } from "./pageSync";
 import { PlayerLink } from "./player";
 
 const RETRY_DELAY_MS = 1000;
@@ -97,6 +102,10 @@ class Panel {
   private saveTimer: number | null = null;
   private tabClosed = false;
   private state: PageState | null = null;
+  // Whether MyDubb can reach the tab's page (ordinary pages: the content script could be injected).
+  private access: PageAccess = "unknown";
+  // The last state the tab reported was an ordinary page's.
+  private wasWeb = false;
   private draft: DraftRecord | null = null;
   private awaitingConfirm: PendingSelection | null = null;
   private nextRequestId = 1;
@@ -132,7 +141,12 @@ class Panel {
       {
         currentLesson: () => this.currentLesson(),
         transcript: () => ui.transcript.value,
-        linkPlayback: (lessonKey) => this.linkPlayback(lessonKey),
+        linkPlayback: (lessonKey, page, video) => this.linkPlayback(lessonKey, page, video),
+        pageVideo: () => ({
+          access: this.access,
+          page: this.port && this.state ? this.state.page : null,
+          video: this.port && this.state ? this.state.video : null,
+        }),
         placeVideo: (lessonKey, at) => this.placeVideo(lessonKey, at),
       },
     );
@@ -154,6 +168,7 @@ class Panel {
     chrome.storage.onChanged.addListener(this.onStorageChanged);
     chrome.tabs.onRemoved.addListener(this.onTabRemoved);
     chrome.tabs.onUpdated.addListener(this.onTabUpdated);
+    chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
 
     try {
       await chrome.tabs.get(this.tabId);
@@ -169,6 +184,9 @@ class Panel {
     // overwritten by that older snapshot (Dubbing also holds anything that arrives meanwhile).
     await this.dubbing.restore();
     this.connect(true);
+    // A panel opened (or reopened) on an ordinary page: the content script is put there if the
+    // user's click allowed it (on Udemy it is already there and nothing changes).
+    void this.injectPage();
     const pending = stored[pendingKey(this.tabId)];
     if (isPendingSelection(pending)) this.processPending(pending);
     await this.dubbing.loadRemote();
@@ -181,6 +199,7 @@ class Panel {
     chrome.storage.onChanged.removeListener(this.onStorageChanged);
     chrome.tabs.onRemoved.removeListener(this.onTabRemoved);
     chrome.tabs.onUpdated.removeListener(this.onTabUpdated);
+    chrome.runtime.onMessage.removeListener(this.onRuntimeMessage);
     if (this.retryTimer !== null) window.clearTimeout(this.retryTimer);
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer);
@@ -215,6 +234,7 @@ class Panel {
         const first = !this.receivedState;
         this.receivedState = true;
         this.retries = 0;
+        this.access = "granted";
         this.applyState(message.state);
         if (first) this.dubbing.pageConnected();
       } else {
@@ -235,6 +255,7 @@ class Panel {
     this.port = null;
     this.state = null;
     this.renderVideo();
+    this.dubbing.pageChanged();
     if (this.tabClosed) return;
     if (hadState) {
       this.setLinkStatus("Connection to the Udemy tab was lost (reload or navigation). Reconnecting…");
@@ -243,7 +264,8 @@ class Panel {
     // nothing is said about it. The panel works there without a video; it keeps looking in case the
     // tab becomes a lecture.
     if (this.retries >= MAX_RETRIES) {
-      if (hadState) {
+      // An ordinary page needs the user's click again to be reached: said where Sync is offered.
+      if (hadState && !this.wasWeb) {
         this.setLesson("Video controls unavailable", "The lecture's video controls could not be reached.");
         this.setLinkStatus("Could not reach the video controls of this tab. Reload the tab, then click Reconnect.");
         ui.reconnect.hidden = false;
@@ -268,9 +290,41 @@ class Panel {
       // Another page is loading in this tab: a result made before it was not made on that page.
       this.dubbing.pageNavigated();
       if (this.port) this.setLinkStatus("The Udemy tab is loading…");
+      // An ordinary page's access may not carry over (another origin): known again once loaded.
+      if (this.wasWeb) this.access = "unknown";
     }
-    if (change.status === "complete" && !this.port) this.connect(true);
+    if (change.status === "complete") {
+      if (!this.port) this.connect(true);
+      void this.injectPage();
+    }
   };
+
+  /** The service worker injected the content script after the user's click: connect to it now. */
+  private readonly onRuntimeMessage = (message: unknown, sender: chrome.runtime.MessageSender): void => {
+    if (sender.id !== chrome.runtime.id || sender.tab || !isPageInjected(message) || message.tabId !== this.tabId) return;
+    this.access = "granted";
+    if (!this.port) this.connect(true);
+    this.dubbing.pageChanged();
+  };
+
+  /**
+   * Puts the content script into the tab's top frame when the access from the user's click allows
+   * it (the injected script does nothing if it is already there). Refused: MyDubb cannot reach the
+   * page (another origin since the click, a browser page); listening is not affected.
+   */
+  private async injectPage(): Promise<void> {
+    if (this.tabClosed) return;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: this.tabId, frameIds: [0] }, files: ["content.js"] });
+    } catch {
+      if (!this.receivedState || !this.port) this.access = "none";
+      this.dubbing.pageChanged();
+      return;
+    }
+    this.access = "granted";
+    if (!this.port) this.connect(true);
+    this.dubbing.pageChanged();
+  }
 
   private markTabClosed(): void {
     this.tabClosed = true;
@@ -295,6 +349,7 @@ class Panel {
     const prevKey = previous?.lesson?.key ?? null;
     const nextKey = next.lesson?.key ?? null;
     this.state = next;
+    this.wasWeb = next.page !== null;
 
     const lessonChanged = previous !== null && prevKey !== nextKey;
     if (lessonChanged) this.setVideoError("");
@@ -442,9 +497,10 @@ class Panel {
     });
   }
 
-  /** Over the tab port: the page links itself to the playback session of this lecture. */
-  private linkPlayback(lessonKey: string): void {
-    const message: PlaybackLinkMessage = { type: "playback-link", lessonKey };
+  /** Over the tab port: the page links itself to the playback session of this lecture (or page). */
+  private linkPlayback(lessonKey: string, page?: string, video?: string): void {
+    const message: PlaybackLinkMessage =
+      page === undefined ? { type: "playback-link", lessonKey } : { type: "playback-link", lessonKey, page, ...(video ? { video } : {}) };
     try {
       this.port?.postMessage(message);
     } catch {

@@ -43,8 +43,10 @@ describe("validators", () => {
   it("validates selection replies and state messages", () => {
     expect(isSelectionReply({ type: "mydubb:selection", text: "a", tooLong: false, lesson: null })).toBe(true);
     expect(isSelectionReply({ type: "mydubb:selection", text: "a", tooLong: false, lesson: { key: "x" } })).toBe(false);
-    const state = { lesson: null, online: true, video: { status: "none" } };
+    const state = { lesson: null, page: null, online: true, video: { status: "none" } };
     expect(isContentToPanel({ type: "state", state })).toBe(true);
+    expect(isContentToPanel({ type: "state", state: { ...state, page: "p-0123456789abcd" } })).toBe(true);
+    expect(isContentToPanel({ type: "state", state: { ...state, page: "https://www.loom.com/share/1" } })).toBe(false);
     expect(isContentToPanel({ type: "state", state: { ...state, video: { status: "ready", id: 1 } } })).toBe(false);
   });
 

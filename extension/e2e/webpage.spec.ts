@@ -408,10 +408,14 @@ test("a tab that becomes a Udemy lecture drops the page's result; a lecture that
   expect(await sessionGet(worker, `job:${tabId}`)).toBeNull();
   await expect(panel.locator("#video-box")).toBeVisible();
 
-  // Back to a plain page in the same tab: the video controls go away and Generate still works.
+  // Back to a plain page in the same tab: the video controls go away and Generate still works. The
+  // page reports itself (the content script is injected on ordinary pages, for their video), so the
+  // lecture's draft goes as on any page that is not that lecture; a new transcript is pasted.
   await page.goto(webUrl("switch-back"));
   await expect(panel.locator("#lesson-box")).toBeHidden({ timeout: 20_000 });
   await expect(panel.locator("#video-box")).toBeHidden();
+  await expect(panel.locator("#draft-status")).toHaveText("You left the lecture. The previous draft was cleared.");
+  await panel.getByRole("textbox", { name: "English transcript" }).fill("Page text again.");
   await panel.getByRole("button", { name: GENERATE }).click();
   await expect(panel.getByText("Ready. Press play when you want to listen.")).toBeVisible();
   expect(await sessionGet(worker, `job:${tabId}`)).toMatchObject({ lessonKey: "page" });

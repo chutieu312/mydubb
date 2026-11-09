@@ -9,6 +9,9 @@ import { Dubbing, type DubbingDeps } from "./dubbing";
 import type { JobRecord } from "./jobs";
 import type { OpenOutcome, OpenRequest, PanelPlayer } from "./player";
 import { NO_SYNC } from "../shared/testSync";
+import { PAGE_SOURCE } from "../shared/lesson";
+import type { VideoState } from "../shared/messages";
+import { NO_ACCESS, type PageAccess } from "./pageSync";
 
 const html = readFileSync(join(__dirname, "../../static/sidepanel.html"), "utf8");
 const TAB = 7;
@@ -113,6 +116,8 @@ class FakePlayer implements PanelPlayer {
       sync: NO_SYNC,
       owner: request.owner,
       linked: false,
+      syncPage: request.lessonKey === PAGE_SOURCE ? (request.sync?.page ?? null) : null,
+      syncVideo: request.lessonKey === PAGE_SOURCE ? (request.sync?.video ?? null) : null,
     });
     return { ok: true, sessionId };
   }
@@ -143,6 +148,8 @@ let transcript = "";
 let lesson: string | null | undefined = LESSON;
 let player: FakePlayer;
 let links: string[];
+// An ordinary page as the panel sees it (Sync with its video).
+let pageShown: { access: PageAccess; page: string | null; video: VideoState | null };
 // Where the panel asked the page to pause the video, and what the page answers.
 let placed: [string, number][];
 let placeAnswer: () => Promise<string | null>;
@@ -165,7 +172,8 @@ function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
   const dubbing = new Dubbing(deps, {
     currentLesson: () => lesson,
     transcript: () => transcript,
-    linkPlayback: (key) => links.push(key),
+    linkPlayback: (key, page, video) => links.push([key, page, video].filter((v) => v !== undefined).join("|")),
+    pageVideo: () => pageShown,
     placeVideo: (key, at) => {
       placed.push([key, at]);
       return placeAnswer();
@@ -209,6 +217,7 @@ beforeEach(() => {
   lesson = LESSON;
   player = new FakePlayer();
   links = [];
+  pageShown = { access: "unknown", page: null, video: null };
   placed = [];
   placeAnswer = async () => null;
 });
@@ -676,6 +685,8 @@ describe("job and result", () => {
         sync: NO_SYNC,
         owner: { userId: "u1", connectionId: "conn-a", jobId: "job-9", operationId: "op-9" },
         linked: true,
+        syncPage: null,
+        syncVideo: null,
       });
       expect(text("player-info")).toBe("Hindi · Old voice · 0.75xVideo source not recorded MP3 12.000 s");
       // Not this panel's result and no stored translation for it: said, never another result's text.
@@ -709,6 +720,8 @@ describe("job and result", () => {
       sync: NO_SYNC,
       owner: { userId: "u1", connectionId: "conn-a", jobId: "job-1", operationId: "op-1" },
       linked: true,
+      syncPage: null,
+      syncVideo: null,
     };
     const { api } = await started(fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record }));
     await settle(10);
@@ -736,6 +749,8 @@ describe("job and result", () => {
       sync: NO_SYNC,
       owner: { userId: "u1", connectionId: "conn-old", jobId: "job-9", operationId: "op-9" },
       linked: true,
+      syncPage: null,
+      syncVideo: null,
     };
     await started();
     expect(player.ended).toEqual(["session-old"]);
@@ -2254,5 +2269,132 @@ describe("the panel is closed and opened again after the early result was confir
     expect(player.view).toBeNull();
     expect(storage.data[`job:${TAB}`]).toBeUndefined();
     expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("an ordinary page with its one HTML5 video (Sync with the page's video)", () => {
+  const PAGE = "p-0123456789abcd";
+  const OTHER = "p-fedcba98765432";
+  const KEY_A = "v-000000000000000a";
+  const KEY_B = "v-000000000000000b";
+  const LINK_A = `${PAGE_SOURCE}|${PAGE}|${KEY_A}`;
+  const text = (id: string) => $(id).textContent;
+  const READY: VideoState = {
+    status: "ready",
+    id: 3,
+    paused: true,
+    ended: false,
+    currentTime: 200,
+    duration: 600,
+    seekStart: 0,
+    seekEnd: 600,
+    readyState: 4,
+    waiting: false,
+    error: null,
+    key: KEY_A,
+  };
+  const SYNC_OFF = { status: "off", unavailable: null, start: 10, end: 370, duration: 360, rate: 1, confirmed: false, notice: null } as const;
+
+  /** The tab reports an ordinary page (content script injected) showing `video`. */
+  async function onVideoPage(video: VideoState | null = READY) {
+    lesson = null;
+    pageShown = { access: "granted", page: PAGE, video };
+    const made = make(undefined, fakeApi({ getResult: vi.fn(async () => ({ ...RESULT, speed: 1, output_duration_seconds: 360 })) }));
+    await made.dubbing.start();
+    made.dubbing.lessonState(null);
+    return made;
+  }
+
+  async function generate() {
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+  }
+
+  it("Generate snapshots the page whose one video is shown; the session may sync with it and the page is asked to link", async () => {
+    const { storage } = await onVideoPage();
+    await generate();
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: PAGE_SOURCE, choices: { sync: { start: 10, end: 370, page: PAGE, video: KEY_A } } });
+    // The job's own span, not the video's position (3:20) nor the form later.
+    expect(player.opened[0]?.request).toMatchObject({
+      lessonKey: PAGE_SOURCE,
+      sync: { mode: "plain", start: 10, end: 370, baseline: 360, speed: 1, page: PAGE, video: KEY_A },
+    });
+    expect(player.view).toMatchObject({ syncPage: PAGE, syncVideo: KEY_A });
+    expect(links).toEqual([LINK_A]);
+    // The page is not paused or moved when the audio loads (only Sync moves it).
+    expect(placed).toEqual([]);
+    // As the player reports it until the page has linked: a mapping, no page.
+    player.set({ ...player.view!, sync: { ...SYNC_OFF, status: "unavailable", unavailable: "not-linked" } });
+    expect($("sync").hidden).toBe(false);
+    expect($("sync-toggle").hidden).toBe(true);
+    expect(text("sync-status")).toMatch(/connecting to the video/);
+    // Linked: the control is offered, Udemy's way (explanation first).
+    player.set({ ...player.view!, linked: true, sync: SYNC_OFF });
+    expect($("sync-toggle").hidden).toBe(false);
+    $<HTMLButtonElement>("sync-toggle").click();
+    expect($("sync-confirm").hidden).toBe(false);
+    expect(text("sync-preview")).toMatch(/^Video 0:10 → 6:10/);
+    $<HTMLButtonElement>("sync-on").click();
+    expect(player.syncs).toEqual([true]);
+  });
+
+  it("another address in the tab (YouTube's next video) or no access: no control, a short reason, no new link", async () => {
+    const { dubbing } = await onVideoPage();
+    await generate();
+    player.set({ ...player.view!, linked: true, sync: SYNC_OFF });
+    pageShown = { access: "granted", page: OTHER, video: { ...READY, id: 4, key: KEY_B } };
+    player.set({ ...player.view!, linked: false, sync: { ...NO_SYNC, unavailable: "not-linked", notice: "video-replaced" } });
+    dubbing.pageChanged();
+    expect($("sync-toggle").hidden).toBe(true);
+    expect(text("sync-status")).toMatch(/another video or address/);
+    expect(text("sync-notice")).toMatch(/Sync turned off: the video player was replaced or the page changed/);
+    expect(links).toEqual([LINK_A]);
+    // Another origin since the click: MyDubb cannot reach the page until the button is clicked again.
+    pageShown = { access: "none", page: null, video: null };
+    dubbing.pageChanged();
+    expect(text("sync-status")).toBe(NO_ACCESS);
+    // The audio itself is untouched and still playable.
+    $<HTMLButtonElement>("player-play").click();
+    expect(player.commands).toEqual([{ command: "play" }]);
+  });
+
+  it("several videos at the click, or a video that appears only after it: the result plays on its own", async () => {
+    await onVideoPage({ status: "ambiguous", candidates: 2 });
+    await generate();
+    expect(player.opened[0]?.request.sync).toBeNull();
+    expect(player.view?.syncPage).toBeNull();
+    // The video is identified later: still no Sync for this result, said in one line.
+    pageShown = { access: "granted", page: PAGE, video: READY };
+    player.set({ ...player.view! });
+    expect(links).toEqual([]);
+    expect($("sync-toggle").hidden).toBe(true);
+    expect(text("sync-status")).toMatch(/no single video was identified on this page when you chose Generate/);
+  });
+
+  it("same address, another video (element replaced, source switched, page reloaded): never linked, Sync not offered, the audio plays on", async () => {
+    const { dubbing } = await onVideoPage();
+    await generate();
+    player.set({ ...player.view!, sync: { ...SYNC_OFF, status: "unavailable", unavailable: "not-linked" } });
+    // Sync never turned on; the page now shows another video at the same address.
+    pageShown = { access: "granted", page: PAGE, video: { ...READY, id: 2, key: KEY_B } };
+    dubbing.pageConnected();
+    expect(links).toEqual([LINK_A]);
+    expect($("sync-toggle").hidden).toBe(true);
+    expect(text("sync-status")).toMatch(/the page's video is not the one this audio was made with/);
+    $<HTMLButtonElement>("player-play").click();
+    expect(player.commands).toEqual([{ command: "play" }]);
+    expect(player.syncs).toEqual([]);
+  });
+
+  it("the same video (same key) after the port reconnects: asked to link again", async () => {
+    const { dubbing } = await onVideoPage();
+    await generate();
+    pageShown = { access: "granted", page: null, video: null };
+    dubbing.pageConnected();
+    pageShown = { access: "granted", page: PAGE, video: READY };
+    dubbing.pageChanged();
+    expect(links).toEqual([LINK_A, LINK_A]);
   });
 });

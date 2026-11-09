@@ -5,6 +5,11 @@ side panel (PR #45, `origin/main` `b2a7a40`, extension 0.4.0): one page with thr
 each other, *English transcript*, *Translate to*, *Your audio*. Labels are the panel's own. A new
 result loads by itself; there is no "Use new audio" step and no tabs.
 
+Story 2 of the ordinary pages (PR #54, not merged): one "Good to know" item changed for Sync on a
+page's own HTML5 video (no site named, so "Video" never reads as any website). The short
+description (= manifest `description`) still says "Udemy lecture": widening it is the Product
+Owner's decision, as noted for #53.
+
 Rules kept: no "every word in sync", no "unlimited", no price or subscription, no guest, YouTube
 or automatic transcript in the extension, no claim that "Video" means any website, no
 suggestion that MyDubb is made or endorsed by Udemy, Microsoft or Google. "Udemy" appears
@@ -59,8 +64,10 @@ four times in the description (Chrome's spam FAQ: keep one name under 5).
 > - You choose the transcript text and the start times yourself; MyDubb does not read the course
 >   or transcribe the video for you.
 > - On Udemy lecture pages the video controls, Sync and the floating player work. On any other web
->   page (for example a video host) you can send or paste a transcript, generate and listen in the
->   panel, but there are no video controls, no Sync and no floating player.
+>   page you can send or paste a transcript, generate and listen in the panel. Sync with video also
+>   works on a page whose one main video is a standard HTML5 video in the page itself, after you
+>   click the MyDubb button on that page; players embedded from another site, and pages with
+>   several videos where none was started, are not supported.
 > - Text sent from a page other than Udemy is the text Chrome gives to the menu, which can lose line
 >   breaks; check it in the panel before you generate.
 > - Your text and choices are sent to MyDubb when you press Generate audio, and are processed by

@@ -9,6 +9,11 @@
 // page port disconnects), when the tab closes, when the account connection it belongs to ends, or
 // when a newer result replaces it. With no session left, the document closes itself.
 //
+// An ordinary page's session (PAGE_SOURCE) plays on its own and outlives its page; its page may be
+// linked only for Sync, only while it shows the page and the very video the result was made with
+// (`syncPage`, `syncVideo`: the Generate snapshot's address fingerprint and video key). That page going away, or showing another
+// address, only unlinks it: Sync ends, the audio and the session stay.
+//
 // Sync with video (story 4): each session has a SyncController (sync.ts), off until the user turns
 // it on. While it is on, Play/Pause/Seek of the session go through it, so both remote controls
 // drive the audio and the video together; ending the session turns it off first, which gives the
@@ -121,6 +126,10 @@ class Session {
     private readonly url: string,
     public floating: boolean,
     syncSource: SyncSource | null,
+    /** An ordinary page's session: the page it may sync with (null: none, it plays on its own). */
+    readonly syncPage: string | null,
+    /** With syncPage: the key of the video (element and media source) the result was made with. */
+    readonly syncVideo: string | null,
     private readonly deps: Pick<HubDeps, "revokeObjectURL" | "now" | "randomId" | "setTimeout" | "clearTimeout" | "log">,
     private readonly onChange: (session: Session) => void,
     page: { post(message: VideoCommand): boolean; linked(): boolean; claim(): void },
@@ -350,7 +359,9 @@ export class PlaybackHub {
       previous.dispose();
     }
     const floating = !!previous && previous.floating && previous.lessonKey === open.lessonKey;
-    if (previous && previous.lessonKey !== open.lessonKey) this.dropPage(open.tabId);
+    // A page linked for another lecture, or for the previous result of an ordinary page (checked
+    // against that result's page), is not this result's.
+    if (previous && (previous.lessonKey !== open.lessonKey || open.lessonKey === PAGE_SOURCE)) this.dropPage(open.tabId);
     const session = new Session(
       this.deps.randomId(),
       open.tabId,
@@ -360,7 +371,11 @@ export class PlaybackHub {
       this.deps.createAudio(),
       this.deps.createObjectURL(data.blob),
       floating,
-      open.sync,
+      // An ordinary page's result syncs only with the page and video its snapshot names; without
+      // both it has none.
+      open.lessonKey === PAGE_SOURCE && !(open.sync?.page && open.sync.video) ? null : open.sync,
+      open.lessonKey === PAGE_SOURCE && open.sync?.video ? (open.sync.page ?? null) : null,
+      open.lessonKey === PAGE_SOURCE && open.sync?.page ? (open.sync.video ?? null) : null,
       this.deps,
       (s) => this.sessions.get(s.tabId) === s && this.publish(s.tabId),
       {
@@ -377,44 +392,77 @@ export class PlaybackHub {
   // ---- Udemy page (content script) -----------------------------------------------------------
 
   acceptPage(port: HubPort<PlayerToPage>): boolean {
-    const tabId = this.pageTab(port.sender);
-    if (tabId === null) {
+    const page = this.pageTab(port.sender);
+    if (page === null) {
       port.disconnect();
       return false;
     }
+    const { tabId, udemy } = page;
     let linked = false;
     port.onMessage.addListener((message) => {
       if (!isPageToPlayer(message)) return;
       if (!linked) {
         if (message.type !== "hello") return;
-        linked = this.linkPage(tabId, port, message.lessonKey);
+        linked = this.linkPage(tabId, port, message.lessonKey, message.page, message.video, udemy);
         return;
       }
       if (this.pages.get(tabId) === port) this.onPageMessage(tabId, message);
     });
     port.onDisconnect.addListener(() => {
-      // The page reloaded, navigated or closed: its session ends with it (never plays on).
       if (this.pages.get(tabId) !== port) return;
+      const session = this.sessions.get(tabId);
+      // An ordinary page's session plays on its own: only the Sync with that page ends.
+      if (session?.lessonKey === PAGE_SOURCE) return this.unlinkPage(tabId);
+      // The lecture page reloaded, navigated or closed: its session ends with it (never plays on).
       this.pages.delete(tabId);
       this.endSession(tabId);
     });
     return true;
   }
 
-  /** The tab of a top-frame Udemy content script of this extension, or null. */
-  private pageTab(sender: chrome.runtime.MessageSender | undefined): number | null {
+  /**
+   * The tab of a top-frame content script of this extension: on Udemy (the manifest's) or on an
+   * ordinary http(s) page (injected on the user's click). Null for anything else.
+   */
+  private pageTab(sender: chrome.runtime.MessageSender | undefined): { tabId: number; udemy: boolean } | null {
     const tabId = sender?.tab?.id;
     if (!sender || sender.id !== this.deps.extensionId || sender.frameId !== 0 || typeof tabId !== "number") return null;
     try {
-      return new URL(sender.url ?? "").origin === UDEMY_ORIGIN ? tabId : null;
+      const url = new URL(sender.url ?? "");
+      if (url.origin === UDEMY_ORIGIN) return { tabId, udemy: true };
+      return url.protocol === "https:" || url.protocol === "http:" ? { tabId, udemy: false } : null;
     } catch {
       return null;
     }
   }
 
-  private linkPage(tabId: number, port: HubPort<PlayerToPage>, lessonKey: string): boolean {
+  private linkPage(
+    tabId: number,
+    port: HubPort<PlayerToPage>,
+    lessonKey: string,
+    page: string | undefined,
+    video: string | undefined,
+    udemy: boolean,
+  ): boolean {
     const session = this.sessions.get(tabId);
-    if (!session || session.lessonKey !== lessonKey) {
+    if (!udemy) {
+      // An ordinary page: linked only to an ordinary page's session made with this very page and
+      // this very video (element and source). Anything else is refused; the session (listened to
+      // on its own) stays.
+      if (
+        !session ||
+        session.lessonKey !== PAGE_SOURCE ||
+        lessonKey !== PAGE_SOURCE ||
+        page === undefined ||
+        video === undefined ||
+        session.syncPage !== page ||
+        session.syncVideo !== video
+      ) {
+        this.safePost(port, { type: "ended" });
+        port.disconnect();
+        return false;
+      }
+    } else if (!session || session.lessonKey !== lessonKey || page !== undefined || video !== undefined) {
       // Nothing to show for this page; a session of another lecture must not survive either.
       if (session) this.endSession(tabId);
       this.safePost(port, { type: "ended" });
@@ -440,6 +488,8 @@ export class PlaybackHub {
       case "hello":
         return;
       case "lesson":
+        // An ordinary page now shows another address: only its link (and Sync) ends.
+        if (session.lessonKey === PAGE_SOURCE) return this.unlinkPage(tabId);
         if (message.lessonKey !== session.lessonKey) this.endSession(tabId);
         return;
       case "command":
@@ -499,6 +549,14 @@ export class PlaybackHub {
     } catch {
       return false;
     }
+  }
+
+  /** An ordinary page's link ends (Sync off, video given back); its session plays on on its own. */
+  private unlinkPage(tabId: number): void {
+    const session = this.sessions.get(tabId);
+    if (session?.sync.active) session.sync.disable("video-replaced");
+    this.dropPage(tabId);
+    this.publish(tabId);
   }
 
   private dropPage(tabId: number): void {
@@ -635,7 +693,7 @@ export class PlaybackHub {
   private panelView(tabId: number): PanelPlayerView | null {
     const session = this.sessions.get(tabId);
     if (!session) return null;
-    return { ...session.view(), owner: session.owner, linked: this.pages.has(tabId) };
+    return { ...session.view(), owner: session.owner, linked: this.pages.has(tabId), syncPage: session.syncPage, syncVideo: session.syncVideo };
   }
 
   private publish(tabId: number): void {

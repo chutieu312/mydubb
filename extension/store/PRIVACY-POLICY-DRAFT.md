@@ -35,7 +35,7 @@ Microsoft or Google.
 
 The extension takes English transcript text that you paste into its side panel or select on a web page and, when you
 ask, turns it into audio in another language with your MyDubb account, so you can listen next to
-the lecture video.
+the video, or with Sync with video together with it.
 
 ## What the extension handles in your browser
 
@@ -44,23 +44,34 @@ browser quits, and web pages cannot read it.
 
 - **The text you select or paste.** When you choose Send to MyDubb on a web page, Chrome gives
   the extension the text you selected there (on an Udemy lecture page the extension reads it from
-  the page itself). The extension does not read anything else of a web page that is not an Udemy
-  lecture: not its content, title or other text. Chrome also tells it the address of the page at
-  that moment, only so that the menu item works on web pages and nothing else; the address is not
-  stored or sent. The text, or text you paste into the panel, is shown in the side panel and kept in
+  the page itself). The extension does not read the content, title or other text of a web page that
+  is not an Udemy lecture. Chrome also tells it the address of the page at that moment, so that the
+  menu item works on web pages; that address is not stored or sent. The text, or text you paste into the panel, is shown in the side panel and kept in
   session storage. It is sent to MyDubb only when you choose Generate audio.
 - **Your choices.** Start times, language, voice and speed. They are kept in session storage and
   sent to MyDubb with the text when you choose Generate audio.
 - **The address and title of the current lecture.** Read from the Udemy page in that tab, to tell
   which lecture the panel belongs to and to show its title. They stay in your browser and are not
   sent to MyDubb. This is not your browsing history: the extension has no access to Chrome's
-  history, and its page script runs on www.udemy.com only.
+  history. Its page script runs by itself on www.udemy.com only, and on another page only after you
+  click the MyDubb button or Send to MyDubb there (next item).
 - **The state of the lecture video.** Its time, duration, speed, and whether it is paused or muted.
   Read to show the video controls and to keep audio and video together. It stays in your browser.
   When new audio loads, the extension pauses the lecture video and moves it to where your passage
   starts. With Sync with video on, it also mutes the video and changes its speed, and restores them
   when Sync turns off.
-- **Pointer and key presses, only while Sync with video is on.** The extension notes the time of
+- **The video of another web page, only after you click the MyDubb button or Send to MyDubb on
+  it.** Chrome then lets the extension reach that page, in that tab only and until the tab leaves
+  that site. The extension places its page script in the page to find its main video: it reads the
+  videos' time, duration, size and whether they are paused, muted or looping, and it makes a short
+  fingerprint of the page address (not the address itself) to tell later whether the page still
+  shows the same video. The fingerprint is kept in session storage with the job; it is not sent to
+  MyDubb. To tell that you started a video yourself, it holds in memory the time, the position and
+  the page element of your latest pointer press or key press on that page, not which key you pressed
+  or what you typed; nothing about it is stored or sent. It does not read the page's text. With Sync
+  with video on, it plays, pauses and moves that video, mutes it and changes its speed, and restores
+  them when Sync turns off.
+- **Pointer and key presses on Udemy, only while Sync with video is on.** The extension notes the time of
   your latest pointer press or key press on the page, to tell a speed you picked from one the site
   put back, and so keep the video coordinated. Only that time is held, in memory. Which key you
   pressed, what you typed and where you pressed are not recorded, and nothing about it is stored or

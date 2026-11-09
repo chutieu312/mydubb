@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "MyDubb Sync prototype (development only)",
+  "version": "0.0.1",
+  "description": "Development prototype: tests Sync with the HTML5 video of a page using a local test audio. Not MyDubb.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "sidePanel"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "MyDubb Sync prototype: test this tab"
+  }
+}

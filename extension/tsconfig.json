@@ -16,5 +16,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "e2e", "*.ts", "build.mjs"]
+  "include": ["src", "e2e", "prototype", "*.ts", "build.mjs"]
 }

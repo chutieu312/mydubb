@@ -9,6 +9,7 @@ import {
   pendingKey,
   tabKeys,
   type GetSelectionRequest,
+  type PageInjected,
   type PendingSelection,
   type SelectionReply,
 } from "../shared/messages";
@@ -39,6 +40,30 @@ export interface WorkerApi {
   now(): number;
   /** chrome.runtime.sendMessage to the offscreen document (which may not exist). */
   notifyPlayer(message: WorkerToPlayer): Promise<unknown>;
+  /**
+   * chrome.scripting.executeScript of content.js into the tab's top frame. Allowed only while the
+   * user's click on the MyDubb button or "Send to MyDubb" has given activeTab for that page; rejects
+   * otherwise (chrome:// pages, the Web Store, another origin since the click).
+   */
+  injectPage(tabId: number): Promise<unknown>;
+  /** chrome.runtime.sendMessage to the tab's side panel (which may not be open). */
+  notifyPanel(message: PageInjected): Promise<unknown>;
+}
+
+/**
+ * The user's click (toolbar button or menu) gave activeTab for this tab's page: the content script
+ * goes into its top frame, so the panel can find the page's video for Sync. Nothing is read from
+ * the page until the panel connects. On Udemy the manifest's copy is already there (the injected
+ * one sees it and does nothing). A page that cannot be injected is simply not offered Sync.
+ */
+export async function reachPage(api: WorkerApi, tabId: number): Promise<boolean> {
+  try {
+    await api.injectPage(tabId);
+  } catch {
+    return false;
+  }
+  api.notifyPanel({ type: "mydubb:page-injected", tabId }).catch(() => undefined);
+  return true;
 }
 
 export function panelPath(tabId: number): string {
@@ -98,6 +123,7 @@ export async function handleMenuClick(
   const kind = pageKind(info.pageUrl);
   if (tabId === undefined || tabId < 0 || kind === null) return null;
   openPanel(api, tabId);
+  if (kind === "web") void reachPage(api, tabId);
 
   const frameId = info.frameId ?? 0;
   let reply: SelectionReply | null = null;

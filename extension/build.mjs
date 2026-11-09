@@ -2,8 +2,8 @@
 // `node build.mjs --e2e` builds dist-test/ for the browser tests: identical, plus a hook in the
 // service worker that lets a test trigger the "Send to MyDubb" handler (a native context menu
 // cannot be clicked by Playwright), a hook in the panel that stands in for Chrome's sign-in
-// window, an inspection message in the offscreen document (what is playing) and an open (instead
-// of closed) shadow root for the floating player. The hooks are compiled out of dist/.
+// window, an inspection message in the offscreen document (what is playing), an open (instead
+// of closed) shadow root for the floating player and host access to three synthetic video sites. The hooks are compiled out of dist/.
 //
 // `node build.mjs --release` builds dist-release/ for the Chrome Web Store: the same bundles, plus the
 // verified release `key` from store/release-key.json. It refuses to build without that file or when
@@ -88,6 +88,11 @@ cpSync(join(root, "static"), outdir, { recursive: true });
 cpSync(join(root, "store/branding/png"), join(outdir, "icons"), { recursive: true });
 const manifest = JSON.parse(readFileSync(join(root, "static/manifest.json"), "utf8"));
 manifest.host_permissions = [`${mydubbOrigin}/*`];
+// The browser tests cannot click the toolbar button, so activeTab is never granted there: the test
+// build is given the synthetic stand-ins of a click on Loom, YouTube and a video site instead (served by
+// routing, see e2e/harness.ts); every other ordinary site (http://intranet.test) stays unreachable, as
+// without a click. Never in dist/ (check:dist).
+if (e2e) manifest.host_permissions.push("https://www.loom.com/*", "https://www.youtube.com/*", "https://video.test/*");
 if (key) manifest.key = key;
 writeFileSync(join(outdir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`Built extension: ${outdir} (MyDubb server ${mydubbOrigin})`);

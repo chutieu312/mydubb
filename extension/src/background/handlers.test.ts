@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_SELECTION_CHARS } from "../shared/messages";
-import { MENU_ID, MENU_ITEM, handleAuthChanged, handleMenuClick, handleTabRemoved, type WorkerApi } from "./handlers";
+import { MENU_ID, MENU_ITEM, handleAuthChanged, handleMenuClick, handleTabRemoved, reachPage, type WorkerApi } from "./handlers";
 
 const lesson = { key: "c/1", courseSlug: "c", lectureId: "1", title: "L" };
 const PAGE = "https://www.udemy.com/course/c/learn/lecture/1";
@@ -19,6 +19,8 @@ function fakeApi(reply: unknown | Error) {
     }),
     session: { set: vi.fn(async () => undefined), remove: vi.fn(async () => undefined) },
     notifyPlayer: vi.fn<WorkerApi["notifyPlayer"]>(async () => undefined),
+    injectPage: vi.fn<WorkerApi["injectPage"]>(async () => void calls.push("inject")),
+    notifyPanel: vi.fn<WorkerApi["notifyPanel"]>(async () => undefined),
     action: { setBadgeText: vi.fn(async () => undefined), setTitle: vi.fn(async () => undefined) },
     randomId: () => "id-1",
     now: () => 42,
@@ -101,7 +103,8 @@ describe("handleMenuClick", () => {
       const { api, calls } = fakeApi(new Error("there is no content script here"));
       const text = "0:05\nFirst caption.\n0:21\nLast caption.";
       const pending = await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: text }), { id: 12 });
-      expect(calls).toEqual(["setOptions", "open"]);
+      // The page itself is only injected (for its video), never asked for the selection.
+      expect(calls).toEqual(["setOptions", "open", "inject"]);
       expect(api.sidePanel.open).toHaveBeenCalledWith({ tabId: 12 });
       expect(api.tabsSendMessage).not.toHaveBeenCalled();
       // The text as Chrome gave it: nothing reformatted or guessed (timestamps stay where they are).
@@ -197,4 +200,31 @@ it("tells the player which connection is current, also when there is no player",
     { type: "mydubb:player-identity", connectionId: null },
     { type: "mydubb:player-identity", connectionId: null },
   ]);
+});
+
+describe("reaching an ordinary page's video (activeTab, on the user's click)", () => {
+  it("Send to MyDubb on an ordinary page injects the content script into its top frame after opening the panel", async () => {
+    const { api, calls } = fakeApi(null);
+    await handleMenuClick(api, click({ pageUrl: "https://www.loom.com/share/abc" }), { id: 7 });
+    await Promise.resolve();
+    expect(calls.slice(0, 3)).toEqual(["setOptions", "open", "inject"]);
+    expect(api.injectPage).toHaveBeenCalledWith(7);
+    expect(api.notifyPanel).toHaveBeenCalledWith({ type: "mydubb:page-injected", tabId: 7 });
+  });
+
+  it("on Udemy the manifest's content script is there: nothing is injected by the menu", async () => {
+    const { api } = fakeApi({ type: "mydubb:selection", text: "x", tooLong: false, lesson });
+    await handleMenuClick(api, click(), { id: 7 });
+    expect(api.injectPage).not.toHaveBeenCalled();
+  });
+
+  it("a page MyDubb may not reach (no access, a browser page) is left alone and nothing is announced", async () => {
+    const { api } = fakeApi(null);
+    api.injectPage.mockRejectedValue(new Error("Cannot access contents of the page."));
+    expect(await reachPage(api, 7)).toBe(false);
+    expect(api.notifyPanel).not.toHaveBeenCalled();
+    api.injectPage.mockResolvedValue(undefined);
+    api.notifyPanel.mockRejectedValue(new Error("Receiving end does not exist."));
+    expect(await reachPage(api, 7)).toBe(true);
+  });
 });

@@ -305,7 +305,7 @@ test("video replaced, lecture change, reload and disconnect end Sync and give th
   // The player element is replaced: the audio pauses, Sync ends, the new video is not driven.
   const oldVideo = await page.evaluateHandle(() => window.fixture.videos()[0]!);
   await page.evaluate(() => window.fixture.replaceVideo(60));
-  await expect(panel.locator("#sync-notice")).toContainText("the Udemy video player was replaced");
+  await expect(panel.locator("#sync-notice")).toContainText("the video player was replaced");
   await expect(panel.locator("#sync-status")).toHaveText("OFF");
   expect((await sessionOf(worker, tabId))!.paused).toBe(true);
   expect(await oldVideo.evaluate((v) => ({ paused: v.paused, muted: v.muted, rate: v.playbackRate }))).toEqual({ paused: true, muted: false, rate: 1 });

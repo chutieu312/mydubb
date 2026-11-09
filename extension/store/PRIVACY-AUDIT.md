@@ -7,6 +7,12 @@ PR #50 spinner, which only changes how a working job's status looks; PR #52 the 
 Usage & Costs page), extension 0.4.1, manifest and the backend documents named in each row. The
 admin role, the usage records and the admin page do not touch the extension.
 
+**Re-checked for Story 2 of the ordinary pages (PR #54, branch `feat/extension-html5-sync`, not merged):**
+Sync with the HTML5 video of an ordinary page adds the permissions `activeTab` and `scripting`
+(§4) and the page facts read after the user's click (§1); no request to MyDubb, no storage area and
+no host are added, and nothing new leaves the browser. Not declared on the dashboard; the policy
+text (`PRIVACY-POLICY-DRAFT.md`) is updated to match and still needs the PO's reading.
+
 "Verified" below means read in code or in this repository's documents. Anything about what a
 third party (Microsoft, Render, Neon, AWS) keeps or does is **not verified here**.
 
@@ -16,10 +22,12 @@ No transcript, token, e-mail address or other user data is quoted in this docume
 
 | Data | Read when / by | Sent to | Stored where, how long | Removed by |
 |---|---|---|---|---|
-| **Selected or pasted transcript text** (selected by the user on any `http(s)` page, or typed or pasted into the panel; editable in the panel) | On the **Send to MyDubb** menu click: on a `https://www.udemy.com/*` page by the content script (falls back to Chrome's `selectionText`), on every other `http(s)` page only as Chrome's `selectionText` handed to the service worker by the click (no content script, no site permission); a paste is typed into the panel itself | **Extension only** until the user clicks **Generate audio**; then the MyDubb server (`POST /api/jobs`, field `transcript`). Never to the Udemy page | Extension: `chrome.storage.session` (browser memory, access level `TRUSTED_CONTEXTS`, not readable by content scripts) as the tab's draft. Server: see §2 | **Clear** (the draft and the pending selection only; not the form, the job, the loaded translation or the audio), closing the tab, browser quit (session storage), uninstalling |
+| **Selected or pasted transcript text** (selected by the user on any `http(s)` page, or typed or pasted into the panel; editable in the panel) | On the **Send to MyDubb** menu click: on a `https://www.udemy.com/*` page by the content script (falls back to Chrome's `selectionText`), on every other `http(s)` page only as Chrome's `selectionText` handed to the service worker by the click (the content script injected there for the video, below, does not read the selection); a paste is typed into the panel itself | **Extension only** until the user clicks **Generate audio**; then the MyDubb server (`POST /api/jobs`, field `transcript`). Never to the Udemy page | Extension: `chrome.storage.session` (browser memory, access level `TRUSTED_CONTEXTS`, not readable by content scripts) as the tab's draft. Server: see §2 | **Clear** (the draft and the pending selection only; not the form, the job, the loaded translation or the audio), closing the tab, browser quit (session storage), uninstalling |
 | **Start times, language, voice, speed, timing mode** (form values) | Form in the panel | MyDubb server on Generate (same request) | Extension: `storage.session` (`form:<tab>`), saved as they change. Server: job metadata, §2 | Closing the tab (all `tabKeys`), browser quit, uninstalling. Moving to another lecture blanks the stored start times (language, voice and speed stay). **Not** removed by Clear, Disconnect or an account change (they hold choices, not account data) |
 | **Udemy page facts**: lecture URL path (course slug, lecture id), page title (first 300 chars), the lecture `<video>`'s time, duration, paused, rate, muted, seekable range | By the content script while a panel is connected or an audio session is linked; stops when neither is left | **Not sent to MyDubb** (the job request has no URL, title or lecture id; checked in `frontend/src/lib/jobRequest.ts`). The panel and the floating player get them through the extension's own ports | Extension only: the lecture key is kept with the draft/job record in `storage.session`; the title is shown in the panel | Changing lecture clears the draft; closing the tab; browser quit |
 | **Control of the lecture video**: pause and seek to the start of the passage when a new audio is loaded (no Sync needed); Play/Pause/±5 s from the panel; with **Sync with video** on (user's choice) also mute and speed | The content script sets the video's `paused`, `currentTime` and, with Sync, `muted` and `playbackRate`; reads position | Nothing leaves the browser | n/a (Sync restores mute and speed when it turns off) | Turn Sync off |
+| **Ordinary page facts** (any other `http(s)` page, only after the user clicked the MyDubb toolbar button or **Send to MyDubb** on it: `activeTab`): a **fingerprint** of the page address (`pageKeyOf`: 53-bit hash of origin + path + query, the address itself is not kept); for every `<video>` of the top frame its play state, time, duration, seekable range, ready state, size, `muted` and `loop`; the time, position and target element of the user's **latest** pointerdown or keydown on the page (to tell that the user started a video by a click on it) | By the content script that the worker (at the click) or the panel (after a same-site reload) injects into the **top frame** with `chrome.scripting`; idle until the panel connects, stops with it as on Udemy. It does not read the page's text or title, nor the selection | **Not sent to MyDubb.** The fingerprint and the video state go to the panel and the offscreen document over the extension's own ports | The fingerprint, and a random key MyDubb gives that video for the page's lifetime (`choices.sync.video`, says nothing about the page), are kept with the job record (`job:<tab>`, `choices.sync.page`) in `storage.session` when one video was identified at Generate. The input facts stay in the content script's memory (the latest one only) | Closing the tab; browser quit; another page or reload ends the content script |
+| **Control of an ordinary page's video** (only with **Sync with video** on, the user's choice, for a result made with that page's video) | As on Udemy: pause, play, `currentTime`, `muted`, `playbackRate`; the page's video is **not** paused or moved when audio loads | Nothing leaves the browser | n/a (sound and speed given back when Sync ends) | Turn Sync off; another address, reload or Disconnect end it |
 | **Translation of the loaded audio** (text derived from the user's transcript) | Received from the server when a job completes (`GET …/result`) | n/a (received) | Extension: `chrome.storage.session` (`loaded:<tab>`), so the panel shows it after reopening; stored with the user id, connection id and lecture key it belongs to; the audio's own copy lives in the player session | A newer result replaces it once its audio has loaded (a refused or failed Generate, or a failed download, keeps it). Each of these removes it whether or not a job record is left: moving to another lecture or off the lecture pages, Disconnect, an ended or expired connection, another account (unit tests: refused Generate, then Disconnect, account or lecture change; a pending write of the old copy cannot bring it back). Closing the tab (all `tabKeys`) and browser quit remove it too. A reopened panel keeps it only for the same account, connection and lecture and removes any other copy. **Not** removed by Clear or by a page reload (the audio ends on reload; the translation stays for **Load audio**) |
 | **MyDubb account connection**: token, user id, e-mail, display name, expiry | After **Connect MyDubb**: the sign-in happens on `https://mydubb.com` in Chrome's sign-in window (`chrome.identity.launchWebAuthFlow`); the extension never sees the password or the website cookie | The token goes to the MyDubb server as `Authorization: Bearer` on `/api/jobs*`, `/api/extension/*` (`credentials: "omit"`) | Extension: `storage.session`. Server: `user_sessions` row (SHA-256 of the token, `client='extension'`), life at most 12 h (`EXTENSION_SESSION_TTL_SECONDS`) | **Disconnect** (clears storage, then ends the token on the server); password reset or administrator revocation end it on the server; browser quit clears the extension copy |
 | **Generated MP3** | Downloaded by the panel with the token | n/a (received) | Extension: memory only (a Blob in the offscreen document, one per tab), never written to storage | Ended (audio stopped, object URL revoked) by: a newer result, which replaces it by itself once its own MP3 has downloaded (the earlier audio stays usable meanwhile; a refused or failed Generate or a failed download keeps it); lecture change, reload, tab close, Disconnect, another account |
@@ -53,6 +61,14 @@ site put back. No key, position or content is read, and nothing is stored or sen
 player's own controls also handle trusted pointer and key events on themselves
 (`content/floating.ts`). The page's lecture address and title are read in `content/page.ts`
 (`parseLecture`); the manifest has no `history` or `tabs` permission.
+
+On an **ordinary page** (content script injected after the user's click, `content/page.ts` in web
+mode) the content script also listens for trusted `pointerdown` and `keydown` on the page while a
+panel is connected, keeping **only the latest one**: its time, its position (pointer) and its target
+element (key), in memory. A video that starts within 1.5 s after a pointerdown inside it, or a key
+press in the element that holds it, is taken as the video the user chose. No key value, text or
+content is read; nothing is stored or sent. The page address is read only to compute its fingerprint
+(`shared/lesson.ts`, `pageKeyOf`).
 
 ## 2. What the MyDubb server does with a Generate request
 
@@ -90,16 +106,19 @@ quota, YouTube/Supadata) are in [WEBSITE-POLICY-NOTES.md](WEBSITE-POLICY-NOTES.m
 | `offscreen` | Audio keeps playing when the panel closes | One hidden extension page plays the generated audio (reasons AUDIO_PLAYBACK and BLOBS), so playback continues if the side panel is closed. |
 | Host `https://mydubb.com/*` | Every MyDubb call | Sends the user's own request (text and choices) to the MyDubb service and receives the translation and audio. No other host. |
 | Content script `https://www.udemy.com/*` (top frame) | Selection, video controls, floating player, Sync | Reads the selected text when the user chooses the menu item, finds the lecture video to play, pause and seek it (it is paused and moved to the start of your passage when new audio loads) and (only if the user turns on Sync) mute and change the speed of that video, and draws the small floating audio player on the page. |
+| `activeTab` | Sync with the video of the page the user is on | When the user clicks the MyDubb toolbar button or **Send to MyDubb** on a page, the extension may look at that tab's page until it leaves the site, to find the one video MyDubb's audio can follow. No site access at install, no access to other tabs or sites. |
+| `scripting` | Same | With that temporary access only, places the extension's own content script in the page's top frame so it can find the page's video and, if the user turns on Sync with video, play, pause, seek, mute and set the speed of that video. It reads no page text. |
 | Remote code | n/a | **No.** All code is in the package; the extension makes no `eval`, no remotely hosted script. |
 
-No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`,
-`externally_connectable` or `web_accessible_resources`. `npm run check:dist` enforces this list.
+No `<all_urls>`, no optional or other host permission, no `tabs`, `cookies`, `history`, `webRequest`,
+`downloads`, `externally_connectable` or `web_accessible_resources`. `npm run check:dist` enforces this
+list.
 
 ## 5. Single purpose (draft)
 
 > Turn the English transcript text a user selects on a web page or pastes into the panel into
-> audio in another language with the user's own MyDubb account, and play it in the panel (next to the
-> video on an Udemy lecture page).
+> audio in another language with the user's own MyDubb account, and play it in the panel (and,
+> if the user wants, together with the page's video: a Udemy lecture or a page with one HTML5 video).
 
 ## 6. Privacy practices tab: what the facts require (pending confirmation on the dashboard)
 
@@ -122,6 +141,7 @@ and compare each definition below with the facts. Until then every row is "pendi
 | Lecture URL path (course slug, lecture id) and page title | "Web browsing activity": "information about the websites or other web resources a user requests or interacts with" | Read by the extension, kept in the browser, **not** sent to MyDubb | Meets the definition as written, and Chrome counts local handling: pending dashboard confirmation of how local-only data is declared |
 | Video state (time, duration, paused, speed, muted) of the lecture | Possibly "Website content and resources" | Read and written locally, not sent | Pending |
 | Pointer and key events on Udemy pages, only while Sync is on (the time of the latest one; no key, position or content recorded) | Possibly the dashboard's "User activity" | Read, used in memory, not stored or sent | Pending: confirm whether transient local use counts |
+| Ordinary pages after the user's click: the address fingerprint, the video state, and the latest pointer or key event (time, position, target; in memory) | "Web browsing activity" (the fingerprint, as for the lecture path) and possibly "User activity" (the input) | Read locally; the fingerprint is kept in session storage with the job; nothing sent | Pending, as the two rows above |
 | Network address of every request (server access log) | Possibly the dashboard's "Location" or "PII", if its definition includes the IP address | Received and logged by the server | Pending: check the dashboard definition |
 | Health, financial/payment, personal communications | No such data is read | – | Expected not applicable; confirm |
 | Remote code | None (all code is in the package) | – | Expected "No" |

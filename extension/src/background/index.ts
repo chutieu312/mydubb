@@ -2,7 +2,16 @@
 // the worker for them; no state is kept in worker globals.
 
 import { AUTH_KEY } from "../panel/auth";
-import { MENU_ID, MENU_ITEM, handleAuthChanged, handleMenuClick, handleTabRemoved, openPanel, type WorkerApi } from "./handlers";
+import {
+  MENU_ID,
+  MENU_ITEM,
+  handleAuthChanged,
+  handleMenuClick,
+  handleTabRemoved,
+  openPanel,
+  reachPage,
+  type WorkerApi,
+} from "./handlers";
 
 const api: WorkerApi = {
   sidePanel: chrome.sidePanel,
@@ -12,6 +21,8 @@ const api: WorkerApi = {
   randomId: () => crypto.randomUUID(),
   now: () => Date.now(),
   notifyPlayer: (message) => chrome.runtime.sendMessage(message),
+  injectPage: (tabId) => chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content.js"] }),
+  notifyPanel: (message) => chrome.runtime.sendMessage(message),
 };
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -28,7 +39,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.action.onClicked.addListener((tab) => {
-  if (tab.id !== undefined && tab.id >= 0) openPanel(api, tab.id);
+  if (tab.id === undefined || tab.id < 0) return;
+  openPanel(api, tab.id);
+  void reachPage(api, tab.id);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -45,5 +58,10 @@ if (__MYDUBB_E2E__) {
   (globalThis as { mydubbE2E?: unknown }).mydubbE2E = {
     sendSelection: (tabId: number, selectionText: string, pageUrl: string) =>
       handleMenuClick(api, { menuItemId: MENU_ID, selectionText, frameId: 0, pageUrl }, { id: tabId }),
+    // The toolbar button's click (Playwright cannot click it): the same steps, without the gesture.
+    clickAction: (tabId: number) => {
+      openPanel(api, tabId);
+      return reachPage(api, tabId);
+    },
   };
 }

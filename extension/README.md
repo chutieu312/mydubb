@@ -7,7 +7,10 @@ also controls the lecture video (Play/Pause, −5 s/+5 s, time),
 connect your **MyDubb invitation account**, choose the output language, voice and speed, **Generate
 audio**, follow the job, read the translation and listen to the MP3, in the panel or in a small
 **floating player** on the lecture page that keeps playing when the panel is closed. With **Sync
-with video** on, the MyDubb audio and the Udemy video play, pause and seek together.
+with video** on, the MyDubb audio and the Udemy video play, pause and seek together. On other pages
+with one main HTML5 video (a Loom share page, a YouTube watch page, …) Sync with video works too, for
+a result generated while that page showed its video, once you have clicked the MyDubb button (or
+used **Send to MyDubb**) on that page; everywhere else the audio plays on its own.
 
 The extension is **prepared for the Chrome Web Store but not published**: today it is installed
 only with Developer mode → Load unpacked ([store/](store/README.md) holds the release preparation).
@@ -17,6 +20,10 @@ voices when the panel opens, checking a stored sign-in, and, for a job started e
 asking for its status, its translation and its audio file (see
 [store/PRIVACY-AUDIT.md](store/PRIVACY-AUDIT.md)); **Connect MyDubb** opens the sign-in. Guests
 ("Try as guest") cannot use the extension.
+
+The development-only **Sync prototype** that tried this on other sites first (a separate unpacked
+extension, never in `dist/` or the Store package; its results and the decisions taken from them) is
+in [prototype/](prototype/README.md).
 
 ## Build and install
 
@@ -144,15 +151,43 @@ player on the lecture page alike.
    panel downloads the same result again (it never creates a job).
 9. **Any other web page** (no Udemy lecture): Generate works as soon as MyDubb is connected and the
    form is valid, with or without a `<video>` on the page. The result belongs to that tab, that
-   account and that Generate click, and plays in the panel only: there are **no** video controls, no
-   Sync and no floating player (they exist for a Udemy lecture only, and nothing is offered that
-   cannot work). The audio is the MP3 already fitted to the speed you chose, played at 1x. It ends
+   account and that Generate click, and plays in the panel (no video row and no floating player on
+   these pages). The audio is the MP3 already fitted to the speed you chose, played at 1x. It ends
    when the tab closes, the account changes or **Disconnect**, a newer result replaces it, or the tab
    turns out to show a Udemy lecture. It does **not** follow the page: going to another site in the
-   same tab leaves it playing (the extension cannot see addresses without a broad permission), so
-   pause it or start the next one yourself.
+   same tab leaves it playing, so pause it or start the next one yourself.
+10. **Sync with the page's video** (Loom share, YouTube watch, any page whose one main video is an
+   HTML5 `<video>` in the page itself). Clicking the MyDubb toolbar button, or **Send to MyDubb**, on
+   the page lets MyDubb reach that page (Chrome's `activeTab`): it then looks for the page's one main
+   video. **Generate** while the page shows it: the result remembers that page (a fingerprint of its
+   address, not the address), that very video (a key the page's MyDubb script gives to that element
+   showing that media source) and its source span. With that result loaded, **Sync with video** works
+   as on Udemy (step 7): it moves the video to the span's start (or the audio's position) whatever
+   position it had, mutes it, sets its speed; MyDubb's and the page's Play/Pause/seek drive both;
+   off gives sound and speed back. Loading the audio does not pause or move the page's video. The
+   control is shown only while the page shows that same address and that same video, and MyDubb can
+   reach it, checked again before Sync can be turned on (also if it was never on); otherwise one line
+   says why and the audio plays on its own:
+   - another video or address in the tab (YouTube's next video, another share): Sync ends, the old
+     audio never plays, pauses or moves the new video;
+   - the same address with another video: the player rebuilt its element, loaded another source (or
+     the same one again) into it, or the page was reloaded. MyDubb cannot confirm it is the video of
+     the click, so Sync is not offered for that result ("the page's video is not the one this audio
+     was made with"); Generate again with the video you want. This also holds after going back to a
+     YouTube video: the player loads it anew;
+   - several videos and none chosen ("Start that video once on the page": a click on it, or a key in
+     its player, right before it starts); a muted looping preview is never taken for the video, and a
+     video the page starts by itself, with or without sound, is not taken as your choice;
+   - a result made while no single video was identified (or with a video that appeared only after
+     Generate) plays on its own: Generate again while the page shows its video;
+   - after going to **another site** in the tab MyDubb may no longer reach it: "Click the MyDubb
+     button in Chrome's toolbar on this page". A reload of the same site keeps the access (the
+     content script is put back by itself), so a result generated after the reload can be synced.
+   A reload or a new page ends Sync, never the audio. A video inside an iframe (a Loom player
+   embedded in another site) is not supported.
 
-The toolbar button **Open MyDubb** opens the panel for the current tab without a selection.
+The toolbar button **Open MyDubb** opens the panel for the current tab without a selection (and, on
+an ordinary page, lets MyDubb look for its video, step 10).
 If the panel could not be opened from the menu, the button shows a **!** badge; click it.
 
 Note: Play/Seek act on the real Udemy video and may update your watch progress. With Sync on, the
@@ -169,10 +204,13 @@ watching (or skipping) that part of the lecture.
 | `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect MyDubb**. |
 | `offscreen` | One hidden extension page (`offscreen.html`) that plays the MyDubb audio, so it keeps playing when the side panel closes. Created when a result's audio is loaded; it closes itself when no tab has audio left. Reasons `AUDIO_PLAYBACK` and `BLOBS` (it holds the MP3 Blob and its object URL while paused; with `AUDIO_PLAYBACK` alone Chrome would close it after 30 s of silence). |
 | Host `https://mydubb.com/*` (the build's `MYDUBB_ORIGIN`) | Calls to the MyDubb API from the side panel. No other host. |
-| Content script on `https://www.udemy.com/*` (the only site with a content script) | Reads the exact selection (with its line breaks) when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected (including pausing it where a newly loaded MyDubb audio starts), draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
+| Content script on `https://www.udemy.com/*` (the only site with a declared content script) | Reads the exact selection (with its line breaks) when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected (including pausing it where a newly loaded MyDubb audio starts), draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
+| `activeTab` | Temporary access to the page of the tab where **you** clicked the MyDubb toolbar button or **Send to MyDubb**, nothing else. Chrome keeps it while the tab stays on the same site (reloads included) and drops it on another site or when the tab closes. No site access is asked for at install, and no prompt is shown. |
+| `scripting` | With that access only: puts the same content script into the page's top frame (`chrome.scripting.executeScript`, `content.js`), so the panel can find the page's one main `<video>` for **Sync with video**. There it reads the page address only to compare a fingerprint (kept in session memory with the result, never sent), the video elements' play state, time, length, size and muted/loop flags, and the time and place of your last click or key press on the page (in memory, to tell that you started a video yourself); while Sync is on it mutes the video and sets its speed as on Udemy. It does not read the page's text or title and does not answer the selection request off Udemy. Not on `chrome://`, the Web Store or pages Chrome protects. |
 
-No `<all_urls>`, `tabs`, `cookies`, `history`, `webRequest`, `scripting`, `downloads`, no
-`externally_connectable` and no `web_accessible_resources`. The extension does not read cookies,
+No `<all_urls>`, no host permission besides MyDubb's, no optional host permissions, no `tabs`,
+`cookies`, `history`, `webRequest`, `downloads`, no `externally_connectable` and no
+`web_accessible_resources`. Frames from another site (an embedded player) are never reached. The extension does not read cookies,
 does not download video, does not intercept network requests and does not use Udemy APIs.
 `npm run check:dist` fails if the permissions change.
 
@@ -346,6 +384,33 @@ does not download video, does not intercept network requests and does not use Ud
     audio paused since then takes nothing back. A replaced video element ends Sync (the new one is never
     driven by an old command; turn it on again). A lecture change, reload, closed tab, Disconnect,
     account change or another result ends the session and with it Sync.
+- **Ordinary pages** (Story 2 of the generic pages, integrated from [prototype/](prototype/README.md)):
+  the worker injects `content.js` into the top frame after the toolbar click or **Send to MyDubb**
+  (`activeTab` + `scripting`, after `sidePanel.open`, which must stay in the gesture), then tells the
+  panel; the panel injects it again when the tab finishes loading (same site: the access stays), and
+  a second copy does nothing. There the content script runs in *web* mode: no lecture; the page's
+  identity is `pageKeyOf(url)`, a 53-bit fingerprint of origin + path + query (no fragment); the
+  video is chosen by `pickPageVideo`: muted **and** looping videos are previews; never "the only one
+  playing"; with several candidates only the one Sync is bound to or the one the user chose (its
+  `play` within 1.5 s after a trusted pointerdown inside its box, or a keydown in an element holding
+  it and no other video; not playing, not being unmuted, not the page's user activation); else
+  ambiguous. The identified video has a **video key** (`v-` + 8 random bytes): one per element and
+  media source in this document; a new element, a different `currentSrc`, or `emptied`/`loadstart`
+  on it gives a new key, and a reload is a new document, so new keys. Generate on such a page stores
+  the fingerprint and the key in the job's Sync snapshot only if one video was identified at the
+  click (`choices.sync.page`, `choices.sync.video`); the offscreen hub gives the session that
+  `syncPage`/`syncVideo` and keeps no mapping for a page result without both. The page links to the
+  session only by `hello {lessonKey: "page", page, video}` matching both (the panel asks, the content
+  script and the hub both check), and only an http(s) top frame of this extension's content script
+  is accepted. A new key while linked ends the link at once, Sync on or off, and the page's half of
+  Sync drives only the video whose key the link was made with (`attach` finds none otherwise). That
+  link going away (reload, navigation) or a new address or video (`lesson` message) only unlinks:
+  Sync off with "video-replaced", the video given back, the audio session kept; a new result drops
+  the old link. The panel's Sync block for these sessions comes from `pageSyncState`
+  (panel/pageSync.ts): the control only with the link, the same address and the same video key;
+  otherwise one reason. No floating
+  player and no `place` there. Everything else (coordinator, VideoSync, mapping, drift, ownership)
+  is the Udemy code unchanged.
 - **Validation**: every message is shape-checked; the content script accepts ports only from this
   extension's `sidepanel.html` and selection requests only from the extension itself (not from a
   tab); the offscreen document checks the sender of every port and message as above. The manifest
@@ -507,7 +572,31 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   Chrome's sign-in window (Playwright cannot drive it), an inspection message in the offscreen
   document reports what its media elements are doing, and the floating player's shadow root is
   open (closed in `dist/`) so Playwright can reach its controls. All are compiled out of `dist/`;
-  CI checks that.
+  CI checks that. The test build also has host access to `https://www.loom.com`, `https://www.youtube.com`
+  and `https://video.test` (synthetic fixtures served by routing, never contacted), standing in for
+  the toolbar click that grants `activeTab` (Playwright cannot click it); a hook runs the toolbar
+  button's own steps. `http://intranet.test` has no access, as a page without the click.
+- Sync with an ordinary page's video (`e2e/webvideo.spec.ts`, fixture pages with a real silent WAV
+  `<video>` at Loom/YouTube-like addresses, fake MyDubb, the mock MP3; not the real Loom or YouTube
+  players): a timed transcript 0:19 → 1:20 pasted, 2x, Generate with the video paused at 1:40 → the
+  snapshot names the page, loading leaves the video alone, Sync moves it to 0:19, muted, at R ≈ 1.996;
+  Play from MyDubb, drift measured (max |d| ≈ 0.10 s, no correction); pause, play (a click on the
+  page's player) and seek on the page move the audio; MyDubb's Pause and −5 s move both; Sync off
+  gives sound and 1x back, the audio then plays alone. YouTube-like next video in the same tab (same
+  element, new source and `?v=`): Sync ends with its reason, the old audio never moves the new video,
+  nor the first video loaded again at its address (a new source: not offered). Same address, Sync never
+  turned on, the page replaces the video element or loads another source into the same element:
+  Sync is not offered (the hidden toggle forced and clicked does nothing), video B is never muted,
+  moved, played or sped up, audio A plays on its own; the unchanged video syncs (first test). The page setting another speed while playing: Sync off,
+  "speed changed", the page's speed kept. Buffering: a seek into bytes the server holds back →
+  "Buffering…", audio held, both resume aligned (|d| ≈ 0.1 s) once they arrive. A muted looping
+  preview left alone; a second video the page starts with sound → no single video at Generate
+  (said, audio alone, nothing touched), then a real click on the main video → Generate → Sync drives
+  only it. No access (http page), reload with Sync on (Sync off, audio kept, not offered again for that
+  result, a new Generate after the reload syncs) and
+  Disconnect (session ends, video unmuted, 1x). Chrome refusing play is unit-tested
+  (`offscreen/sync.test.ts`, `content/sync.test.ts`) and was seen on real pages in the prototype
+  phase; Sync mutes the video first, which Chrome lets play.
 
 CI runs all of this in the **Chrome extension** job, part of **CI success**.
 
@@ -580,21 +669,61 @@ use the Azure free allowance.
    with **Send to MyDubb** (it only fills the box; Generate is yours). Loom and YouTube: Paste or
    Send to MyDubb, Generate, listen. (g) Sync with video, on a Udemy lecture whose video is found,
    for a result generated after that: turn it on in the panel as in the steps above.
+9. **Sync on Loom share, YouTube watch and Udemy** (Story 2 integration). Build the trial build
+   (`npm run build` in this worktree: `extension/dist`), **Load unpacked** it in a profile that does
+   not have your current MyDubb folder loaded (or turn that one off); `activeTab` and `scripting`
+   carry no install warning. Its ID is path-derived: add it to `EXTENSION_IDS` on Render before
+   **Connect MyDubb** (step 1). For each of a Loom share page and a YouTube watch page:
+   (a) open the page, let its video show, click the **MyDubb** toolbar button; (b) on the page copy the
+   transcript with its timestamps on their own lines, **Paste** it in the panel (Send to MyDubb may
+   flatten timestamps: a separate story), choose a speed, **Generate audio**; (c) when it loads, check
+   the page's video was not moved, then **Sync with video** → the explanation shows V0 → V1 of the
+   transcript → **Turn on sync**: the video jumps to V0 (wherever it was), muted; (d) **Play** in the
+   panel: both start (the status says Playing only once both run), voice and picture stay together;
+   **Pause**, ±5 s and the seek bar move both; the page's own Play/Pause, seek and keyboard (Space)
+   move the audio; (e) change the speed in the page's player while playing: Sync turns off and says
+   so; (f) DevTools → Network → *Slow 4G*, seek far ahead: "Buffering…", then both go on together;
+   (g) **turn Sync off**: the video's sound and speed are back. On YouTube also: (h) with Sync on, click
+   another video in the same tab: Sync ends, both pause, the panel says the page shows another video;
+   MyDubb's Play then plays the audio alone and does not touch the new video; go back to the first
+   video: Sync is not offered for this result (the player loaded it anew), the audio plays alone.
+   Then: reload the page (Sync off, audio still there, Sync not offered for that result; Generate
+   again and it syncs); go to another site in the tab (the panel asks for a click on the MyDubb button);
+   **Disconnect** while synced (the video gets its sound back). Repeat steps 4 and 7 on a Udemy
+   lecture (regression). On a page without a usable video (a text page, or a page with several
+   videos where you started none): Generate and listen on its own; Sync is absent or one line says
+   why. Note anything the real players do that the fixtures do not (ads, their own speed resets,
+   the mute state YouTube shows after a video switch).
 
 ## Limits
 
-- The video controls, Sync with video and the floating player work on Udemy lecture pages only;
-  quizzes/articles show "no video". Video inside an iframe is not supported. Other pages (Loom, any
-  http(s) site) get the transcript, Generate and the panel's own audio player only; there is no video
-  adapter for them.
+- The video row (Play/Pause, ±5 s, time) and the floating player work on Udemy lecture pages only;
+  quizzes/articles show "no video". **Sync with video** works on Udemy lectures and on ordinary pages
+  whose one main video is an HTML5 `<video>` in the top frame, reached after your click on the MyDubb
+  button or **Send to MyDubb** (`activeTab`). Not supported: video inside an iframe (embedded Loom or
+  YouTube players on another site; that would need a per-site permission), video inside a shadow
+  root, players that are not an HTML5 `<video>` (canvas, plugins), DRM/live streams (untested). No
+  per-site adapter.
 - Off Udemy, and when the content script cannot be reached (e.g. inside an iframe), the selection is
   Chrome's `selectionText`, which collapses whitespace. Caption timestamps are restored only when
   certain (next section); otherwise the text is kept as received and Copy → Paste is the way to keep
-  the lines. (Exact line breaks on other sites would need `activeTab` + `scripting`: not added, a
-  Product Owner decision.)
+  the lines. (The extension has `activeTab` + `scripting` for Sync with the page's video, but it does
+  not use them to read the selection from other sites: exact line breaks there remain a Product
+  Owner decision.)
 
 - The audio of an ordinary page is tied to the tab, not to the address: if the tab goes to another
-  site, it keeps playing until it is paused, replaced, or the tab closes.
+  site, it keeps playing until it is paused, replaced, or the tab closes. Sync, on the other hand,
+  is tied to the address and the video: another address ends it.
+- An ordinary page's identity for Sync is its address (origin, path, query; not the fragment) **and**
+  the video key of the click (element and media source in that document). Whatever MyDubb cannot
+  confirm is treated as another video: after a reload, a rebuilt player, another or reloaded source
+  (also a quality switch or an ad, if the player does it by changing the element's source), the
+  result plays on its own and needs a new Generate to sync. A page that changes its query by itself
+  (tracking parameters) does the same. A site's ads played in the main video element are not
+  handled (not tested on YouTube). When the page replaces the media of the same element, MyDubb gives
+  back sound and speed only if it still holds the media it muted (the existing ownership rule).
+- The access from your click lasts while the tab stays on that site; after another site, Sync waits
+  for a new click on the MyDubb button (the panel says so).
 - **Generate never waits for the lecture or the video.** With MyDubb connected and a valid form it works
   even before the panel has any page state (a Udemy page whose script has not attached yet) and on
   pages with no video. A result made then belongs to the tab on its own (no video link, no Sync). If the
