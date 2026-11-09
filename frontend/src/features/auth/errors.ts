@@ -8,6 +8,31 @@ export interface Failure {
   // the user can retry without retyping. False for rejected input: secrets are cleared.
   keepInput: boolean;
   retryAfterSeconds: number | null;
+  // The server's error code, when a form places the message beside one field (sign-up).
+  code?: string;
+}
+
+// Sign-up answers whose own message tells the user what to do next (sign in instead, try later,
+// look for a code), so it is shown even though the status is 5xx.
+const SIGNUP_GUIDANCE = new Set([
+  "signup_disabled",
+  "signup_unavailable",
+  "captcha_unavailable",
+  "signup_outcome_unknown",
+  "verification_outcome_unknown",
+]);
+
+/** toFailure plus the server's error code (sign-up places some messages beside a field). */
+export function toCodedFailure(err: unknown, fallback: string): Failure {
+  if (err instanceof ApiError && SIGNUP_GUIDANCE.has(err.code)) {
+    return {
+      message: safeMessage(err, fallback),
+      keepInput: true,
+      retryAfterSeconds: null,
+      code: err.code,
+    };
+  }
+  return { ...toFailure(err, fallback), code: err instanceof ApiError ? err.code : undefined };
 }
 
 /** A form handler returns null on success, or the failure to show. */

@@ -34,8 +34,14 @@ describe("sign-in source guards", () => {
     }
   });
 
-  it("does not offer public sign up", () => {
+  // Public sign-up exists only behind the server's offer (GET /api/meta `signup`, see
+  // PasswordAuthFlow.signup.test.tsx for "off means invitation only"). Its code stays in these
+  // files, so no other sign-in file grows a second way to create an account.
+  it("keeps public sign up in its own files", () => {
+    const signupFiles =
+      /features\/auth\/(CreateAccountForm|VerifySignupForm|RecaptchaCheckbox|PasswordAuthFlow|SignInForm|errors)\.tsx?$|api\/authApi\.ts$/;
     for (const [path, source] of authFiles) {
+      if (signupFiles.test(path)) continue;
       expect(source, path).not.toMatch(/sign ?up|create (an )?account|register/i);
     }
   });

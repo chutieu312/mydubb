@@ -56,6 +56,24 @@ analytics or other cookies]`
   verified here. `[PO: link to Supadata's terms]`
 - Importing as a guest counts against the import quota above.
 
+## Creating an account (website only; off on production until the Product Owner turns it on)
+
+Source: [docs/SIGNUP.md](../../docs/SIGNUP.md) (code, 2026-11-09; not production).
+
+- **Create account** asks for an email and a password. The password goes to Amazon Cognito (the
+  account service, like sign-in) and is never stored by MyDubb. Cognito emails a code; entering it
+  verifies the address. The account gets the Free plan.
+- **Google reCAPTCHA.** The Create account screen (and no other page) loads Google's reCAPTCHA
+  "I'm not a robot" box from Google. Google receives what the browser sends with such requests
+  (IP address, browser details, Google's cookies such as `_GRECAPTCHA`) and how the box was used,
+  under Google's Privacy Policy and Terms (linked on the screen). When the form is sent, MyDubb's
+  server sends Google the box's one-time token and MyDubb's secret key only: not the email,
+  password or IP address. MyDubb keeps neither the token nor Google's answer. `[PO: whether a
+  published website policy should list Google as a recipient, and the reCAPTCHA cookie]`
+- Sign-up requests are counted per network address and per email (a hash) in the server's memory
+  only, to limit abuse; nothing about them is written to the database.
+- The Chrome extension does not use reCAPTCHA or sign-up; its policy is unchanged.
+
 ## Not promised
 
 No automatic deletion of job records or accounts exists today;

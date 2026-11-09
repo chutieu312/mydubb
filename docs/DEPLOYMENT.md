@@ -707,6 +707,12 @@ exemption are on as soon as the code runs (no setting); the shared cap stays off
 does not start). Turning the cap off again is `USAGE_CAPS_ENABLED=false`, no code rollback.
 See [API.md, Usage limits](API.md#usage-limits).
 
+Public sign-up (Create account with Google reCAPTCHA) adds no migration and is **off** until
+`PUBLIC_SIGNUP_ENABLED=true` with its settings; the order of the Cognito, Google, SES and Render
+steps is the checklist in [SIGNUP.md](SIGNUP.md#before-turning-it-on-in-production-product-owner-checklist).
+A missing setting keeps sign-up off (logged) without stopping the service. Turning it off again is
+`PUBLIC_SIGNUP_ENABLED=false` and a restart, no code rollback.
+
 **Before rolling back** (read-only checks):
 
 1. Read the production revision: Neon SQL Editor → `SELECT version_num FROM alembic_version;`

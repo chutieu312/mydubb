@@ -44,7 +44,8 @@ Browser (Studio UI) ──same origin──► FastAPI (Render) ──HTTPS, pub
 - **No AWS credentials.** The backend calls only public and token-authorized user pool operations
   (`InitiateAuth` with `USER_PASSWORD_AUTH`, `RespondToAuthChallenge`, `GetUser`,
   `GetUserAttributeVerificationCode`, `VerifyUserAttribute`, `ForgotPassword`,
-  `ConfirmForgotPassword`), which Cognito does not authorize with IAM. Plain HTTPS through `httpx`
+  `ConfirmForgotPassword`, and for public sign-up `SignUp`, `ConfirmSignUp`,
+  `ResendConfirmationCode`), which Cognito does not authorize with IAM. Plain HTTPS through `httpx`
   (the AWS JSON 1.1 protocol), like the Azure integrations: no boto3, no Identity Pool, Lambda or API
   Gateway. Requests never follow a redirect and are never retried; failures are reported
   (`503 auth_unavailable`), never hidden. **Time limits:** `COGNITO_TIMEOUT_SECONDS` (T, default
@@ -102,6 +103,7 @@ consume it; at most 3 verification emails per challenge. A challenge never gives
 | Forgot password | `ForgotPassword` | Always `202` (no account enumeration) |
 | Reset password | Attempt recorded, `ConfirmForgotPassword`, outcome recorded (revocation) | `200`; not signed in. `503` when the outcome is unknown (signed out everywhere) |
 | Logout | none | session revoked server-side |
+| Public sign-up (off by default, [SIGNUP.md](SIGNUP.md)) | limits, Google reCAPTCHA siteverify, `SignUp`; `ConfirmSignUp`; `ResendConfirmationCode` | no session: the user then signs in (above), which requires `email_verified=true` |
 
 **Email verification is enforced by MyDubb.** With email as the user pool's username attribute,
 Cognito lets a user sign in with an unverified email. MyDubb therefore checks `email_verified` from
@@ -225,7 +227,9 @@ SES email is billed separately.
    (`account_setup_incomplete`). `name` stays optional and becomes the display name.
 4. No return URL, domain or managed login is needed (MyDubb has its own UI). Create.
 5. **Settings -> Feature plans: switch to Lite.** New user pools default to **Essentials**.
-6. **Sign-up -> Self-service sign-up: disabled.** Invite-only.
+6. **Sign-up -> Self-service sign-up: disabled.** Invite-only. Public sign-up needs it enabled, but
+   only as the last step of the checklist in [SIGNUP.md](SIGNUP.md#before-turning-it-on-in-production-product-owner-checklist)
+   (one app client with a secret, no domain, SES), never before.
 7. **Authentication methods**: password policy as you like (MyDubb shows `password_rejected`
    when it is not met, without repeating the policy; tell users the rule in the invitation).
    **MFA: no MFA** (MyDubb does not handle MFA steps in this version).

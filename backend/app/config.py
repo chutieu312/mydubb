@@ -82,6 +82,11 @@ _AWS_REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-\d")
 # Patterns from the Cognito API reference (UserPoolId, ClientId).
 _USER_POOL_ID = re.compile(r"([a-z]{2}(?:-[a-z]+)+-\d)_[0-9a-zA-Z]+")
 _CLIENT_ID = re.compile(r"[\w+]{1,128}")
+# reCAPTCHA keys are 40 URL-safe characters; allow some room without accepting spaces or quotes.
+_RECAPTCHA_KEY = re.compile(r"[A-Za-z0-9_-]{20,100}")
+_HOSTNAME = re.compile(
+    r"(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*"
+)
 
 
 def to_sqlalchemy_url(url: str) -> str:
@@ -129,6 +134,28 @@ class Settings(BaseSettings):
     auth_recovery_max_per_email: int = Field(default=3, ge=1)
     auth_recovery_max_global: int = Field(default=50, ge=1)
     auth_recovery_window_seconds: int = Field(default=900, ge=1)
+
+    # Public sign-up (Create account) with a Google reCAPTCHA v2 Checkbox (docs/SIGNUP.md). Off by
+    # default. When on, every setting below is needed; a missing one turns sign-up off at runtime
+    # (`signup_problems`, answered `503 signup_unavailable`) instead of stopping the service, so
+    # sign-in keeps working.
+    public_signup_enabled: bool = False
+    # The reCAPTCHA v2 Checkbox key pair. The site key is public (sent to the browser); the secret
+    # stays in the backend environment and is only sent to Google's siteverify.
+    recaptcha_site_key: str | None = None
+    recaptcha_secret_key: SecretStr | None = None
+    # Comma-separated host names a solved checkbox may come from (siteverify `hostname`), e.g.
+    # "mydubb.com". Checked on every sign-up, also when the key's own domain check is on.
+    recaptcha_allowed_hostnames: str | None = None
+    # Total time allowed for one siteverify request. Never retried.
+    recaptcha_timeout_seconds: float = Field(default=10, ge=2, le=30)
+    # Create-account requests per sliding window (every request counts, before Google or Cognito
+    # is asked): per client, per email address and overall. Verification-code resends use the
+    # AUTH_RECOVERY_* limits; wrong confirmation codes use the ACCESS_* failure limits.
+    signup_max_per_client: int = Field(default=5, ge=1)
+    signup_max_per_email: int = Field(default=3, ge=1)
+    signup_max_global: int = Field(default=30, ge=1)
+    signup_window_seconds: int = Field(default=3600, ge=60)
 
     provider_mode: ProviderMode
     # Explicit opt-in to run mock providers with APP_ENV=production (online mock beta).
@@ -463,6 +490,37 @@ class Settings(BaseSettings):
                 "GUEST_ACCESS_ENABLED=true needs CLIENT_IP_HEADER (the header the edge proxy "
                 "overwrites with the client IP) when APP_ENV=production"
             )
+
+    @property
+    def recaptcha_hostnames(self) -> list[str]:
+        raw = self.recaptcha_allowed_hostnames or ""
+        return [name.strip().lower() for name in raw.split(",") if name.strip()]
+
+    def signup_problems(self) -> list[str]:
+        """Why public sign-up cannot run with these settings (names only, never values). Empty
+        when it is off or fully configured."""
+        if not self.public_signup_enabled:
+            return []
+        problems: list[str] = []
+        if self.auth_mode is not AuthMode.COGNITO:
+            problems.append("AUTH_MODE=cognito")
+        # Without a client secret anyone holding the (public) client ID could call Cognito's
+        # SignUp directly and skip the CAPTCHA and MyDubb's limits (docs/SIGNUP.md, "Bypass").
+        if self.cognito_client_secret is None:
+            problems.append("COGNITO_CLIENT_SECRET (a confidential app client)")
+        site_key = self.recaptcha_site_key or ""
+        if not _RECAPTCHA_KEY.fullmatch(site_key):
+            problems.append("RECAPTCHA_SITE_KEY")
+        secret = self.recaptcha_secret_key.get_secret_value() if self.recaptcha_secret_key else ""
+        if not _RECAPTCHA_KEY.fullmatch(secret):
+            problems.append("RECAPTCHA_SECRET_KEY")
+        hostnames = self.recaptcha_hostnames
+        if not hostnames or not all(_HOSTNAME.fullmatch(name) for name in hostnames):
+            problems.append("RECAPTCHA_ALLOWED_HOSTNAMES (comma-separated host names)")
+        if self.app_env is AppEnv.PRODUCTION and not self.client_ip_header:
+            # Behind the host's proxy the peer is the proxy: every visitor would share one limit.
+            problems.append("CLIENT_IP_HEADER")
+        return problems
 
     @property
     def cognito_issuer(self) -> str:

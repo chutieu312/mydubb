@@ -3,12 +3,21 @@ import { useEffect, useRef, useState } from "react";
 import { authApi } from "../../api/authApi";
 import type { AuthStep, AuthUser } from "../../api/authTypes";
 import { setCsrfToken } from "../../api/client";
+import type { SignupOffer } from "../../lib/authMode";
 import { AuthCard, type AuthNotice } from "./AuthCard";
-import { endedStepNotice, toFailure, toResetFailure, type Outcome } from "./errors";
+import { CreateAccountForm } from "./CreateAccountForm";
+import {
+  endedStepNotice,
+  toCodedFailure,
+  toFailure,
+  toResetFailure,
+  type Outcome,
+} from "./errors";
 import { ForgotPasswordForm, ResetPasswordForm } from "./ForgotPasswordForms";
 import { NewPasswordForm } from "./NewPasswordForm";
 import { SignInForm, type GuestOffer } from "./SignInForm";
 import { VerifyEmailForm } from "./VerifyEmailForm";
+import { VerifySignupForm } from "./VerifySignupForm";
 
 // Everything here lives in component state (memory). The challenge id is an opaque server
 // identifier, still never written to storage or the URL, and never logged. Passwords are held by
@@ -18,7 +27,10 @@ type Screen =
   | { name: "new-password"; challengeId: string }
   | { name: "verify-email"; challengeId: string }
   | { name: "forgot-password" }
-  | { name: "reset-password" };
+  | { name: "reset-password" }
+  // Public sign-up. The email of verify-signup is null when the user typed none yet.
+  | { name: "create-account" }
+  | { name: "verify-signup"; email: string | null };
 
 interface Props {
   // Shown on the first sign-in screen, e.g. after the session expired.
@@ -27,13 +39,21 @@ interface Props {
   passwordReset?: boolean;
   // From GET /api/meta (guest_access): "Try as guest" under the sign-in form.
   guest?: GuestOffer;
+  // From GET /api/meta (signup): "Create account" next to Sign in. Absent: invitation only.
+  signup?: SignupOffer | null;
   onAuthenticated: (user: AuthUser) => void;
 }
 
 const warning = (text: string): AuthNotice => ({ text, tone: "warning" });
 const info = (text: string): AuthNotice => ({ text, tone: "info" });
 
-export function PasswordAuthFlow({ notice, passwordReset = true, guest, onAuthenticated }: Props) {
+export function PasswordAuthFlow({
+  notice,
+  passwordReset = true,
+  guest,
+  signup,
+  onAuthenticated,
+}: Props) {
   const [screen, setScreen] = useState<Screen>({ name: "sign-in" });
   const [screenNotice, setScreenNotice] = useState<AuthNotice | null>(
     notice ? warning(notice) : null,
@@ -157,6 +177,35 @@ export function PasswordAuthFlow({ notice, passwordReset = true, guest, onAuthen
       toResetFailure,
     );
 
+  // -- public sign-up: the email is recorded only by an answer that is still current, so a late
+  // answer after Back or "Use a different email" changes neither the screen nor the email.
+  const createAccount = (address: string, password: string, captchaToken: string) =>
+    attempt(
+      () => authApi.signUp(address, password, captchaToken),
+      () => {
+        setEmail(address);
+        go({ name: "verify-signup", email: address });
+      },
+      (err) => toCodedFailure(err, "We could not create your account. Please try again."),
+    );
+
+  const confirmSignUp = (address: string, code: string) =>
+    attempt(
+      () => authApi.confirmSignUp(address, code),
+      () => {
+        setEmail(address);
+        backToSignIn(info("Your email is verified. Sign in with your email and password."));
+      },
+      (err) => toCodedFailure(err, "We could not verify that code. Please try again."),
+    );
+
+  const resendSignUpCode = (address: string) =>
+    attempt(
+      () => authApi.resendSignUpCode(address),
+      () => undefined,
+      (err) => toCodedFailure(err, "We could not send a code. Please try again."),
+    );
+
   const common = { focusTitle: navigated, notice: screenNotice };
 
   switch (screen.name) {
@@ -167,6 +216,18 @@ export function PasswordAuthFlow({ notice, passwordReset = true, guest, onAuthen
             initialEmail={email}
             onSubmit={signIn}
             guest={guest}
+            signup={
+              signup
+                ? {
+                    freePlan: signup.freePlan,
+                    onCreateAccount: (address) => {
+                      setEmail(address);
+                      go({ name: "create-account" });
+                    },
+                    onVerifyEmail: (address) => go({ name: "verify-signup", email: address || null }),
+                  }
+                : undefined
+            }
             onForgotPassword={
               passwordReset
                 ? (address) => {
@@ -229,6 +290,52 @@ export function PasswordAuthFlow({ notice, passwordReset = true, guest, onAuthen
             onSubmit={resetPassword}
             onRequestNewCode={() => go({ name: "forgot-password" })}
             onBack={() => backToSignIn()}
+          />
+        </AuthCard>
+      );
+    case "create-account":
+      // Only reachable from the Sign in screen, which offers it only when sign-up is on.
+      if (!signup) return null;
+      return (
+        <AuthCard key={screen.name} title="Create your account" {...common}>
+          <CreateAccountForm
+            siteKey={signup.recaptchaSiteKey}
+            freePlan={signup.freePlan}
+            initialEmail={email}
+            onSubmit={createAccount}
+            onHaveCode={(address) => go({ name: "verify-signup", email: address })}
+            onBackToSignIn={() => backToSignIn()}
+          />
+        </AuthCard>
+      );
+    case "verify-signup":
+      return (
+        <AuthCard
+          // A new form for each address, so nothing typed for one email stays for another.
+          key={`${screen.name}:${screen.email ?? ""}`}
+          title="Verify your email"
+          intro={
+            screen.email ? (
+              <>
+                If <strong>{screen.email}</strong> can be used for a new account, we sent it a
+                code. Enter it to finish, or use Resend code if none arrives. If you already have
+                an account, sign in or use Forgot password.
+              </>
+            ) : (
+              "Enter the email you used to create your account and the code we sent to it."
+            )
+          }
+          {...common}
+        >
+          <VerifySignupForm
+            email={screen.email}
+            onConfirm={confirmSignUp}
+            onResend={resendSignUpCode}
+            onChangeEmail={(address) => {
+              setEmail(address);
+              go({ name: "create-account" });
+            }}
+            onBackToSignIn={() => backToSignIn()}
           />
         </AuthCard>
       );

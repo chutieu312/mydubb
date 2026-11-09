@@ -19,8 +19,11 @@ authentication is finished.
 | missing, `null` or any other value, or `/api/meta` failed | **No sign-in at all**: an error with "Try again" | none (only `/api/meta`) |
 
 A mode is never guessed and the other mode's endpoints are never called. `auth.password_reset`
-decides whether "Forgot password?" is shown. There is no sign-up screen; the sign-in screen says
-"Access is currently by invitation only."
+decides whether "Forgot password?" is shown. Public sign-up is offered only when `signupOf(meta)`
+finds `auth.self_registration: true` and a complete `signup` block ([SIGNUP.md](SIGNUP.md)); then
+the sign-in screen shows **Create account**, the Free plan sentence (from `signup.free_plan`) and
+**Have a code? Verify your email**. Otherwise it says "Access is currently by invitation only." as
+before.
 
 ## Screens and flows
 
@@ -33,6 +36,8 @@ All screens reuse the Studio card, tokens and Light/Dark theme. English only.
 | Verify your email | `POST /api/auth/email-verification/send`, `.../confirm` | See "Email verification" |
 | Reset your password / Choose a new password | `POST /api/auth/forgot-password`, `.../reset-password` | Same message for every address; a reset never signs the user in |
 | Studio header | `GET /api/auth/me`, `POST /api/auth/logout` | Display name, or the email when `display_name` is `null`; **Sign out** |
+| Create your account (sign-up on) | `POST /api/auth/signup` | Email, password, Google's checkbox (`RecaptchaCheckbox`, script loaded only here, reset after every attempt). Messages beside the field they are about (`captcha_invalid`, `password_rejected`, `signup_rejected`); a lost answer offers "I received a code" |
+| Verify your email (sign-up) | `POST /api/auth/signup/confirm`, `.../resend` | The email (typed here when opened from Sign in), code, Verify, Resend code (waits only as long as the server's `Retry-After`), Use a different email, Back to sign in. `verified` goes to Sign in with the email filled in; the user signs in |
 
 Each step moves focus to the screen title, errors are `role="alert"`, fields have labels and
 `aria-invalid`/`aria-describedby`, and every action runs one request at a time.
