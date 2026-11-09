@@ -7,6 +7,17 @@ it is never in `dist/`, never in the Chrome Web Store package, has no MyDubb acc
 local test MP3 (the backend's mock audio, 30.5 s). It does not touch the Generate or playback code of
 the extension.
 
+**Status (2026-11-08): integrated.** The Product Owner tried this prototype on a real Loom share
+page and a real YouTube watch page in Chrome (with the sample MP3): good. The extension itself now
+syncs MyDubb-generated audio with the top-frame HTML5 video of ordinary pages
+([../README.md](../README.md), "Sync with the page's video"). Taken over: the video choice (rules
+below, plus a stricter "user's choice": a trusted click on that video or a key in its player, not
+the page's user activation or an unmuted autoplay), `activeTab` + `scripting` on the user's click,
+the reused Sync modules. **Not** taken over: the optional host permissions (`https://*/*`) and
+cross-origin frames, the lab page, the playhead-based span (the extension uses the job's snapshot).
+This folder stays as the record of the prototype phase and its evidence; it is not built into
+`dist/`.
+
 ## What it reuses, unchanged
 
 | Part | Module | Role in the prototype |

@@ -1,7 +1,7 @@
 // Message contracts between the service worker, the side panel and the content script, with
 // validators. Every receiver validates shape and sender before acting; nothing here trusts the page.
 
-import type { LessonInfo } from "./lesson";
+import { isPageKey, type LessonInfo } from "./lesson";
 
 export const PANEL_PORT_NAME = "mydubb-panel";
 export const MAX_SELECTION_CHARS = 100_000;
@@ -22,6 +22,19 @@ export interface SelectionReply {
   /** True when the selection exceeded MAX_SELECTION_CHARS; text is then empty (never cut). */
   tooLong: boolean;
   lesson: LessonInfo | null;
+}
+
+// ---- Service worker -> side panel (runtime.sendMessage) ------------------------------------
+
+/** The worker put the content script into the tab's page: its panel connects to it now. */
+export interface PageInjected {
+  type: "mydubb:page-injected";
+  tabId: number;
+}
+
+export function isPageInjected(value: unknown): value is PageInjected {
+  const v = value as Partial<PageInjected> | null;
+  return typeof v === "object" && v !== null && v.type === "mydubb:page-injected" && Number.isSafeInteger(v.tabId);
 }
 
 // ---- Side panel <-> content script (chrome.tabs.connect port) ------------------------------
@@ -81,6 +94,11 @@ export type VideoState =
 
 export interface PageState {
   lesson: LessonInfo | null;
+  /**
+   * An ordinary (non-Udemy) page the content script was injected into: its pageKeyOf() fingerprint.
+   * Null on Udemy, where the lecture is the identity.
+   */
+  page: string | null;
   online: boolean;
   video: VideoState;
 }
@@ -223,6 +241,7 @@ export function isContentToPanel(value: unknown): value is ContentToPanel {
   const state = value.state;
   return (
     (state.lesson === null || isLessonInfo(state.lesson)) &&
+    (state.page === null || isPageKey(state.page)) &&
     typeof state.online === "boolean" &&
     isVideoState(state.video)
   );

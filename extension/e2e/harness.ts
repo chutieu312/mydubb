@@ -14,6 +14,8 @@ const extensionDir = join(here, "..", "dist-test");
 const fixtureHtml = readFileSync(join(here, "fixtures", "lecture.html"), "utf8");
 const fixtureJs = readFileSync(join(here, "fixtures", "fixture.js"), "utf8");
 const webpageHtml = readFileSync(join(here, "fixtures", "webpage.html"), "utf8");
+const videopageHtml = readFileSync(join(here, "fixtures", "videopage.html"), "utf8");
+const videopageJs = readFileSync(join(here, "fixtures", "videopage.js"), "utf8");
 // A real MP3: the backend's 3 s mock-provider fixture (CBR, no header frame) ten times over, so
 // the player really decodes a 30 s MP3 and seeking has room.
 const fixtureMp3 = Buffer.concat(
@@ -25,6 +27,78 @@ export const MYDUBB = "https://mydubb.test";
 export const WEB_ORIGIN = "https://www.loom.com";
 export const HTTP_ORIGIN = "http://intranet.test";
 export const webUrl = (id: string | number) => `${WEB_ORIGIN}/share/${id}`;
+/**
+ * Ordinary pages with an HTML5 video (e2e/fixtures/videopage.*): a Loom-like share page, a
+ * YouTube-like watch page and another site. The test build has host access to these three origins
+ * in place of the user's click (activeTab cannot be granted in Playwright); http://intranet.test
+ * stays without access.
+ */
+export const VIDEO_ORIGIN = "https://video.test";
+export const YOUTUBE_ORIGIN = "https://www.youtube.com";
+export const loomVideoUrl = (id: string, query = "") => `${WEB_ORIGIN}/share/v-${id}${query}`;
+export const youtubeUrl = (id: string, query = "") => `${YOUTUBE_ORIGIN}/watch?v=${id}${query}`;
+export const videoSiteUrl = (id: string, query = "") => `${VIDEO_ORIGIN}/v/${id}${query}`;
+
+/** A 120 s silent WAV, 8 kHz 8-bit mono (as videopage.js makes in the page). */
+function silentWav(seconds: number): Buffer {
+  const samples = 8000 * seconds;
+  const wav = Buffer.alloc(44 + samples, 128);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(36 + samples, 4);
+  wav.write("WAVEfmt ", 8, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24);
+  wav.writeUInt32LE(8000, 28);
+  wav.writeUInt16LE(1, 32);
+  wav.writeUInt16LE(8, 34);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(samples, 40);
+  return wav;
+}
+
+/**
+ * The main video of `?media=http` pages, served with byte ranges. `holdFrom(seconds)` holds every
+ * byte from that point of the video until `release()`: a seek there buffers for real.
+ */
+export class HeldMedia {
+  private readonly wav = silentWav(120);
+  private holdAt: number | null = null;
+  private waiters: (() => void)[] = [];
+
+  holdFrom(seconds: number): void {
+    this.holdAt = 44 + seconds * 8000;
+  }
+
+  release(): void {
+    this.holdAt = null;
+    for (const resume of this.waiters.splice(0)) resume();
+  }
+
+  async serve(route: Route): Promise<void> {
+    const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers().range ?? "");
+    let start = range ? Number(range[1]) : 0;
+    let end = range && range[2] ? Number(range[2]) : this.wav.length - 1;
+    if (this.holdAt !== null && start >= this.holdAt) {
+      await new Promise<void>((resume) => this.waiters.push(resume));
+    } else if (this.holdAt !== null && end >= this.holdAt) {
+      end = this.holdAt - 1; // the part before the held bytes now; the rest is asked for later
+    }
+    start = Math.min(start, this.wav.length - 1);
+    await route
+      .fulfill({
+        status: 206,
+        headers: {
+          "content-type": "audio/wav",
+          "accept-ranges": "bytes",
+          "content-range": `bytes ${start}-${end}/${this.wav.length}`,
+        },
+        body: this.wav.subarray(start, end + 1),
+      })
+      .catch(() => undefined);
+  }
+}
 export const lectureUrl = (id: number, query = "") => `${ORIGIN}/course/demo-course/learn/lecture/${id}${query}`;
 
 export const META = {
@@ -246,14 +320,20 @@ export class FakeMyDubb {
   }
 }
 
-type Fixtures = { context: BrowserContext; worker: Worker; extensionId: string; mydubb: FakeMyDubb };
+type Fixtures = { context: BrowserContext; worker: Worker; extensionId: string; mydubb: FakeMyDubb; media: HeldMedia };
 
 export const test = base.extend<Fixtures>({
   // eslint-disable-next-line no-empty-pattern
   mydubb: async ({}, use) => {
     await use(new FakeMyDubb());
   },
-  context: async ({ mydubb }, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  media: async ({}, use) => {
+    const media = new HeldMedia();
+    await use(media);
+    media.release();
+  },
+  context: async ({ mydubb, media }, use) => {
     const context = await chromium.launchPersistentContext("", {
       channel: "chromium",
       args: [
@@ -283,12 +363,22 @@ export const test = base.extend<Fixtures>({
       }
       // Ordinary web pages: a page without a video, served over https and over plain http.
       const shared = /^\/share\/([\w-]+)$/.exec(url.pathname);
-      if (url.origin === WEB_ORIGIN && shared) {
+      if (url.origin === WEB_ORIGIN && shared && !shared[1]!.startsWith("v-")) {
         return route.fulfill({ contentType: "text/html", body: webpageHtml.replace("__PAGE__", shared[1]!) });
       }
       if (url.origin === HTTP_ORIGIN) {
         return route.fulfill({ contentType: "text/html", body: webpageHtml.replace("__PAGE__", "http") });
       }
+      // Ordinary pages with an HTML5 video (Loom-like, YouTube-like, another site).
+      const videoPage =
+        (url.origin === WEB_ORIGIN && /^\/share\/v-[\w-]+$/.test(url.pathname)) ||
+        (url.origin === YOUTUBE_ORIGIN && url.pathname === "/watch") ||
+        (url.origin === VIDEO_ORIGIN && /^\/v\/[\w-]+$/.test(url.pathname));
+      if (videoPage) return route.fulfill({ contentType: "text/html", body: videopageHtml.replace("__PAGE__", url.pathname) });
+      if ([WEB_ORIGIN, YOUTUBE_ORIGIN, VIDEO_ORIGIN].includes(url.origin) && url.pathname === "/__fixture/videopage.js") {
+        return route.fulfill({ contentType: "text/javascript", body: videopageJs });
+      }
+      if ([WEB_ORIGIN, YOUTUBE_ORIGIN, VIDEO_ORIGIN].includes(url.origin) && url.pathname === "/media.wav") return media.serve(route);
       if (url.origin === "https://example.test") {
         return route.fulfill({ contentType: "text/html", body: "<title>Other site</title><video></video>" });
       }

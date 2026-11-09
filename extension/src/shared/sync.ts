@@ -1,6 +1,6 @@
-// Synchronizing the MyDubb audio with the Udemy video (story 4): the timeline mapping, the
-// metadata a job keeps for it, and the texts both remote controls (side panel and floating player)
-// show. Pure functions only.
+// Synchronizing the MyDubb audio with the page's video (story 4 on Udemy; any page's HTML5 video
+// since): the timeline mapping, the metadata a job keeps for it, and the texts both remote controls
+// (side panel and floating player) show. Pure functions only.
 //
 // The MP3 already has the chosen speed in it, so the audio always plays at 1x and is the clock.
 // The video runs at whatever rate makes it cover its source span in the same time:
@@ -12,6 +12,8 @@
 //
 // V1 is the START of the last sentence/caption (the job's contract): no tail is added.
 
+import { isPageKey } from "./lesson";
+
 /** What a job's Generate click fixed about its source span; copied at the click, never the form later. */
 export interface SyncSource {
   /** "plain": the two start-time fields; "timed": the first and last caption of the transcript. */
@@ -22,6 +24,12 @@ export interface SyncSource {
   /** The baseline the job was made with (last - first start field) and its speed: D ≈ baseline / speed. */
   baseline: number;
   speed: number;
+  /**
+   * An ordinary page's result: the pageKeyOf() fingerprint of the page whose single video was
+   * identified at the click. Sync only drives a video while that same page shows it. Absent for a
+   * Udemy lecture (the lecture key is the identity).
+   */
+  page?: string;
 }
 
 export interface SyncMapping {
@@ -62,7 +70,8 @@ export function isSyncSource(value: unknown): value is SyncSource {
     v.baseline <= MAX_SECONDS &&
     finite(v.speed) &&
     v.speed > 0 &&
-    v.speed <= 10
+    v.speed <= 10 &&
+    (v.page === undefined || isPageKey(v.page))
   );
 }
 
@@ -175,7 +184,7 @@ const UNAVAILABLE_TEXT: Record<SyncUnavailable, string> = {
   "length-mismatch":
     "the MP3 length does not match the job's start times (the audio was not fitted to them), so the video position cannot be worked out.",
   "rate-unsupported": "the video would have to run at a speed Chrome cannot play.",
-  "not-linked": "the Udemy tab is not linked to the player. Reload the lecture tab.",
+  "not-linked": "the video's tab is not linked to the player. Reload the tab.",
 };
 
 const STATUS_TEXT: Record<Exclude<SyncStatus, "unavailable" | "off">, string> = {
@@ -221,9 +230,9 @@ export function syncNoticeText(sync: SyncView): string {
     case "seek-outside":
       return `Sync turned off: the video was moved outside ${range}, the part this audio covers. Both are paused.`;
     case "video-replaced":
-      return "Sync turned off: the Udemy video player was replaced. Both are paused; turn Sync on again when the video is ready.";
+      return "Sync turned off: the video player was replaced or the page changed. Both are paused; turn Sync on again when the video is ready.";
     case "no-video":
-      return "Sync could not start: no single lecture video is identified on the page.";
+      return "Sync could not start: no single video is identified on the page.";
     case "video-not-ready":
       return "Sync could not start: the video is not ready yet. Try again when it has loaded.";
     case "range-outside-video":
@@ -233,7 +242,7 @@ export function syncNoticeText(sync: SyncView): string {
     case "unstable":
       return "Paused: the video and the audio kept drifting apart. Press Play to try again.";
     case "video-play-blocked":
-      return "Chrome blocked the video from playing. Press Play again (or play the video once in the Udemy player).";
+      return "Chrome blocked the video from playing. Press Play again (or play the video once in the page's player).";
     case "video-play-failed":
       return "The video could not start playing. Both are paused.";
     case "audio-play-blocked":
@@ -241,7 +250,7 @@ export function syncNoticeText(sync: SyncView): string {
     case "audio-play-failed":
       return "The MyDubb audio could not start. Both are paused.";
     case "no-response":
-      return "The Udemy video did not respond in time. Both are paused.";
+      return "The video did not respond in time. Both are paused.";
     case "video-error":
       return "Sync turned off: the video reported an error.";
     case "audio-error":
@@ -253,6 +262,6 @@ export function syncNoticeText(sync: SyncView): string {
     case "unmuted":
       return "You unmuted the video, so both voices may play together. MyDubb does not mute it again.";
     case "not-linked":
-      return "Sync could not start: the Udemy tab is not linked to the player. Reload the lecture tab.";
+      return "Sync could not start: the video's tab is not linked to the player. Reload the tab.";
   }
 }

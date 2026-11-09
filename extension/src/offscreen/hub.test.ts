@@ -231,13 +231,14 @@ describe("senders", () => {
     expect(other.sent).toEqual([]);
   });
 
-  it("accepts page ports only from a top-frame Udemy content script, for its own tab", () => {
+  it("accepts page ports only from a top-frame content script of an http(s) page, for its own tab", () => {
     const hub = makeHub();
     opened(hub, 4);
     for (const sender of [
       { tab: undefined },
       { frameId: 3 },
-      { url: "https://evil.example/" },
+      { url: "file:///home/lesson.html" },
+      { url: "chrome://settings/" },
       { id: "other-extension" },
     ] as Partial<chrome.runtime.MessageSender>[]) {
       const port = pagePort(4, sender);
@@ -723,5 +724,99 @@ describe("audio of an ordinary web page (no lecture, no page link)", () => {
     hub.acceptPage(page);
     page.receive({ type: "hello", lessonKey: LESSON });
     expect(lastView(web.panel)).toBeNull();
+  });
+});
+
+describe("Sync with an ordinary page's video (the page the result was made with)", () => {
+  const PAGE = "p-0123456789abcd";
+  const OTHER = "p-fedcba98765432";
+  const SOURCE: SyncSource = { mode: "timed", start: 19, end: 83, baseline: 64, speed: 1, page: PAGE };
+  const WEB = { url: "https://www.loom.com/share/abc" };
+  const settle = async () => {
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+  };
+  /** An ordinary page's content script says hello with its fingerprint (null: none). */
+  const webPage = (hub: PlaybackHub, page: string | null = PAGE, tabId = 4) => {
+    const port = pagePort(tabId, WEB);
+    expect(hub.acceptPage(port)).toBe(true);
+    port.receive(page === null ? { type: "hello", lessonKey: PAGE_SOURCE } : { type: "hello", lessonKey: PAGE_SOURCE, page });
+    return port;
+  };
+  const videoOps = (page: FakePort<PlayerToPage>) =>
+    page.sent.filter((m): m is Extract<PlayerToPage, { type: "video" }> => m.type === "video");
+
+  it("links only the page of its snapshot; Sync then attaches the video at the span's start", async () => {
+    const hub = makeHub();
+    const { panel, sessionId } = opened(hub, 4, OWNER, PAGE_SOURCE, SOURCE, 64);
+    expect(lastView(panel)).toMatchObject({ syncPage: PAGE, linked: false, sync: { status: "unavailable", unavailable: "not-linked" } });
+    const page = webPage(hub);
+    expect(page.disconnected).toBe(false);
+    expect(lastView(panel)).toMatchObject({ linked: true, sync: { status: "off", start: 19, end: 83, rate: 1 } });
+    panel.receive({ type: "sync", tabId: 4, sessionId, on: true });
+    await settle();
+    // Audio at its start: the video goes to 0:19, whatever position it had.
+    expect(videoOps(page).at(-1)).toMatchObject({ op: "attach", start: 19, end: 83, rate: 1, time: 19 });
+  });
+
+  it("refuses another page, a page without a fingerprint and a result made without a page's video; the audio stays", () => {
+    const hub = makeHub();
+    const { panel } = opened(hub, 4, OWNER, PAGE_SOURCE, SOURCE, 64);
+    for (const key of [OTHER, null]) {
+      const page = webPage(hub, key);
+      expect(page.sent).toEqual([{ type: "ended" }]);
+      expect(page.disconnected).toBe(true);
+    }
+    expect(lastView(panel)).toMatchObject({ linked: false, status: "ready" });
+
+    const plain = makeHub();
+    const noVideo = opened(plain, 4, OWNER, PAGE_SOURCE, { ...SOURCE, page: undefined }, 64);
+    expect(lastView(noVideo.panel)).toMatchObject({ syncPage: null, sync: { status: "unavailable", unavailable: "no-metadata" } });
+    const page = webPage(plain);
+    expect(page.disconnected).toBe(true);
+    expect(lastView(noVideo.panel)).toMatchObject({ linked: false, status: "ready" });
+  });
+
+  it("an ordinary page cannot link to a lecture's session, which stays", () => {
+    const hub = makeHub();
+    const lecture = opened(hub, 4, OWNER, LESSON, { ...SOURCE, page: undefined }, 64);
+    const page = webPage(hub);
+    expect(page.disconnected).toBe(true);
+    expect(lastView(lecture.panel)).toMatchObject({ lessonKey: LESSON, linked: false });
+  });
+
+  it("the page going away (reload, navigation) or showing another address ends Sync only; the audio keeps its session", async () => {
+    for (const leave of ["disconnect", "address"] as const) {
+      const hub = makeHub();
+      const { panel, audio, sessionId } = opened(hub, 4, OWNER, PAGE_SOURCE, SOURCE, 64);
+      const page = webPage(hub);
+      panel.receive({ type: "sync", tabId: 4, sessionId, on: true });
+      await settle();
+      const attach = videoOps(page).at(-1)!;
+      page.receive({ type: "video-reply", syncId: attach.syncId, cmdId: attach.cmdId, ok: true, error: null, video: { currentTime: 19, paused: true, waiting: false, rate: 1, hidden: false } });
+      await settle();
+      expect(lastView(panel)?.sync.status).toBe("paused");
+      if (leave === "disconnect") page.close();
+      else page.receive({ type: "lesson", lessonKey: null });
+      expect(lastView(panel)).toMatchObject({
+        sessionId,
+        linked: false,
+        sync: { status: "unavailable", notice: "video-replaced" },
+      });
+      expect(revoked).toHaveLength(0);
+      // Listened to on its own from here.
+      panel.receive({ type: "command", tabId: 4, sessionId, command: "play" });
+      await settle();
+      expect(audio.paused).toBe(false);
+      revoked = [];
+    }
+  });
+
+  it("a newer result drops the page linked for the previous one", () => {
+    const hub = makeHub();
+    opened(hub, 4, OWNER, PAGE_SOURCE, SOURCE, 64);
+    const page = webPage(hub);
+    const second = opened(hub, 4, { ...OWNER, jobId: "job-2", operationId: "op-2" }, PAGE_SOURCE, { ...SOURCE, page: OTHER }, 64);
+    expect(page.disconnected).toBe(true);
+    expect(lastView(second.panel)).toMatchObject({ syncPage: OTHER, linked: false });
   });
 });
