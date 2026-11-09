@@ -63,10 +63,13 @@ player on the lecture page alike.
    right-click → **Send to MyDubb**. The side panel opens for that tab with the text in **English
    transcript**, nothing rendered as HTML. On a **Udemy lecture** the extension reads the selection
    itself, so the line breaks are kept exactly. On **any other http(s) page** it can only use the
-   text Chrome passes to the menu (`selectionText`), which may lose line breaks: the text is kept as
-   received and never re-timed. If the timestamps ended up on one line, edit them back onto their own
-   lines, or select, **Copy**, then **Paste** into the box (a paste keeps the line breaks). Nothing is
-   sent to MyDubb until **Generate audio**.
+   text Chrome passes to the menu (`selectionText`), which loses the line breaks (YouTube and Loom
+   transcripts arrive as one line: "0:19 The meeting starts at 9:30. 0:22 ..."). The extension then
+   puts each caption timestamp back on its own line when the whole selection supports it (see
+   [Timestamps in a one-line selection](#timestamps-in-a-one-line-selection)), so the timing note and
+   the two start times fill as after a paste. When it is not certain, the text is kept as received and
+   the panel says to select, **Copy**, then **Paste** into the box (a paste keeps the line breaks).
+   Nothing is sent to MyDubb until **Generate audio**.
 2. Edit the text if you like. Sending a new selection over an edited draft asks first
    (**Replace draft** / **Keep my draft**). **Clear** empties the draft.
 3. **Connect MyDubb** (header): Chrome opens a MyDubb window; sign in there with your invitation
@@ -178,8 +181,9 @@ does not download video, does not intercept network requests and does not use Ud
 - **Service worker** (`src/background`): creates the menu item; on click it opens the side panel
   for that tab only (`sidePanel.setOptions({tabId, path: "sidepanel.html?tabId=N"})` + `open`, in
   the user gesture), asks the content script for the selection (Udemy only; any other http(s) page
-  has none and uses Chrome's `selectionText`; a selection over 100,000 characters is refused, not
-  cut), and stores it as a *pending
+  has none and uses Chrome's `selectionText`, whose caption timestamps `captionLines.ts` puts back
+  on their own lines when certain; a selection over 100,000 characters is refused, not cut), and
+  stores it as a *pending
   selection* in `storage.session`. When a tab closes it removes that tab's draft, form and job and
   tells the offscreen document; when the stored MyDubb connection changes it tells the offscreen
   document which connection is current. It keeps no state in globals and plays no part in MyDubb
@@ -347,6 +351,32 @@ does not download video, does not intercept network requests and does not use Ud
   tab); the offscreen document checks the sender of every port and message as above. The manifest
   has no `externally_connectable`, so web pages cannot message the extension.
 
+### Timestamps in a one-line selection
+
+`src/background/captionLines.ts`, used only for Chrome's `selectionText` (never for the Udemy
+content script's exact selection, nor for a paste). If the timed parser
+(`frontend/src/lib/transcriptTiming.ts`, the mirror of `backend/app/transcript/timed.py`) already
+reads the text (timestamps on their own lines, SRT/WebVTT, or an error it reports), nothing changes.
+Otherwise every word shaped like a timestamp (`0:19`, `10:05`, `00:23`, `1:02:03`, `0:10.480`; not
+`9:30.` or `(0:05)`) is a candidate, and the lines are restored only if all of these hold:
+
+- the selection starts with a timestamp, and there are at least two;
+- one notation: a word in the other notation than the first timestamp is spoken text (`9:30` among
+  Loom's `00:23`, `09:30` among YouTube's `0:19`); a first timestamp that fits both (`12:30`) allows
+  no mixing at all;
+- every timestamp is valid, has caption text after it, and the times never go back;
+- no caption is far too short for the time until the next timestamp: at most 30 s plus 2 s a word
+  (catches "1:20 we meet at 9:30 every day", where `9:30` is not a caption start);
+- the restored text is a valid timed transcript for the shared parser (last caption later than the
+  first).
+
+The result is the usual format (a timestamp line, then the caption text), so the panel, the request
+and the server read it with the parser they already share; the server parser is unchanged. The last
+caption's start stays the end of the span: no tail added, no missing timestamp guessed, baseline and
+speed unchanged. When any rule fails and the text has timestamp-like words at its start or two or
+more of them, the text is kept as received and the panel shows the Copy → Paste hint; a single time
+in ordinary text ("starts at 9:30 every day") gets no hint.
+
 ## Checks
 
 ```sh
@@ -442,8 +472,12 @@ npm run test:browser              # builds dist-test/ and runs Playwright
   Ctrl+C on the page and Ctrl+V in the panel) with timestamps and line breaks into the timed parser,
   Generate → result → Play with no lecture key, no Sync and no floating player; "Send to MyDubb" with
   Chrome's `selectionText` (the worker's click handler is called, **the native context menu is not
-  clicked by Playwright**: the real menu is accepted by hand), the right tab only, a flattened
-  selection kept as received, empty and over-100,000-character selections, the confirmation before
+  clicked by Playwright**: the real menu is accepted by hand), the right tab only; synthetic
+  YouTube-like (`M:SS` per caption row) and Loom-like (`MM:SS` per paragraph) transcript pages whose
+  real page selection is collapsed to one line as a model of `selectionText` (not Chrome's own
+  value): the same draft as Copy → Paste, First/Last filled, a spoken "9:30" kept, Generate sends the
+  timed request; an uncertain one-line selection kept as received with the Copy → Paste hint;
+  empty and over-100,000-character selections, the confirmation before
   an edited draft is replaced; two tabs, an account change with a job still running, a tab closing,
   the earlier audio kept while the next job runs, a failed download or a refused Generate; a tab
   that becomes a Udemy lecture (and back); a Udemy tab whose content script is held back with a gate (no
@@ -521,9 +555,11 @@ use the Azure free allowance.
    transcript box under the header: no "Current lesson" block and no word about Udemy; there is **no**
    video row, Sync or floating player, and nothing else on the page changes. (b) On the page, select
    transcript text, right-click → **Send to MyDubb** (this is the native menu the browser tests
-   cannot click): the panel opens for that tab with Chrome's text; note whether the line breaks
-   survived. If a timestamp ended up on one line, check the text is kept as received (not re-timed),
-   fix it by hand or Copy → Paste, and Generate. (c) Empty and very long selections are reported;
+   cannot click): the panel opens for that tab with Chrome's text. On a YouTube or Loom transcript
+   the panel must say each caption timestamp was put back on its own line, the timing note and the
+   two start times must fill from the first and last caption of the selection, and the translation
+   and the audio must hold no caption time (a time said in the video stays). If it says the text was
+   kept as sent, Copy → Paste must give the timed result. (c) Empty and very long selections are reported;
    with an edited draft, a new selection asks before replacing it. (d) A second tab, a second
    account (**Disconnect**, connect another), closing the tab and a second Generate while listening
    must not mix results (the earlier audio plays until the new one is ready). (e) Open a Udemy
@@ -541,8 +577,11 @@ use the Azure free allowance.
   http(s) site) get the transcript, Generate and the panel's own audio player only; there is no video
   adapter for them.
 - Off Udemy, and when the content script cannot be reached (e.g. inside an iframe), the selection is
-  Chrome's `selectionText`, which may collapse whitespace; it is kept as received, never re-timed.
-  (A way to get exact line breaks on other sites would need `activeTab` + `scripting`, not added.)
+  Chrome's `selectionText`, which collapses whitespace. Caption timestamps are restored only when
+  certain (next section); otherwise the text is kept as received and Copy → Paste is the way to keep
+  the lines. (Exact line breaks on other sites would need `activeTab` + `scripting`: not added, a
+  Product Owner decision.)
+
 - The audio of an ordinary page is tied to the tab, not to the address: if the tab goes to another
   site, it keeps playing until it is paused, replaced, or the tab closes.
 - **Generate never waits for the lecture or the video.** With MyDubb connected and a valid form it works

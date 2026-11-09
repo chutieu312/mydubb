@@ -296,3 +296,75 @@ def test_real_speech_with_mock_audio_refuses_timed_jobs_before_any_provider_call
     job = wait_for_terminal(client, plain.json()["id"], 60)
     assert job["status"] == "completed", job
     assert client.get(f"/api/jobs/{job['id']}/result").json()["audio"]["duration_adjusted"] is False
+
+
+# --- selections the extension restored from Chrome's one-line selectionText ---------------------
+
+# Chrome hands "Send to MyDubb" the selection with its whitespace collapsed; the extension puts the
+# caption timestamps back on their own lines (extension/src/background/captionLines.ts) and sends
+# the usual structure. Clock times that are part of the spoken words stay inside the captions.
+RESTORED_YOUTUBE = """1:19
+So the first thing we do is open the settings
+1:20
+page and look for the export button.
+1:22
+The meeting starts at 9:30.
+1:24
+so please be on time,
+1:25
+and bring your notes from Monday.
+1:27
+That's it for today."""
+RESTORED_LOOM = """00:00
+Hi everyone, in this video I'll walk you through the new dashboard.
+00:23
+First, open the reports tab. The date filter starts at 9:30 by default.
+00:38
+Finally, export the report as a CSV file and share it with your team."""
+RESTORED = [
+    (
+        RESTORED_YOUTUBE,
+        "00:01:19",
+        "00:01:27",
+        (79, 87),
+        ("1:19", "1:20", "1:22", "1:24", "1:25", "1:27"),
+    ),
+    (RESTORED_LOOM, "00:00:00", "00:00:38", (0, 38), ("00:00", "00:23", "00:38")),
+]
+
+
+@pytest.mark.parametrize(("transcript", "first", "last", "span", "stamps"), RESTORED)
+def test_a_restored_selection_is_timed_by_its_captions_and_keeps_spoken_times(
+    client: TestClient, transcript: str, first: str, last: str, span: tuple, stamps: tuple
+) -> None:
+    csrf = login(client)
+    response = timed_job(
+        client, csrf, transcript=transcript, first_sentence_start=first, last_sentence_start=last
+    )
+    assert response.status_code == 202, response.text
+    job = wait_for_terminal(client, response.json()["id"])
+    assert job["status"] == "completed"
+    result = client.get(f"/api/jobs/{job['id']}/result").json()
+    timing = result["timing"]
+    assert (timing["source_first_seconds"], timing["source_last_seconds"]) == span
+    # The translation holds the spoken words only: no caption timestamp, the spoken time kept.
+    translation = result["translation"]["text"]
+    assert "9:30" in translation
+    assert not [stamp for stamp in stamps if stamp in translation]
+
+
+@pytest.mark.parametrize(("transcript", "first", "last", "span", "stamps"), RESTORED)
+def test_the_speech_of_a_restored_selection_has_no_caption_timestamps(
+    azure_client, transcript: str, first: str, last: str, span: tuple, stamps: tuple
+) -> None:
+    # The fake translator echoes its input, so the SSML holds exactly the text sent to translation.
+    client, calls = azure_client()
+    csrf = login(client)
+    response = timed_job(
+        client, csrf, transcript=transcript, first_sentence_start=first, last_sentence_start=last
+    )
+    job = wait_for_terminal(client, response.json()["id"], 60)
+    assert job["status"] == "completed", job
+    ssml = b"".join(call.content for call in calls).decode()
+    assert "9:30" in ssml
+    assert not [stamp for stamp in stamps if stamp in ssml]

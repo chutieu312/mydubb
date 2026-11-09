@@ -11,13 +11,13 @@ export type TranscriptTiming =
   | { kind: "timed"; captions: number; first: number; last: number }
   | { kind: "invalid"; message: string };
 
-const LOOSE_STAMP = /^\d{1,2}(?::\d{1,2}){1,2}(?:[.,]\d+)?$/;
+export const LOOSE_STAMP = /^\d{1,2}(?::\d{1,2}){1,2}(?:[.,]\d+)?$/;
 // Whole seconds as pasted from YouTube's panel, or ".mmm" as written by the caption import.
 const M_SS = /^(\d{1,2}):([0-5]\d)(?:\.(\d{1,3}))?$/;
 const H_MM_SS = /^(\d{1,2}):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$/;
 
 /** The time in whole milliseconds, or null when it is not a valid caption time. */
-function parseStamp(text: string): number | null {
+export function parseStamp(text: string): number | null {
   const long = H_MM_SS.exec(text);
   const short = long ? null : M_SS.exec(text);
   const parts = long ?? (short ? [short[0], "0", short[1], short[2], short[3]] : null);
