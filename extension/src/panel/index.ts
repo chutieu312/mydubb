@@ -63,6 +63,8 @@ const ui = {
   lessonDetail: byId("lesson-detail"),
   linkStatus: byId("link-status"),
   linkDetail: byId("link-detail"),
+  lessonBox: byId("lesson-box"),
+  lectureRows: ["lesson-term", "lesson-detail", "link-term", "link-detail"].map((id) => byId(id)),
   reconnect: byId<HTMLButtonElement>("reconnect"),
   transcript: byId<HTMLTextAreaElement>("transcript"),
   clear: byId<HTMLButtonElement>("clear"),
@@ -70,6 +72,7 @@ const ui = {
   confirm: byId("confirm"),
   confirmReplace: byId<HTMLButtonElement>("confirm-replace"),
   confirmKeep: byId<HTMLButtonElement>("confirm-keep"),
+  videoBox: byId("video-box"),
   videoStatus: byId("video-status"),
   timeCurrent: byId("time-current"),
   timeDuration: byId("time-duration"),
@@ -196,6 +199,7 @@ class Panel {
     this.retryTimer = null;
     if (resetRetries) this.retries = 0;
     ui.reconnect.hidden = true;
+    this.renderLessonBox();
     this.receivedState = false;
     let port: chrome.runtime.Port;
     try {
@@ -234,14 +238,17 @@ class Panel {
     if (this.tabClosed) return;
     if (hadState) {
       this.setLinkStatus("Connection to the Udemy tab was lost (reload or navigation). Reconnecting…");
-    } else if (this.retries === 0) {
-      this.setLinkStatus(
-        "MyDubb is not active in this tab. Open a Udemy lecture page; if it is already open, reload the tab.",
-      );
     }
+    // An ordinary web page has no content script, so nothing answers: that is not an error and
+    // nothing is said about it. The panel works there without a video; it keeps looking in case the
+    // tab becomes a lecture.
     if (this.retries >= MAX_RETRIES) {
-      this.setLinkStatus("Could not reach the Udemy tab. Reload the lecture tab, then click Reconnect.");
-      ui.reconnect.hidden = false;
+      if (hadState) {
+        this.setLesson("Video controls unavailable", "The lecture's video controls could not be reached.");
+        this.setLinkStatus("Could not reach the video controls of this tab. Reload the tab, then click Reconnect.");
+        ui.reconnect.hidden = false;
+        this.renderLessonBox();
+      }
       return;
     }
     this.retries += 1;
@@ -257,8 +264,10 @@ class Panel {
 
   private readonly onTabUpdated = (tabId: number, change: { status?: string }): void => {
     if (tabId !== this.tabId || this.tabClosed) return;
-    if (change.status === "loading" && this.port) {
-      this.setLinkStatus("The Udemy tab is loading…");
+    if (change.status === "loading") {
+      // Another page is loading in this tab: a result made before it was not made on that page.
+      this.dubbing.pageNavigated();
+      if (this.port) this.setLinkStatus("The Udemy tab is loading…");
     }
     if (change.status === "complete" && !this.port) this.connect(true);
   };
@@ -274,7 +283,7 @@ class Panel {
     ui.confirm.hidden = true;
     ui.reconnect.hidden = true;
     this.setLesson("—", "—");
-    this.setLinkStatus("The linked tab was closed. Open a Udemy lecture and send a selection to start again.");
+    this.setLinkStatus("The linked tab was closed. Open a page and send a selection to start again.");
     this.renderVideo();
     this.dubbing.tabClosed();
   }
@@ -329,6 +338,10 @@ class Panel {
   private renderVideo(): void {
     const video = this.state?.video;
     const connected = this.port !== null && this.state !== null;
+    // The video controls exist only for a Udemy lecture the tab reported: nowhere else is there a
+    // video MyDubb can control, so nothing is offered.
+    ui.videoBox.hidden = !(connected && this.state?.lesson);
+    this.renderLessonBox();
     let status: string;
     if (!connected) {
       status = "Video controls are unavailable until the lecture tab is connected.";
@@ -361,6 +374,17 @@ class Panel {
     ui.forward.disabled = !seekable;
     ui.timeCurrent.textContent = ready ? formatTime(ready.currentTime) : "--:--";
     ui.timeDuration.textContent = ready ? formatTime(ready.duration) : "--:--";
+  }
+
+  /**
+   * What the tab is linked to is told only once a Udemy lecture is connected (the same rule as the
+   * Video box), or when that link could not be restored; on any other page the panel starts with
+   * the transcript and says nothing about lectures.
+   */
+  private renderLessonBox(): void {
+    const show = (this.port !== null && !!this.state?.lesson) || !ui.reconnect.hidden || this.tabClosed;
+    ui.lessonBox.hidden = !show;
+    for (const row of ui.lectureRows) row.hidden = !show;
   }
 
   // ---- Commands -------------------------------------------------------------------------------
@@ -599,8 +623,9 @@ function shortTitle(title: string): string {
 
 const tabId = parseTabId(location.search);
 if (tabId === null) {
+  ui.lessonBox.hidden = false; // the one thing this panel can say
   ui.linkStatus.textContent =
-    "This panel is not linked to a tab. On a Udemy lecture, select text and choose “Send to MyDubb”, or click the MyDubb toolbar button.";
+    "This panel is not linked to a tab. On a page, select text and choose “Send to MyDubb”, or click the MyDubb toolbar button.";
   ui.transcript.disabled = true;
   ui.clear.disabled = true;
 } else {

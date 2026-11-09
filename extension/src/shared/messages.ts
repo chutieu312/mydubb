@@ -120,6 +120,20 @@ export const formKey = (tabId: number): string => `form:${tabId}`;
 export const jobKey = (tabId: number): string => `job:${tabId}`;
 /** The translation of the audio last loaded into the tab's player (panel/dubbing.ts). */
 export const loadedKey = (tabId: number): string => `loaded:${tabId}`;
+/**
+ * Which lecture the tab's result made before its first report was confirmed to belong to
+ * (panel/dubbing.ts): it is restored with the job and the audio when the panel is opened again.
+ */
+export const adoptedKey = (tabId: number): string => `adopted:${tabId}`;
+export interface AdoptedRecord {
+  userId: string;
+  connectionId: string;
+  lessonKey: string;
+}
+export function isAdoptedRecord(value: unknown): value is AdoptedRecord {
+  if (!isObject(value)) return false;
+  return typeof value.userId === "string" && typeof value.connectionId === "string" && isString(value.lessonKey, 200);
+}
 /** Everything the extension keeps for one tab; removed when the tab closes. */
 export const tabKeys = (tabId: number): string[] => [
   pendingKey(tabId),
@@ -127,6 +141,7 @@ export const tabKeys = (tabId: number): string[] => [
   formKey(tabId),
   jobKey(tabId),
   loadedKey(tabId),
+  adoptedKey(tabId),
 ];
 
 // ---- Validators ------------------------------------------------------------------------------

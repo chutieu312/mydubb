@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { MENU_ID, handleAuthChanged, handleMenuClick, handleTabRemoved, type WorkerApi } from "./handlers";
+import { MAX_SELECTION_CHARS } from "../shared/messages";
+import { MENU_ID, MENU_ITEM, handleAuthChanged, handleMenuClick, handleTabRemoved, type WorkerApi } from "./handlers";
 
 const lesson = { key: "c/1", courseSlug: "c", lectureId: "1", title: "L" };
 const PAGE = "https://www.udemy.com/course/c/learn/lecture/1";
@@ -27,6 +28,17 @@ function fakeApi(reply: unknown | Error) {
 
 const click = (extra: Partial<chrome.contextMenus.OnClickData> = {}) =>
   ({ menuItemId: MENU_ID, selectionText: "collapsed text", frameId: 0, pageUrl: PAGE, ...extra }) as chrome.contextMenus.OnClickData;
+
+describe("the menu item", () => {
+  it("is offered for selected text on any http(s) page only, without asking for site access", () => {
+    expect(MENU_ITEM).toEqual({
+      id: MENU_ID,
+      title: "Send to MyDubb",
+      contexts: ["selection"],
+      documentUrlPatterns: ["https://*/*", "http://*/*"],
+    });
+  });
+});
 
 describe("handleMenuClick", () => {
   it("opens the tab's own panel before any await, then stores the exact selection", async () => {
@@ -64,13 +76,64 @@ describe("handleMenuClick", () => {
     expect(await handleMenuClick(long.api, click(), { id: 1 })).toMatchObject({ text: "", problem: "too-long" });
   });
 
-  it("ignores other menu items, tabless clicks and non-Udemy pages", async () => {
+  it("ignores other menu items, tabless clicks and pages that are not http(s)", async () => {
     const { api } = fakeApi(null);
     expect(await handleMenuClick(api, click({ menuItemId: "other" }), { id: 1 })).toBeNull();
     expect(await handleMenuClick(api, click(), undefined)).toBeNull();
     expect(await handleMenuClick(api, click(), { id: -1 })).toBeNull();
-    expect(await handleMenuClick(api, click({ pageUrl: "https://evil.example/udemy.com" }), { id: 1 })).toBeNull();
+    for (const pageUrl of [undefined, "", "not a url", "file:///C:/notes.txt", "chrome://settings", "chrome-extension://abc/sidepanel.html", "ftp://example.test/a"]) {
+      expect(await handleMenuClick(api, click({ pageUrl }), { id: 1 })).toBeNull();
+    }
     expect(api.sidePanel.open).not.toHaveBeenCalled();
+    expect(api.session.set).not.toHaveBeenCalled();
+  });
+
+  describe("on an ordinary web page", () => {
+    const LOOM = "https://www.loom.com/share/abc123";
+
+    it("opens the tab's panel and hands over Chrome's selection text; no content script is asked", async () => {
+      const { api, calls } = fakeApi(new Error("there is no content script here"));
+      const text = "0:05\nFirst caption.\n0:21\nLast caption.";
+      const pending = await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: text }), { id: 12 });
+      expect(calls).toEqual(["setOptions", "open"]);
+      expect(api.sidePanel.open).toHaveBeenCalledWith({ tabId: 12 });
+      expect(api.tabsSendMessage).not.toHaveBeenCalled();
+      // The text as Chrome gave it: nothing reformatted or guessed (timestamps stay where they are).
+      expect(pending).toEqual({ id: "id-1", text, problem: null, lessonKey: null, at: 42 });
+      expect(api.session.set).toHaveBeenCalledWith({ "pending:12": pending });
+    });
+
+    it("accepts http pages and a selection inside an iframe", async () => {
+      const { api } = fakeApi(null);
+      expect(await handleMenuClick(api, click({ pageUrl: "http://intranet.test/notes", selectionText: "Hello" }), { id: 1 })).toMatchObject({
+        text: "Hello",
+        problem: null,
+      });
+      expect(
+        await handleMenuClick(api, click({ pageUrl: LOOM, frameId: 3, frameUrl: "https://embed.example/player", selectionText: "In a frame" }), { id: 2 }),
+      ).toMatchObject({ text: "In a frame", lessonKey: null });
+      expect(api.tabsSendMessage).not.toHaveBeenCalled();
+    });
+
+    it("records an empty selection or one over the limit as a problem, never as text", async () => {
+      const { api } = fakeApi(null);
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: "  \n " }), { id: 1 })).toMatchObject({ text: "", problem: "empty" });
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: undefined }), { id: 1 })).toMatchObject({ text: "", problem: "empty" });
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: "a".repeat(MAX_SELECTION_CHARS) }), { id: 1 })).toMatchObject({
+        problem: null,
+      });
+      expect(await handleMenuClick(api, click({ pageUrl: LOOM, selectionText: "a".repeat(MAX_SELECTION_CHARS + 1) }), { id: 1 })).toMatchObject({
+        text: "",
+        problem: "too-long",
+      });
+    });
+
+    it("does not treat a look-alike address as Udemy", async () => {
+      const { api } = fakeApi({ type: "mydubb:selection", text: "from a script", tooLong: false, lesson });
+      const pending = await handleMenuClick(api, click({ pageUrl: "https://www.udemy.com.evil.test/course/c/learn/lecture/1" }), { id: 1 });
+      expect(api.tabsSendMessage).not.toHaveBeenCalled();
+      expect(pending).toMatchObject({ text: "collapsed text", lessonKey: null });
+    });
   });
 
   it("flags the toolbar button when the panel cannot open, and still stores the selection", async () => {
@@ -87,7 +150,7 @@ it("forgets a closed tab's draft and pending selection", async () => {
   const { api } = fakeApi(null);
   await handleTabRemoved(api, 4);
   // The draft, the hand-over, the dubbing form and the followed job of that tab only.
-  expect(api.session.remove).toHaveBeenCalledWith(["pending:4", "draft:4", "form:4", "job:4", "loaded:4"]);
+  expect(api.session.remove).toHaveBeenCalledWith(["pending:4", "draft:4", "form:4", "job:4", "loaded:4", "adopted:4"]);
   // And its playback session, if the offscreen document has one.
   expect(api.notifyPlayer).toHaveBeenCalledWith({ type: "mydubb:player-tab-closed", tabId: 4 });
 });

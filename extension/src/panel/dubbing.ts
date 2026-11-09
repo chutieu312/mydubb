@@ -23,7 +23,8 @@ import {
 import { editTimestamp } from "../../../frontend/src/lib/timestampInput";
 import { formatSeconds, parseTimestamp, previewTargetDuration } from "../../../frontend/src/lib/timestamps";
 import { analyzeTranscriptTiming, captionClock, type TranscriptTiming } from "../../../frontend/src/lib/transcriptTiming";
-import { formKey, jobKey, loadedKey } from "../shared/messages";
+import { PAGE_SOURCE } from "../shared/lesson";
+import { adoptedKey, formKey, isAdoptedRecord, jobKey, loadedKey } from "../shared/messages";
 import { PLAYER_SEEK_SECONDS, sourceRangeOf, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
 import { clockLabel, isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
 import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
@@ -110,6 +111,15 @@ const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
 };
 
 type Storage = Pick<chrome.storage.StorageArea, "get" | "set" | "remove">;
+
+/**
+ * What the tab's results are tied to: a lecture key, PAGE_SOURCE for a tab that shows no lecture
+ * (an ordinary web page, or a Udemy page that is not a lecture), undefined while the tab has not
+ * reported a page state yet (then anything stored is kept and decided when it does).
+ */
+function sourceOf(lesson: CurrentLesson): string | undefined {
+  return lesson === undefined ? undefined : (lesson ?? PAGE_SOURCE);
+}
 
 /**
  * The source span of one Generate click, for Sync with video: plain mode, the two start times of
@@ -237,6 +247,7 @@ function dubbingUi() {
     videoPlace: byId("video-place"),
     playerLoad: byId<HTMLButtonElement>("player-load"),
     playerEmpty: byId("player-empty"),
+    sync: byId("sync"),
     syncStatus: byId("sync-status"),
     syncToggle: byId<HTMLButtonElement>("sync-toggle"),
     syncConfirm: byId("sync-confirm"),
@@ -357,6 +368,14 @@ export class Dubbing {
   private authGen = 0;
   private lessonGen = 0;
   private lastLesson: CurrentLesson = undefined;
+  // A result made before the tab's first report belongs to the tab on its own (key "page"). When
+  // that first report names a lecture and the tab has not navigated since the click, it is the page
+  // the click was made on, so the result stays with the tab as long as that lecture is shown
+  // (`adopted`). It is never linked to the video or Sync: only a real change of lecture ends it.
+  private carryPage = false;
+  private adopted: string | null = null;
+  private adoptedVersion = 0;
+  private adoptedStore: Promise<void> = Promise.resolve();
   private form: FormRecord = { ...EMPTY_FORM };
   private record: JobRecord | null = null;
   // The Generate click whose request has not been answered yet (one at a time).
@@ -435,16 +454,38 @@ export class Dubbing {
     this.wirePlayer(signal);
     ui.speed.replaceChildren(...AUDIO_SPEEDS.map(speedOption));
 
-    const stored = await this.deps.storage.get([AUTH_KEY, formKey(this.deps.tabId), jobKey(this.deps.tabId), loadedKey(this.deps.tabId)]);
+    const stored = await this.deps.storage.get([
+      AUTH_KEY,
+      formKey(this.deps.tabId),
+      jobKey(this.deps.tabId),
+      loadedKey(this.deps.tabId),
+      adoptedKey(this.deps.tabId),
+    ]);
     if (this.disposed) return;
     const form = stored[formKey(this.deps.tabId)];
     if (isFormRecord(form) && this.formEdits === 0) this.form = form;
     this.applyAuth(stored[AUTH_KEY], false);
+    // The confirmed lecture of a result made before the tab's first report: valid only for this
+    // account and while the tab shows that lecture (or has not said yet; decided when it does).
+    const adopted = stored[adoptedKey(this.deps.tabId)];
+    const account = this.account();
+    const shown = this.host.currentLesson();
+    if (
+      isAdoptedRecord(adopted) &&
+      account &&
+      adopted.userId === account.userId &&
+      adopted.connectionId === account.connectionId &&
+      (shown === undefined || shown === adopted.lessonKey)
+    ) {
+      this.adopted = adopted.lessonKey;
+    } else if (adopted !== undefined) {
+      this.storeAdopted(null);
+    }
     const loaded = stored[loadedKey(this.deps.tabId)];
-    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), this.host.currentLesson())) this.loaded = loaded;
+    if (isLoadedRecord(loaded) && loadedBelongs(loaded, this.account(), this.sourceFor(loaded.lessonKey))) this.loaded = loaded;
     else if (loaded !== undefined) this.clearLoaded(); // another owner, an older shape or no account
     const record = stored[jobKey(this.deps.tabId)];
-    if (isJobRecord(record) && recordBelongs(record, this.account(), this.host.currentLesson())) {
+    if (isJobRecord(record) && recordBelongs(record, this.account(), this.sourceFor(record.lessonKey))) {
       this.record = record;
       this.renderRecord();
       if (record.state === "created") {
@@ -457,6 +498,9 @@ export class Dubbing {
     }
     this.restored = true;
     this.deps.player.subscribe(() => this.checkPlayer());
+    // Attached from the start: the tab's session (kept from before the panel was closed) is seen,
+    // and ended if it is not this tab's any more, whether or not this panel loads audio.
+    void this.deps.player.ready();
     // What happened while reading, in order: the lecture rule first, then the transcript.
     const held = this.heldLesson;
     this.heldLesson = null;
@@ -503,15 +547,26 @@ export class Dubbing {
       this.heldLesson = { key };
       return;
     }
+    const first = this.lastLesson === undefined;
     if (key !== this.lastLesson) {
       if (this.lastLesson !== undefined) this.lessonGen += 1;
       this.lastLesson = key;
     }
-    if (this.record && !recordBelongs(this.record, this.account(), key)) {
+    if (this.adopted !== null && key !== this.adopted) {
+      // The tab left the lecture its first report named: a real change, what was made for it goes.
+      this.setAdopted(null);
+      this.dropJob(LESSON_CHANGED);
+    }
+    // The first report of a tab on which something was generated before it came: the same page.
+    if (first && this.carryPage && key !== null) this.setAdopted(key);
+    this.carryPage = false;
+    if (this.record && !recordBelongs(this.record, this.account(), this.sourceFor(this.record.lessonKey, key))) {
       this.dropJob(LESSON_CHANGED);
     }
     // The translation of the loaded audio goes with its lecture, with or without a job record.
-    if (this.loaded && !loadedBelongs(this.loaded, this.account(), key)) this.clearLoaded();
+    if (this.loaded && !loadedBelongs(this.loaded, this.account(), this.sourceFor(this.loaded.lessonKey, key))) {
+      this.clearLoaded();
+    }
     this.checkPlayer();
     if (this.form.lessonKey !== key) {
       // The times belong to the transcript of one lecture; the language, voice and speed stay.
@@ -522,6 +577,36 @@ export class Dubbing {
       this.scheduleSave();
       this.renderForm();
     }
+  }
+
+  /** Keeps the confirmed lecture of the tab's early result, in memory and for a reopened panel. */
+  private setAdopted(lessonKey: string | null): void {
+    this.adopted = lessonKey;
+    const account = this.account();
+    this.storeAdopted(lessonKey !== null && account ? { ...account, lessonKey } : null);
+  }
+
+  private storeAdopted(value: { userId: string; connectionId: string; lessonKey: string } | null): void {
+    const version = (this.adoptedVersion += 1);
+    const key = adoptedKey(this.deps.tabId);
+    const run = this.adoptedStore.then(async () => {
+      if (version !== this.adoptedVersion) return;
+      await (value ? this.deps.storage.set({ [key]: value }) : this.deps.storage.remove(key));
+    });
+    this.adoptedStore = run.catch(() => undefined);
+  }
+
+  /** The tab started loading another page: a result made before it is not that page's. */
+  pageNavigated(): void {
+    this.carryPage = false;
+  }
+
+  /**
+   * What an item with this key is compared with: the tab's source, except that a result made for
+   * the tab before its first report stays the tab's while that report's lecture is shown.
+   */
+  private sourceFor(itemKey: string | null, tabKey: CurrentLesson = this.host.currentLesson()): string | undefined {
+    return itemKey === PAGE_SOURCE && this.adopted !== null && this.adopted === tabKey ? PAGE_SOURCE : sourceOf(tabKey);
   }
 
   transcriptChanged(): void {
@@ -563,6 +648,7 @@ export class Dubbing {
     // Also when no job record is left (a refused Generate): the translation is the old account's.
     // Not while restoring, which has still to decide about the stored copy.
     if (this.restored) this.clearLoaded();
+    if (hadAuth) this.setAdopted(null);
     if (hadAuth) this.deps.player.end();
     this.checkPlayer();
     this.setFieldErrors([]);
@@ -863,16 +949,17 @@ export class Dubbing {
     if (this.sendingOp !== null || !this.meta) return;
     const auth = this.auth;
     if (!auth) return;
-    const lessonKey = this.host.currentLesson();
+    // A tab without a Udemy lecture (or not yet reporting one) generates for itself: its result is
+    // tied to this tab, account and click like any other, and dropped if a lecture shows up.
+    const lesson = this.host.currentLesson();
+    const lessonKey = sourceOf(lesson) ?? PAGE_SOURCE;
+    // Nothing waits for the page: before its first report the click belongs to the tab on its own.
+    if (lesson === undefined) this.carryPage = true;
     const transcript = this.host.transcript();
     this.setFieldErrors([]);
     ui.formError.textContent = "";
-    if (typeof lessonKey !== "string") {
-      ui.formError.textContent = "Open the Udemy lecture this transcript belongs to, then try again.";
-      return;
-    }
     if (transcript.trim() === "") {
-      ui.formError.textContent = "There is no transcript. Send a selection from the lecture first.";
+      ui.formError.textContent = "There is no transcript. Paste one above, or select text on the page and choose “Send to MyDubb”.";
       return;
     }
 
@@ -1170,8 +1257,9 @@ export class Dubbing {
    */
   private async loadAudio(auth: StoredAuth, signal: AbortSignal, current: () => boolean): Promise<void> {
     const target = this.resultAudio;
-    const lessonKey = target?.record.lessonKey ?? this.host.currentLesson();
-    const sync = target?.sync ?? null;
+    const lessonKey = target?.record.lessonKey ?? sourceOf(this.host.currentLesson());
+    // Sync moves a lecture video: an ordinary page has none, so its audio is listened to on its own.
+    const sync = lessonKey === PAGE_SOURCE ? null : (target?.sync ?? null);
     const jobId = target?.record.jobId;
     if (!target || !jobId || typeof lessonKey !== "string") return;
     const ui = this.ui;
@@ -1220,7 +1308,7 @@ export class Dubbing {
       }
       this.rememberLoaded(target.translation, { userId: auth.user.id, connectionId: auth.connectionId, lessonKey });
       ui.audioStatus.textContent = AUDIO_READY;
-      void this.placeVideo(target.record, lessonKey, current);
+      if (lessonKey !== PAGE_SOURCE) void this.placeVideo(target.record, lessonKey, current);
     } finally {
       this.loadingAudio = false;
       if (!this.disposed) this.checkPlayer();
@@ -1349,7 +1437,7 @@ export class Dubbing {
 
   private sessionBelongs(view: PanelPlayerView): boolean {
     const auth = this.auth;
-    const lesson = this.host.currentLesson();
+    const lesson = this.sourceFor(view.lessonKey);
     return (
       !!auth &&
       view.owner.userId === auth.user.id &&
@@ -1370,7 +1458,13 @@ export class Dubbing {
     const view = this.deps.player.view;
     if (view && !this.sessionBelongs(view)) {
       this.deps.player.end(view.sessionId);
-    } else if (view && !view.linked && this.linkedFor !== view.sessionId && this.host.currentLesson() === view.lessonKey) {
+    } else if (
+      view &&
+      view.lessonKey !== PAGE_SOURCE &&
+      !view.linked &&
+      this.linkedFor !== view.sessionId &&
+      this.host.currentLesson() === view.lessonKey
+    ) {
       this.linkedFor = view.sessionId;
       this.host.linkPlayback(view.lessonKey);
     }
@@ -1410,13 +1504,18 @@ export class Dubbing {
         ui.playerDuration.textContent = formatTime(view.duration);
       }
       ui.playerSeek.setAttribute("aria-valuetext", `${formatTime(view.currentTime)} of ${formatTime(view.duration)}`);
+      // The floating player and Sync with video belong to a Udemy lecture page: shown only for one.
+      const lecture = view.lessonKey !== PAGE_SOURCE;
+      ui.playerFloating.hidden = !lecture;
+      ui.sync.hidden = !lecture;
       ui.playerFloating.textContent = view.floating ? "Hide floating player" : "Show floating player";
       ui.playerProblem.textContent = view.problem
         ? PLAYER_PROBLEMS[view.problem]
         : view.status === "loading"
           ? "Loading the audio…"
           : "";
-      this.renderSync(view);
+      if (lecture) this.renderSync(view);
+      else this.confirmingSync = false;
     } else {
       this.confirmingSync = false;
       ui.playerState.textContent = "";
@@ -1483,6 +1582,7 @@ export class Dubbing {
     if (endPlayback) {
       this.deps.player.end();
       this.clearLoaded();
+      if (this.adopted !== null) this.setAdopted(null);
     }
     if (this.record) void this.forgetRecord();
     this.record = null;

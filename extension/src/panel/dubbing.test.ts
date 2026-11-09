@@ -1685,3 +1685,574 @@ describe("the stored translation of the loaded audio (loaded:<tab>)", () => {
     });
   });
 });
+
+describe("an ordinary web page (no Udemy lecture, no video)", () => {
+  const mp3 = () => new Blob(["mp3"], { type: "audio/mpeg" });
+  const text = (id: string) => $(id).textContent;
+
+  /** The panel of a tab whose page never reported a state: Loom, any site without a content script. */
+  async function onWebPage(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
+    lesson = undefined;
+    const made = make(storage, api);
+    await made.dubbing.start();
+    return made;
+  }
+
+  const twoJobs = () =>
+    fakeApi({
+      createJob: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "job-1", status: "queued" })
+        .mockResolvedValueOnce({ id: "job-2", status: "queued" }),
+      getJob: vi.fn(async (_token: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_token: string, id: string) => ({
+        ...RESULT,
+        job_id: id,
+        audio: { ...RESULT.audio, url: `/api/jobs/${id}/result/audio` },
+        translation: { ...RESULT.translation, text: `Bản dịch ${id}` },
+      })),
+    });
+
+  it("generates with a connected account and a valid form, then loads the audio paused for its own tab", async () => {
+    const { api, storage } = await onWebPage();
+    expect($<HTMLButtonElement>("generate").disabled).toBe(false);
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.createJob.mock.calls[0]?.[1]).toEqual({
+      transcript,
+      first_sentence_start: "00:00:10",
+      last_sentence_start: "00:06:10",
+      voice: "AndrewMultilingual",
+      speed: 1,
+      target_language: "vietnamese",
+    });
+    // Tied to this tab, account and click; the page has no lecture key.
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page", userId: "u1", connectionId: "conn-a", operationId: "id-1" });
+    expect(player.opened).toHaveLength(1);
+    expect(player.opened[0]?.request).toMatchObject({
+      lessonKey: "page",
+      owner: { userId: "u1", connectionId: "conn-a", jobId: "job-1", operationId: "id-1" },
+      choices: { speed: 1 },
+      sync: null,
+    });
+    expect(player.view).toMatchObject({ paused: true, currentTime: 0, lessonKey: "page" });
+    expect(player.commands).toEqual([]);
+    expect(text("audio-status")).toBe("Ready. Press play when you want to listen.");
+    expect(text("translation")).toBe("<b>نص</b>");
+    // Nothing of the lecture machinery: no page to link, no video to place.
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(text("video-place")).toBe("");
+    // The player controls work; the video-only controls are not offered.
+    expect($("player").hidden).toBe(false);
+    $<HTMLButtonElement>("player-play").click();
+    expect(player.commands).toEqual([{ command: "play" }]);
+    expect($("sync").hidden).toBe(true);
+    expect($<HTMLButtonElement>("player-floating").hidden).toBe(true);
+  });
+
+  it("keeps the pasted line breaks and timestamps, and sends them through the same timed request", async () => {
+    transcript = "0:05.480\nFirst caption.\n0:12\nSecond caption.";
+    const { dubbing, api } = await onWebPage();
+    dubbing.transcriptChanged();
+    expect($<HTMLInputElement>("first-start").value).toBe("00:00:05");
+    expect($<HTMLInputElement>("last-start").value).toBe("00:00:12");
+    expect($("timing-text").textContent).toContain("2 captions from 0:05.480 to 0:12");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    const [, body] = api.createJob.mock.calls[0] as [string, { transcript: string; timing_mode?: string }];
+    expect(body.transcript).toBe(transcript);
+    expect(body.timing_mode).toBe("timed");
+    // The source span is still recorded for display; Sync stays unavailable without a lecture.
+    expect(player.opened[0]?.request.choices.sourceRange).toBe("00:00:05.480 → 00:00:12");
+    expect(player.opened[0]?.request.sync).toBeNull();
+  });
+
+  it("a transcript whose timestamps Chrome flattened to one line is sent as plain text, not guessed", async () => {
+    transcript = "0:05 First caption. 0:12 Second caption.";
+    const { dubbing, api } = await onWebPage();
+    dubbing.transcriptChanged();
+    expect($<HTMLInputElement>("first-start").value).toBe("");
+    typeTime("first-start", "000005");
+    typeTime("last-start", "000012");
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    const [, body] = api.createJob.mock.calls[0] as [string, { transcript: string; timing_mode?: string }];
+    expect(body.transcript).toBe(transcript);
+    expect(body).not.toHaveProperty("timing_mode");
+  });
+
+  it("asks for a transcript instead of sending nothing, and keeps the server's field validation", async () => {
+    transcript = "   ";
+    const { api } = await onWebPage();
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    expect(text("form-error")).toMatch(/Paste one above, or select text on the page/);
+    expect(api.createJob).not.toHaveBeenCalled();
+    transcript = "Hello.";
+    typeTime("first-start", "000100");
+    typeTime("last-start", "000050");
+    api.createJob.mockRejectedValueOnce(
+      new MyDubbError(422, "validation_error", "Check the highlighted fields.", [{ field: "last_sentence_start", message: "Must be after the first sentence start time." }]),
+    );
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    expect($("last-start").getAttribute("aria-invalid")).toBe("true");
+    expect(player.opened).toHaveLength(0);
+  });
+
+  it("is also allowed on a Udemy page that is not a lecture, and its result stays there", async () => {
+    lesson = null;
+    const { dubbing } = make();
+    await dubbing.start();
+    dubbing.lessonState(null);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(player.opened[0]?.request.lessonKey).toBe("page");
+    dubbing.lessonState(null);
+    expect(player.view?.sessionId).toBe("session-1");
+    expect($("player").hidden).toBe(false);
+  });
+
+  it("keeps the earlier audio while the next job downloads and when a later job fails", async () => {
+    let deliver!: (blob: Blob) => void;
+    const api = twoJobs();
+    api.getAudio.mockResolvedValueOnce(mp3()).mockImplementationOnce(() => new Promise((resolve) => (deliver = resolve)));
+    await onWebPage(undefined, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    player.set({ ...player.view!, paused: false, currentTime: 4 });
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    // Downloading: the earlier audio, translation and position are still there.
+    expect(player.view).toMatchObject({ owner: { jobId: "job-1" }, paused: false, currentTime: 4 });
+    expect(text("translation")).toBe("Bản dịch job-1");
+    expect(text("audio-status")).toBe("Loading the audio…");
+    deliver(mp3());
+    await settle(12);
+    // The new one replaces it with its own translation, paused at its start.
+    expect(player.view).toMatchObject({ owner: { jobId: "job-2" }, paused: true, currentTime: 0 });
+    expect(text("translation")).toBe("Bản dịch job-2");
+
+    // A third Generate whose job fails keeps what is loaded.
+    api.createJob.mockResolvedValueOnce({ id: "job-3", status: "queued" });
+    api.getJob.mockResolvedValueOnce({ id: "job-3", status: "failed", error: { code: "x", message: "The speech quota is used up." } });
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(text("job-error")).toMatch(/speech quota is used up/);
+    expect(player.view?.owner.jobId).toBe("job-2");
+    expect(text("translation")).toBe("Bản dịch job-2");
+  });
+
+  it("a failed download keeps the earlier audio; Load audio retries without a new job", async () => {
+    const api = twoJobs();
+    api.getAudio
+      .mockResolvedValueOnce(mp3())
+      .mockRejectedValueOnce(new MyDubbError(0, "timeout", "MyDubb did not answer in time."))
+      .mockResolvedValueOnce(mp3());
+    await onWebPage(undefined, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(player.view?.owner.jobId).toBe("job-1");
+    expect(text("audio-status")).toMatch(/could not be loaded/);
+    $<HTMLButtonElement>("player-load").click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(2);
+    expect(player.view?.owner.jobId).toBe("job-2");
+  });
+
+  it("drops the job, its late answer and its result when a Udemy lecture shows up in the tab", async () => {
+    let finish!: (value: unknown) => void;
+    const api = fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+    const { dubbing, storage } = await onWebPage(undefined, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    dubbing.pageNavigated(); // the tab loaded another page (a Udemy lecture) after the click
+    dubbing.lessonState("demo-course/2");
+    finish(job("completed"));
+    await settle(10);
+    expect(api.getResult).not.toHaveBeenCalled();
+    expect(player.opened).toHaveLength(0);
+    expect($("result-section").hidden).toBe(true);
+    expect(text("listen-notice")).toMatch(/lecture changed/);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+  });
+
+  it("ends the audio of the page once a lecture is reported", async () => {
+    const { dubbing } = await onWebPage();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(player.view?.lessonKey).toBe("page");
+    dubbing.pageNavigated();
+    dubbing.lessonState("demo-course/2");
+    expect(player.view).toBeNull();
+    expect($("player-section").hidden).toBe(true);
+  });
+
+  it("an answer for the previous account is dropped", async () => {
+    let answer!: (value: unknown) => void;
+    const api = fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) });
+    const { dubbing } = await onWebPage(undefined, api);
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+    answer(job("queued"));
+    await settle(12);
+    expect(api.getJob).not.toHaveBeenCalled();
+    expect(player.opened).toHaveLength(0);
+  });
+
+  it("the audio of the page stops when the account changes", async () => {
+    const { dubbing } = await onWebPage();
+    $<HTMLButtonElement>("generate").click();
+    await settle(12);
+    expect(player.view).not.toBeNull();
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+    expect(player.view).toBeNull();
+  });
+
+  it("a closed tab drops the job and disables Generate", async () => {
+    const { dubbing } = await onWebPage();
+    dubbing.tabClosed();
+    expect($<HTMLButtonElement>("generate").disabled).toBe(true);
+  });
+
+  it("a reopened panel resumes the job of the page, and drops it if the tab turns out to show a lecture", async () => {
+    const record: JobRecord = {
+      operationId: "op-1",
+      userId: "u1",
+      connectionId: "conn-a",
+      lessonKey: "page",
+      state: "created",
+      jobId: "job-1",
+      sentAt: 0,
+      choices: { languageLabel: "Arabic", voiceLabel: "Emma", speed: 1, timed: false, firstStart: "00:00:10", lastStart: "00:06:10" },
+    };
+    const { api } = await onWebPage(fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record }));
+    await settle(10);
+    expect(api.getJob).toHaveBeenCalledWith(AUTH.token, "job-1", expect.any(AbortSignal));
+    expect(api.createJob).not.toHaveBeenCalled();
+    expect(player.opened[0]?.request.lessonKey).toBe("page");
+
+    player = new FakePlayer();
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH, [`job:${TAB}`]: record });
+    const second = make(storage);
+    // The tab's page state (a lecture) arrives while the stored snapshot is still being read.
+    second.dubbing.lessonState("demo-course/3");
+    await second.dubbing.start();
+    await settle(10);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(player.opened).toHaveLength(0);
+  });
+});
+
+describe("the tab's first report arrives after Generate (the video or lecture is found late)", () => {
+  const text = (id: string) => $(id).textContent;
+  const generate = () => $<HTMLButtonElement>("generate");
+
+  /** The panel before the tab has reported anything: Generate is allowed all the same. */
+  async function beforeReport(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
+    lesson = undefined;
+    const made = make(storage, api);
+    await made.dubbing.start();
+    return made;
+  }
+
+  function tabReports(dubbing: Dubbing, key: string | null) {
+    lesson = key;
+    dubbing.lessonState(key);
+  }
+
+  it("Generate is available without any report, and sends one request under the tab's own key", async () => {
+    const { api, storage } = await beforeReport();
+    expect(generate().disabled).toBe(false);
+    generate().click();
+    await settle(12);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page", userId: "u1", connectionId: "conn-a" });
+    expect(player.opened[0]?.request).toMatchObject({ lessonKey: "page", sync: null });
+  });
+
+  it("a report that arrives while the request is on its way keeps the job: followed, translated, loaded, one POST", async () => {
+    let answer!: (value: unknown) => void;
+    const api = fakeApi({ createJob: vi.fn(() => new Promise((resolve) => (answer = resolve))) });
+    const { dubbing, storage } = await beforeReport(undefined, api);
+    generate().click();
+    await settle();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    tabReports(dubbing, "demo-course/2");
+    answer(job("queued"));
+    await settle(14);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.getJob).toHaveBeenCalledWith(AUTH.token, "job-1", expect.any(AbortSignal));
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page", state: "created", jobId: "job-1" });
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(player.opened).toHaveLength(1);
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: true, currentTime: 0 });
+    // Not tied to the video that was found: no link, no placement, no Sync.
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(player.opened[0]?.request.sync).toBeNull();
+    expect($("sync").hidden).toBe(true);
+  });
+
+  it("a report that arrives while the job is still running keeps following it", async () => {
+    let finish!: (value: unknown) => void;
+    const api = fakeApi({ getJob: vi.fn(() => new Promise((resolve) => (finish = resolve))) });
+    const { dubbing } = await beforeReport(undefined, api);
+    generate().click();
+    await settle();
+    tabReports(dubbing, "demo-course/2");
+    expect(text("listen-notice")).toBe("");
+    finish(job("completed"));
+    await settle(14);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(api.getResult).toHaveBeenCalledTimes(1);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(player.view?.owner.jobId).toBe("job-1");
+  });
+
+  it("a report after the audio is loaded or playing leaves it as it is: no Sync, no seek, no link", async () => {
+    const { dubbing } = await beforeReport();
+    generate().click();
+    await settle(12);
+    player.set({ ...player.view!, paused: false, currentTime: 7 });
+    tabReports(dubbing, "demo-course/2");
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: false, currentTime: 7 });
+    expect(player.ended).toEqual([]);
+    expect(player.commands).toEqual([]);
+    expect(player.syncs).toEqual([]);
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect($("sync").hidden).toBe(true);
+    // The same lecture reported again, or the page port reconnecting, changes nothing.
+    tabReports(dubbing, "demo-course/2");
+    dubbing.pageConnected();
+    expect(player.view?.lessonKey).toBe("page");
+    expect(player.ended).toEqual([]);
+  });
+
+  it("a real change afterwards ends it: another lecture, or leaving the lecture", async () => {
+    for (const next of ["demo-course/3", null]) {
+      player = new FakePlayer();
+      const { dubbing, storage } = await beforeReport();
+      generate().click();
+      await settle(12);
+      tabReports(dubbing, "demo-course/2");
+      expect(player.view).not.toBeNull();
+      tabReports(dubbing, next);
+      expect(player.view).toBeNull();
+      await settle();
+      expect(storage.data[`job:${TAB}`]).toBeUndefined();
+      expect($("result-section").hidden).toBe(true);
+      expect(text("listen-notice")).toMatch(/lecture changed/);
+      document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    }
+  });
+
+  it("a tab that navigated after the click is not the page the click was made on", async () => {
+    const { dubbing, storage } = await beforeReport();
+    generate().click();
+    await settle(12);
+    dubbing.pageNavigated();
+    tabReports(dubbing, "demo-course/2");
+    expect(player.view).toBeNull();
+    await settle();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+  });
+
+  it("a click made after the report files under the lecture; the earlier audio plays until the new one is loaded", async () => {
+    let deliver!: (blob: Blob) => void;
+    const api = fakeApi({
+      createJob: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "job-1", status: "queued" })
+        .mockResolvedValueOnce({ id: "job-2", status: "queued" }),
+      getJob: vi.fn(async (_t: string, id: string) => ({ id, status: "completed" })),
+      getResult: vi.fn(async (_t: string, id: string) => ({
+        ...RESULT,
+        job_id: id,
+        audio: { ...RESULT.audio, url: `/api/jobs/${id}/result/audio` },
+        translation: { ...RESULT.translation, text: `Bản dịch ${id}` },
+      })),
+    });
+    api.getAudio.mockResolvedValueOnce(new Blob(["a"], { type: "audio/mpeg" })).mockImplementationOnce(() => new Promise((resolve) => (deliver = resolve)));
+    const { dubbing, storage } = await beforeReport(undefined, api);
+    generate().click();
+    await settle(12);
+    tabReports(dubbing, "demo-course/2");
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    generate().click();
+    await settle(12);
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "demo-course/2", jobId: "job-2" });
+    expect(player.view?.owner.jobId).toBe("job-1"); // still the earlier audio
+    expect(text("translation")).toBe("Bản dịch job-1");
+    deliver(new Blob(["b"], { type: "audio/mpeg" }));
+    await settle(12);
+    expect(player.view).toMatchObject({ lessonKey: "demo-course/2", owner: { jobId: "job-2" } });
+    expect(text("translation")).toBe("Bản dịch job-2");
+    expect(api.createJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("an account change or a closed tab ends it as before", async () => {
+    const { dubbing } = await beforeReport();
+    generate().click();
+    await settle(12);
+    tabReports(dubbing, "demo-course/2");
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+    expect(player.view).toBeNull();
+    const second = await beforeReport();
+    generate().click();
+    await settle(12);
+    tabReports(second.dubbing, "demo-course/2");
+    second.dubbing.tabClosed();
+    expect(generate().disabled).toBe(true);
+  });
+});
+
+describe("the panel is closed and opened again after the early result was confirmed for a lecture", () => {
+  const text = (id: string) => $(id).textContent;
+  const generate = () => $<HTMLButtonElement>("generate");
+
+  /** First panel: Generate before any report, then the tab reports lecture 2; returns the shared storage. */
+  async function earlyResult(api: ReturnType<typeof fakeApi>) {
+    lesson = undefined;
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    const first = make(storage, api);
+    await first.dubbing.start();
+    generate().click();
+    await settle(12);
+    lesson = "demo-course/2";
+    first.dubbing.lessonState("demo-course/2");
+    return { storage, first };
+  }
+
+  /** The second panel on the same tab: the page state arrives while the stored snapshot is read. */
+  async function reopen(storage: ReturnType<typeof fakeStorage>, api: ReturnType<typeof fakeApi>, key: string | null) {
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    lesson = key;
+    const second = make(storage, api);
+    if (key !== undefined) second.dubbing.lessonState(key);
+    await second.dubbing.start();
+    await settle(14);
+    return second;
+  }
+
+  it("stores the confirmed lecture with the account, next to the job", async () => {
+    const { storage } = await earlyResult(fakeApi());
+    await settle();
+    expect(storage.data[`adopted:${TAB}`]).toEqual({ userId: "u1", connectionId: "conn-a", lessonKey: "demo-course/2" });
+    expect(storage.data[`job:${TAB}`]).toMatchObject({ lessonKey: "page" });
+  });
+
+  it("a job still running: the reopened panel follows it and gets its translation and audio, with one POST", async () => {
+    let first = true;
+    const api = fakeApi({
+      getJob: vi.fn(async () => (first ? job("processing") : job("completed"))),
+    });
+    // The first panel stops while the job runs (the fake answers "processing").
+    const { storage, first: p1 } = await earlyResult(api);
+    await settle(4);
+    p1.dubbing.dispose();
+    first = false;
+    expect(player.opened).toHaveLength(0);
+    await reopen(storage, api, "demo-course/2");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect(player.opened).toHaveLength(1);
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: true, currentTime: 0 });
+    expect(player.opened[0]?.request.sync).toBeNull();
+    // Nothing of the video: no link, no placement, no Sync, no command.
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(player.syncs).toEqual([]);
+    expect(player.commands).toEqual([]);
+    expect($("sync").hidden).toBe(true);
+  });
+
+  it("audio already loaded: the reopened panel shows the same result and does not touch the playing audio", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    player.set({ ...player.view!, paused: false, currentTime: 5 });
+    first.dubbing.dispose();
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    await reopen(storage, api, "demo-course/2");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(player.view).toMatchObject({ lessonKey: "page", paused: false, currentTime: 5, owner: { jobId: "job-1" } });
+    expect(player.ended).toEqual([]);
+    expect(text("translation")).toBe("<b>نص</b>");
+    expect($("result-section").hidden).toBe(false);
+    expect($("player").hidden).toBe(false);
+    expect(links).toEqual([]);
+    expect(placed).toEqual([]);
+    expect(player.syncs).toEqual([]);
+    expect(player.commands).toEqual([]);
+    expect(storage.data[`adopted:${TAB}`]).toMatchObject({ lessonKey: "demo-course/2" });
+  });
+
+  it("another lecture while the panel was closed: nothing is restored, the audio ends, nothing is sent", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    first.dubbing.dispose();
+    await reopen(storage, api, "demo-course/3");
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(player.view).toBeNull();
+    expect($("result-section").hidden).toBe(true);
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(storage.data[`loaded:${TAB}`]).toBeUndefined();
+    expect(storage.data[`adopted:${TAB}`]).toBeUndefined();
+  });
+
+  it("a state that arrives after the restore is judged against the stored lecture", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    first.dubbing.dispose();
+    document.body.innerHTML = html.slice(html.indexOf("<main>"), html.indexOf("</main>") + 7);
+    lesson = undefined;
+    const second = make(storage, api);
+    await second.dubbing.start();
+    await settle(8);
+    expect(player.view?.lessonKey).toBe("page"); // not decided yet: kept
+    lesson = "demo-course/3";
+    second.dubbing.lessonState("demo-course/3");
+    await settle(8);
+    expect(player.view).toBeNull();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(storage.data[`adopted:${TAB}`]).toBeUndefined();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("another account: nothing is restored", async () => {
+    const api = fakeApi();
+    const { storage, first } = await earlyResult(api);
+    first.dubbing.dispose();
+    storage.data[AUTH_KEY] = OTHER;
+    await reopen(storage, api, "demo-course/2");
+    expect(player.view).toBeNull();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(storage.data[`adopted:${TAB}`]).toBeUndefined();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("a page result that was never confirmed for a lecture is still dropped when a lecture reports", async () => {
+    lesson = undefined;
+    const api = fakeApi();
+    const storage = fakeStorage({ [AUTH_KEY]: AUTH });
+    const first = make(storage, api);
+    await first.dubbing.start();
+    generate().click();
+    await settle(12);
+    first.dubbing.dispose(); // closed before any report: no proof of which page it was
+    await reopen(storage, api, "demo-course/2");
+    expect(player.view).toBeNull();
+    expect(storage.data[`job:${TAB}`]).toBeUndefined();
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+  });
+});

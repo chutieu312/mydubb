@@ -13,6 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const extensionDir = join(here, "..", "dist-test");
 const fixtureHtml = readFileSync(join(here, "fixtures", "lecture.html"), "utf8");
 const fixtureJs = readFileSync(join(here, "fixtures", "fixture.js"), "utf8");
+const webpageHtml = readFileSync(join(here, "fixtures", "webpage.html"), "utf8");
 // A real MP3: the backend's 3 s mock-provider fixture (CBR, no header frame) ten times over, so
 // the player really decodes a 30 s MP3 and seeking has room.
 const fixtureMp3 = Buffer.concat(
@@ -20,6 +21,10 @@ const fixtureMp3 = Buffer.concat(
 );
 export const ORIGIN = "https://www.udemy.com";
 export const MYDUBB = "https://mydubb.test";
+/** Synthetic stand-ins for an ordinary video-host page (no video, no content script) and a plain http page. */
+export const WEB_ORIGIN = "https://www.loom.com";
+export const HTTP_ORIGIN = "http://intranet.test";
+export const webUrl = (id: string | number) => `${WEB_ORIGIN}/share/${id}`;
 export const lectureUrl = (id: number, query = "") => `${ORIGIN}/course/demo-course/learn/lecture/${id}${query}`;
 
 export const META = {
@@ -276,6 +281,14 @@ export const test = base.extend<Fixtures>({
       if (url.origin === ORIGIN && /^\/course\/demo-course\/?$/.test(url.pathname)) {
         return route.fulfill({ contentType: "text/html", body: fixtureHtml.replace("Lecture __LECTURE__", "Course overview") });
       }
+      // Ordinary web pages: a page without a video, served over https and over plain http.
+      const shared = /^\/share\/([\w-]+)$/.exec(url.pathname);
+      if (url.origin === WEB_ORIGIN && shared) {
+        return route.fulfill({ contentType: "text/html", body: webpageHtml.replace("__PAGE__", shared[1]!) });
+      }
+      if (url.origin === HTTP_ORIGIN) {
+        return route.fulfill({ contentType: "text/html", body: webpageHtml.replace("__PAGE__", "http") });
+      }
       if (url.origin === "https://example.test") {
         return route.fulfill({ contentType: "text/html", body: "<title>Other site</title><video></video>" });
       }
@@ -319,6 +332,46 @@ export async function openLecture(context: BrowserContext, worker: Worker, id: n
   let tabId = -1;
   await expect.poll(async () => (tabId = await tabIdFor(worker, `demo-course/${id}`).catch(() => -1))).toBeGreaterThan(-1);
   return { page, tabId };
+}
+
+/** Opens an ordinary web page (no content script runs there) and finds its tab id by what is new. */
+export async function openWebPage(context: BrowserContext, worker: Worker, url: string) {
+  const ids = () => worker.evaluate(async () => (await chrome.tabs.query({})).map((t) => t.id!));
+  const before = new Set(await ids());
+  const page = await context.newPage();
+  await page.goto(url);
+  const fresh = (await ids()).filter((id) => !before.has(id));
+  if (fresh.length !== 1) throw new Error(`expected one new tab, found ${fresh.length}`);
+  return { page, tabId: fresh[0]! };
+}
+
+/** The text of the fixture transcript as the page's selection gives it (line breaks kept). */
+export function selectTranscript(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById("transcript")!);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return selection.toString();
+  });
+}
+
+/**
+ * Runs the real "Send to MyDubb" handler with the text Chrome would pass as selectionText. The
+ * native context menu cannot be driven by Playwright, so this stands in for the click (the menu
+ * itself is accepted by hand on a real page).
+ */
+export function sendMenuSelection(worker: Worker, tabId: number, selectionText: string, pageUrl: string) {
+  return worker.evaluate(
+    ([tab, text, url]) =>
+      (globalThis as unknown as { mydubbE2E: { sendSelection(t: number, s: string, u: string): Promise<unknown> } }).mydubbE2E.sendSelection(
+        tab,
+        text,
+        url,
+      ),
+    [tabId, selectionText, pageUrl] as const,
+  );
 }
 
 export async function openPanel(context: BrowserContext, extensionId: string, tabId: number): Promise<Page> {
@@ -418,6 +471,25 @@ async function openGroup(panel: Page, selector: string) {
 export async function disconnect(panel: Page) {
   await openGroup(panel, "#header-details");
   await panel.getByRole("button", { name: "Disconnect" }).click();
+}
+
+/**
+ * On any page that is not a connected Udemy lecture the panel says nothing about lectures: no
+ * "Current lesson" block, no video box, no Udemy notice in the visible text (Details closed or open).
+ */
+export async function expectNoLectureNotice(panel: Page) {
+  await expect(panel.locator("#lesson-box")).toBeHidden();
+  await expect(panel.locator("#video-box")).toBeHidden();
+  await expect(panel.locator("#lesson-label")).toBeHidden();
+  await expect(panel.locator("#link-status")).toBeHidden();
+  const open = await panel.locator("#header-details").evaluate((d) => (d as HTMLDetailsElement).open);
+  if (!open) await panel.locator("#header-details > summary").click();
+  await expect(panel.locator("#lesson-term")).toBeHidden();
+  await expect(panel.locator("#link-term")).toBeHidden();
+  await expect(panel.locator("#tab-label")).toBeVisible(); // the account and tab details stay
+  const visible = await panel.evaluate(() => document.body.innerText);
+  expect(visible).not.toMatch(/Not a Udemy lecture|No Udemy lecture is linked|Current lesson|Page link/);
+  if (!open) await panel.locator("#header-details > summary").click();
 }
 
 export async function fillTimes(panel: Page) {
