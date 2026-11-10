@@ -162,6 +162,28 @@ def test_only_a_solved_token_from_our_host_passes(body, result):
     assert verifier(lambda request: answer(**body)).verify(TOKEN).result is result
 
 
+# Google's answer once a project without billing is over the monthly free quota: SiteVerify "fails
+# open" with HTTP 200, `success: true`, a static `score` of 0.9 and the message "Over free quota."
+# (cloud.google.com/recaptcha/docs/verify and /recaptcha/quotas). The docs do not name the field
+# that holds the message, so it is tried in `error-codes` and in a field of its own.
+OVER_QUOTA = [
+    {**SOLVED, "score": 0.9, "error-codes": ["Over free quota."]},
+    {**SOLVED, "score": 0.9, "message": "Over free quota."},
+]
+
+
+@pytest.mark.parametrize("body", OVER_QUOTA, ids=["in error-codes", "in another field"])
+def test_over_free_quota_is_unavailable_even_with_success_and_our_host(body):
+    verdict = verifier(lambda request: answer(**body)).verify(TOKEN)
+    assert verdict.result is CaptchaResult.UNAVAILABLE and verdict.reason == "over free quota"
+
+
+def test_success_with_an_error_code_is_not_a_pass():
+    body = {**SOLVED, "error-codes": ["something-new"]}
+    verdict = verifier(lambda request: answer(**body)).verify(TOKEN)
+    assert verdict.result is CaptchaResult.UNAVAILABLE
+
+
 @pytest.mark.parametrize(
     "respond",
     [
