@@ -15,10 +15,12 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import Engine, text
 
 from app.access.rate_limit import FailedAttemptLimiter
 from app.auth.cognito import CognitoErrorKind
+from app.auth.recaptcha import RecaptchaVerifier
 from app.config import Settings
 from app.main import content_security_policy, create_app
 from app.quotas.service import PLAN_LIMITS
@@ -323,6 +325,35 @@ def test_a_failed_check_never_reaches_cognito(
     )
     assert response.status_code == status and error_code(response) == code
     assert "SignUp" not in fake_cognito.calls and EMAIL not in fake_cognito.users
+
+
+def siteverify_answering(body: dict[str, Any]) -> RecaptchaVerifier:
+    """The real verifier, with Google's siteverify replaced by a fixed answer."""
+    return RecaptchaVerifier(
+        secret=SecretStr(SIGNUP["recaptcha_secret_key"]),
+        allowed_hostnames=[SIGNUP["recaptcha_allowed_hostnames"]],
+        timeout_seconds=5,
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+    )
+
+
+def test_google_over_free_quota_never_reaches_cognito(make_app, fake_cognito):
+    client = make_app()
+    services = client.app.state.services.signup
+    solved = {"success": True, "challenge_ts": "2026-11-09T10:00:00Z", "hostname": "mydubb.test"}
+    # Over the free quota Google "fails open": `success: true` with our host name.
+    services.captcha = siteverify_answering(
+        {**solved, "score": 0.9, "error-codes": ["Over free quota."]}
+    )
+    refused = signup(client)
+    assert refused.status_code == 503 and error_code(refused) == "captcha_unavailable"
+    assert "SignUp" not in fake_cognito.calls and EMAIL not in fake_cognito.users
+    services.captcha.close()
+
+    # Google's usual answer through the same verifier still creates the account.
+    services.captcha = siteverify_answering(solved)
+    assert signup(client).json() == {"status": "verification_required"}
+    assert fake_cognito.calls.count("SignUp") == 1
 
 
 def test_a_token_works_once(make_app, fake_cognito):

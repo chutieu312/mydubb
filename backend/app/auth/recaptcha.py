@@ -7,9 +7,10 @@ minutes, and can only be verified once": an expired or reused token comes back a
 `timeout-or-duplicate`, so expiry and replay are decided by Google. A v2 Checkbox token has no
 `action` or `score` (those are v3), so there is nothing else to compare and no threshold to set.
 
-This module fails closed: only `success: true` with an allowed `hostname` passes. Every other
-answer, an error code, a timeout, a network error, an HTTP error, an over-quota answer or anything
-that does not match the contract refuses the sign-up. Nothing is retried (a token is single-use).
+This module fails closed: only `success: true` with an allowed `hostname`, no error code and no
+quota message passes. Every other answer, an error code, a timeout, a network error, an HTTP error,
+an over-quota answer (which still says `success: true`) or anything that does not match the
+contract refuses the sign-up. Nothing is retried (a token is single-use).
 The token, the secret and the raw answer are never logged; logs carry Google's error codes only.
 The user's IP address is not sent (`remoteip` is optional).
 """
@@ -117,6 +118,14 @@ class RecaptchaVerifier:
             # Our secret or request is wrong (missing/invalid secret, bad request) or an unknown
             # code: not the user's fault, and not something a new token fixes.
             return self._unavailable(",".join(error_codes)[:200])
+        # Over the monthly free quota SiteVerify "fails open": HTTP 200, `success: true`, a static
+        # score and the message "Over free quota." (cloud.google.com/recaptcha/docs/verify,
+        # /recaptcha/quotas). Google has then not checked the token. The docs do not name the field
+        # holding the message, so any mention of a quota counts, and so does any error code.
+        if _mentions_quota(body):
+            return self._unavailable("over free quota")
+        if codes:
+            return self._unavailable("success with error codes: " + ",".join(error_codes)[:200])
         hostname = body.get("hostname")
         if not isinstance(hostname, str) or hostname.lower() not in self._hostnames:
             # Solved on a page that is not ours (or the answer has no hostname).
@@ -128,3 +137,14 @@ class RecaptchaVerifier:
     def _unavailable(reason: str) -> CaptchaVerdict:
         logger.warning("reCAPTCHA verification unavailable: %s", reason)
         return CaptchaVerdict(CaptchaResult.UNAVAILABLE, reason)
+
+
+def _mentions_quota(value: object, key: str | None = None) -> bool:
+    """Whether any text in Google's answer mentions a quota (the host name aside, which is ours)."""
+    if isinstance(value, str):
+        return key != "hostname" and "quota" in value.lower()
+    if isinstance(value, dict):
+        return any(_mentions_quota(item, str(name)) for name, item in value.items())
+    if isinstance(value, list):
+        return any(_mentions_quota(item, key) for item in value)
+    return False
