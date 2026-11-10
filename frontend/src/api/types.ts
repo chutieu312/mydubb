@@ -47,6 +47,19 @@ export interface AppMeta {
   result_ttl_seconds: number;
   // How users sign in. Read it with authModeOf(): a missing or unknown value must not be guessed.
   auth?: { mode?: string; self_registration?: boolean; password_reset?: boolean };
+  // Public sign-up (Create account). Read it with signupOf(); missing means not offered.
+  signup?: {
+    enabled?: boolean;
+    // The public Google reCAPTCHA v2 Checkbox site key.
+    recaptcha_site_key?: string;
+    // The plan a new account gets, for the description only (the backend enforces it).
+    free_plan?: {
+      generates_per_day?: number;
+      youtube_imports_per_day?: number;
+      max_words?: number;
+      max_output_seconds?: number;
+    };
+  };
   // Whether the form offers importing a YouTube video's captions. Missing means not offered.
   youtube_import?: { enabled?: boolean; provider?: string | null };
   // "Try as guest" and its limits. Read it with guestAccessOf(); missing means not offered.

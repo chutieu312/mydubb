@@ -40,6 +40,10 @@ class FakeUser:
     name: str | None = None
     verification_code: str | None = None
     reset_code: str | None = None
+    # Sign-up: False until ConfirmSignUp (an UNCONFIRMED user cannot sign in).
+    confirmed: bool = True
+    signup_code: str | None = None
+    signup_code_expired: bool = False
 
 
 @dataclass
@@ -51,7 +55,13 @@ class FakeCognito:
     issued_tokens: list[str] = field(default_factory=list)
     issued_sessions: list[str] = field(default_factory=list)
     challenge_override: str | None = None
+    # Like a user pool with "Self-service sign-up" disabled (invite-only): SignUp is refused.
+    signup_disabled: bool = False
+    # Emails the stand-in "sent" for sign-up (one entry per code), for tests that count them.
+    signup_emails: list[str] = field(default_factory=list)
     _failures: dict[str, list[CognitoError]] = field(default_factory=dict)
+    # Operations whose next answer is lost *after* Cognito applied them (timeout on the way back).
+    _lost: dict[str, int] = field(default_factory=dict)
     _tokens: dict[str, str] = field(default_factory=dict)  # access token -> email key
     _sessions: dict[str, str] = field(default_factory=dict)  # sign-in session -> email key
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -68,6 +78,24 @@ class FakeCognito:
 
     def fail_next(self, operation: str, kind: CognitoErrorKind, aws_type: str = "Injected"):
         self._failures.setdefault(operation, []).append(CognitoError(kind, aws_type))
+
+    def lose_next_answer(self, operation: str) -> None:
+        """The next call of `operation` is applied, then answers like a timeout."""
+        self._lost[operation] = self._lost.get(operation, 0) + 1
+
+    def _maybe_lose(self, operation: str) -> None:
+        with self._lock:
+            if self._lost.get(operation):
+                self._lost[operation] -= 1
+                raise CognitoError(CognitoErrorKind.UNAVAILABLE, "Timeout")
+
+    def expire_signup_code(self, email: str) -> None:
+        self.users[email.lower()].signup_code_expired = True
+
+    def _send_signup_code(self, user: FakeUser) -> None:
+        user.signup_code = f"{secrets.randbelow(10**6):06d}"
+        user.signup_code_expired = False
+        self.signup_emails.append(user.email.lower())
 
     def disable(self, email: str) -> None:
         """Like AdminDisableUser: no sign-in, access tokens revoked."""
@@ -113,6 +141,9 @@ class FakeCognito:
             self._enter("InitiateAuth")
             raise CognitoError(CognitoErrorKind.NOT_AUTHORIZED, "NotAuthorizedException")
         self._enter("InitiateAuth")
+        if not user.confirmed:
+            # Cognito's UserNotConfirmedException (MyDubb maps it to NOT_AUTHORIZED).
+            raise CognitoError(CognitoErrorKind.NOT_AUTHORIZED, "UserNotConfirmedException")
         if self.challenge_override is not None:
             return AuthChallengeStep(name=self.challenge_override, session="s", username=user.sub)
         if user.temporary:
@@ -179,3 +210,49 @@ class FakeCognito:
         ):
             raise CognitoError(CognitoErrorKind.CODE_INVALID, "CodeMismatchException")
         user.password, user.reset_code = new_password, None
+
+    # -- sign-up -------------------------------------------------------------------------------
+
+    def sign_up(self, email: str, password: str) -> None:
+        self._enter("SignUp")
+        if self.signup_disabled:
+            raise CognitoError(CognitoErrorKind.NOT_AUTHORIZED, "NotAuthorizedException")
+        self._check_policy(password)
+        key = email.lower()
+        with self._lock:  # one user per email, also for concurrent requests
+            if key in self.users:
+                raise CognitoError(CognitoErrorKind.USER_EXISTS, "UsernameExistsException")
+            user = FakeUser(
+                email=email,
+                password=password,
+                sub=f"sub-{next(self._counter)}",
+                email_verified=False,
+                confirmed=False,
+            )
+            self.users[key] = user
+            self._send_signup_code(user)
+        self._maybe_lose("SignUp")
+
+    def confirm_sign_up(self, email: str, code: str) -> None:
+        self._enter("ConfirmSignUp")
+        user = self.users.get(email.lower())
+        if user is None:
+            raise CognitoError(CognitoErrorKind.CODE_INVALID, "CodeMismatchException")
+        if user.confirmed:
+            raise CognitoError(CognitoErrorKind.NOT_AUTHORIZED, "NotAuthorizedException")
+        if user.signup_code is None or not secrets.compare_digest(user.signup_code, code):
+            raise CognitoError(CognitoErrorKind.CODE_INVALID, "CodeMismatchException")
+        if user.signup_code_expired:
+            raise CognitoError(CognitoErrorKind.CODE_INVALID, "ExpiredCodeException")
+        # Confirming with the emailed code marks the email verified (AutoVerifiedAttributes).
+        user.confirmed, user.email_verified, user.signup_code = True, True, None
+        self._maybe_lose("ConfirmSignUp")
+
+    def resend_confirmation_code(self, email: str) -> None:
+        self._enter("ResendConfirmationCode")
+        user = self.users.get(email.lower())
+        if user is None:
+            return  # a simulated delivery, indistinguishable from a real one
+        if user.confirmed:
+            raise CognitoError(CognitoErrorKind.INVALID_PARAMETER, "InvalidParameterException")
+        self._send_signup_code(user)

@@ -2,7 +2,8 @@
 
 The backend acts as the user's client: it calls `InitiateAuth` (`USER_PASSWORD_AUTH`),
 `RespondToAuthChallenge` (`NEW_PASSWORD_REQUIRED`), `GetUser`, `GetUserAttributeVerificationCode`,
-`VerifyUserAttribute`, `ForgotPassword` and `ConfirmForgotPassword`. None of them accepts or needs
+`VerifyUserAttribute`, `ForgotPassword` and `ConfirmForgotPassword`, and for public sign-up
+`SignUp`, `ConfirmSignUp` and `ResendConfirmationCode`. None of them accepts or needs
 AWS credentials (Cognito developer guide, "List of API operations grouped by authorization
 model"), so no IAM key exists in the app. With a confidential app client, requests carry the
 `SECRET_HASH` computed from the client secret.
@@ -58,6 +59,9 @@ class CognitoErrorKind(StrEnum):
     CODE_INVALID = "code_invalid"  # wrong or expired confirmation/verification code
     RATE_LIMITED = "rate_limited"  # Cognito throttling or per-user attempt limits
     INVALID_PARAMETER = "invalid_parameter"  # e.g. missing required attributes
+    # Sign-up: the email already belongs to a user (SignUp's UsernameExistsException, or
+    # ConfirmSignUp's AliasExistsException). Never shown as such to the browser.
+    USER_EXISTS = "user_exists"
     UNAVAILABLE = "unavailable"  # timeout, network, 5xx, unexpected answer, configuration
 
 
@@ -74,6 +78,8 @@ _KIND_BY_TYPE = {
     "LimitExceededException": CognitoErrorKind.RATE_LIMITED,
     "TooManyFailedAttemptsException": CognitoErrorKind.RATE_LIMITED,
     "InvalidParameterException": CognitoErrorKind.INVALID_PARAMETER,
+    "UsernameExistsException": CognitoErrorKind.USER_EXISTS,
+    "AliasExistsException": CognitoErrorKind.USER_EXISTS,
 }
 
 
@@ -129,6 +135,16 @@ class CognitoClient(Protocol):
     def forgot_password(self, email: str) -> None: ...
 
     def confirm_forgot_password(self, email: str, code: str, new_password: str) -> None: ...
+
+    def sign_up(self, email: str, password: str) -> None:
+        """Create an unconfirmed user with this email (Cognito emails a confirmation code)."""
+        ...
+
+    def confirm_sign_up(self, email: str, code: str) -> None:
+        """Confirm the user with the emailed code; Cognito then marks the email verified."""
+        ...
+
+    def resend_confirmation_code(self, email: str) -> None: ...
 
 
 def secret_hash(client_secret: str, username: str, client_id: str) -> str:
@@ -248,6 +264,33 @@ class HttpCognitoClient:
         }
         self._add_secret_hash(payload, "SecretHash", email)
         self._call("ConfirmForgotPassword", payload)
+
+    def sign_up(self, email: str, password: str) -> None:
+        # Email is the pool's username attribute: the username sent is the email address, and
+        # Cognito keeps `sub` as the immutable identity. No other attribute is sent.
+        payload: dict[str, Any] = {
+            "ClientId": self._client_id,
+            "Username": email,
+            "Password": password,
+            "UserAttributes": [{"Name": "email", "Value": email}],
+        }
+        self._add_secret_hash(payload, "SecretHash", email)
+        self._call("SignUp", payload)
+
+    def confirm_sign_up(self, email: str, code: str) -> None:
+        # ForceAliasCreation stays at its default (false): an email never moves to another user.
+        payload: dict[str, Any] = {
+            "ClientId": self._client_id,
+            "Username": email,
+            "ConfirmationCode": code,
+        }
+        self._add_secret_hash(payload, "SecretHash", email)
+        self._call("ConfirmSignUp", payload)
+
+    def resend_confirmation_code(self, email: str) -> None:
+        payload: dict[str, Any] = {"ClientId": self._client_id, "Username": email}
+        self._add_secret_hash(payload, "SecretHash", email)
+        self._call("ResendConfirmationCode", payload)
 
     # -- transport --------------------------------------------------------------------------
 

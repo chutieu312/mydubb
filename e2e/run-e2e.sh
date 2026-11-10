@@ -37,6 +37,11 @@ if [ -z "${E2E_AUTH_KEY:-}" ]; then
   E2E_AUTH_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n')"
 fi
 export E2E_AUTH_KEY
+# Public sign-up stack (sign-up on, stand-ins for the user pool and Google's siteverify).
+export E2E_SIGNUP_PORT="${E2E_SIGNUP_PORT:-8005}"
+export E2E_SIGNUP_CONTROL_PORT="${E2E_SIGNUP_CONTROL_PORT:-8006}"
+export E2E_SIGNUP_BASE_URL="http://127.0.0.1:${E2E_SIGNUP_PORT}"
+export E2E_SIGNUP_CONTROL_URL="http://127.0.0.1:${E2E_SIGNUP_CONTROL_PORT}"
 if [ -z "${E2E_GUEST_KEY:-}" ]; then
   E2E_GUEST_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n')"
 fi
@@ -57,11 +62,11 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building the application image..."
-compose build --quiet app app-cognito
-echo "Starting isolated E2E stack on ${E2E_BASE_URL} and ${E2E_COGNITO_BASE_URL}..."
+compose build --quiet app app-cognito app-signup
+echo "Starting isolated E2E stack on ${E2E_BASE_URL}, ${E2E_COGNITO_BASE_URL} and ${E2E_SIGNUP_BASE_URL}..."
 if ! compose up -d --wait; then
   echo "Error: the E2E stack did not become healthy. Recent app logs:" >&2
-  compose logs --tail 60 app app-cognito >&2 || true
+  compose logs --tail 60 app app-cognito app-signup >&2 || true
   exit 1
 fi
 
@@ -69,6 +74,6 @@ status=0
 npx playwright test "$@" || status=$?
 if [ "$status" -ne 0 ]; then
   echo "E2E tests failed. Recent app logs:" >&2
-  compose logs --tail 60 app app-cognito >&2 || true
+  compose logs --tail 60 app app-cognito app-signup >&2 || true
 fi
 exit "$status"

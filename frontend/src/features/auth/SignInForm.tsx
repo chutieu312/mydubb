@@ -12,6 +12,15 @@ interface Props {
   onForgotPassword?: (email: string) => void;
   // Absent when the backend does not offer guest access.
   guest?: GuestOffer;
+  // Absent when the backend does not offer public sign-up (invitation only).
+  signup?: SignupEntry;
+}
+
+export interface SignupEntry {
+  freePlan: string;
+  // Both carry the email typed so far, so it is not typed twice.
+  onCreateAccount: (email: string) => void;
+  onVerifyEmail: (email: string) => void;
 }
 
 export interface GuestOffer {
@@ -21,7 +30,7 @@ export interface GuestOffer {
   maxOutputSeconds: number;
 }
 
-export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest }: Props) {
+export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest, signup }: Props) {
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const { pending: signingIn, failure, run } = useSubmit();
@@ -74,7 +83,30 @@ export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest }: 
           Forgot password?
         </button>
       )}
-      <p className="muted small">Access is currently by invitation only.</p>
+      {signup ? (
+        <div className="signup-entry stack">
+          <p className="muted">New to MyDubb?</p>
+          <button
+            type="button"
+            className="button ghost wide"
+            onClick={() => signup.onCreateAccount(email.trim())}
+            disabled={pending}
+          >
+            Create account
+          </button>
+          <p className="muted small">{signup.freePlan}</p>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => signup.onVerifyEmail(email.trim())}
+            disabled={pending}
+          >
+            Have a code? Verify your email
+          </button>
+        </div>
+      ) : (
+        <p className="muted small">Access is currently by invitation only.</p>
+      )}
       {guest && (
         <GuestEntry {...guest} disabled={signingIn} onPendingChange={setGuestPending} />
       )}

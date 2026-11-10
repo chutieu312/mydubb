@@ -3,10 +3,14 @@ import { defineConfig, devices } from "@playwright/test";
 const baseURL = process.env.E2E_BASE_URL ?? "http://127.0.0.1:8001";
 // The email + password stack (run-e2e.sh starts it next to the Access Code one).
 const cognitoURL = process.env.E2E_COGNITO_BASE_URL;
+// The public sign-up stack (sign-up on).
+const signupURL = process.env.E2E_SIGNUP_BASE_URL;
 const isCI = Boolean(process.env.CI);
 
-// Specs named auth.*.spec.ts talk to the email + password stack; all others to the Access Code one.
+// Specs named auth.*.spec.ts talk to the email + password stack, signup.*.spec.ts to the sign-up
+// stack; all others to the Access Code one.
 const authSpecs = /auth\..*\.spec\.ts$/;
+const signupSpecs = /signup\..*\.spec\.ts$/;
 
 export default defineConfig({
   testDir: "./tests",
@@ -23,9 +27,27 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "desktop", testIgnore: authSpecs, use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "desktop",
+      testIgnore: [authSpecs, signupSpecs],
+      use: { ...devices["Desktop Chrome"] },
+    },
     // Chromium with a phone viewport and touch; WebKit/iOS Safari is not covered.
-    { name: "mobile", testIgnore: authSpecs, use: { ...devices["Pixel 7"] } },
+    { name: "mobile", testIgnore: [authSpecs, signupSpecs], use: { ...devices["Pixel 7"] } },
+    ...(signupURL
+      ? [
+          {
+            name: "signup-desktop",
+            testMatch: signupSpecs,
+            use: { ...devices["Desktop Chrome"], baseURL: signupURL },
+          },
+          {
+            name: "signup-mobile",
+            testMatch: signupSpecs,
+            use: { ...devices["Pixel 7"], baseURL: signupURL },
+          },
+        ]
+      : []),
     ...(cognitoURL
       ? [
           {

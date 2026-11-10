@@ -19,6 +19,7 @@ from app.access.router import router as access_router
 from app.admin.router import router as admin_router
 from app.admin.usage import router as admin_usage_router
 from app.auth.router import router as auth_router
+from app.auth.signup import router as signup_router
 from app.config import AppEnv, AuthMode, Settings, load_settings
 from app.errors import error_response, install_error_handlers
 from app.extension.router import router as extension_router
@@ -45,17 +46,28 @@ _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _EXTENSION_TOKEN_PATH = "/api/extension/token"  # noqa: S105 (a path)
 _EXTENSION_BEARER_PATHS = {"/api/jobs", "/api/extension/logout"}
 
-_SECURITY_HEADERS = [
+_BASE_HEADERS = [
     (b"x-content-type-options", b"nosniff"),
     (b"x-frame-options", b"DENY"),
     (b"referrer-policy", b"same-origin"),
-    (
-        b"content-security-policy",
-        b"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-        b"media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; "
-        b"form-action 'self'; frame-ancestors 'none'",
-    ),
 ]
+# The sources Google lists for reCAPTCHA (developers.google.com/recaptcha/docs/faq, "content
+# security policy"). Added only while public sign-up runs: the Checkbox is the page's only
+# third-party code, and it is loaded only on the Create account screen.
+_RECAPTCHA_SCRIPT = "https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/"
+_RECAPTCHA_FRAME = "https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/"
+_RECAPTCHA_CONNECT = "https://www.google.com/recaptcha/"
+
+
+def content_security_policy(recaptcha: bool) -> str:
+    script = "'self'" + (f" {_RECAPTCHA_SCRIPT}" if recaptcha else "")
+    connect = "'self'" + (f" {_RECAPTCHA_CONNECT}" if recaptcha else "")
+    frame = f"; frame-src {_RECAPTCHA_FRAME}" if recaptcha else ""
+    return (
+        f"default-src 'self'; script-src {script}; style-src 'self'; img-src 'self' data:; "
+        f"media-src 'self'; connect-src {connect}; object-src 'none'; base-uri 'self'; "
+        f"form-action 'self'; frame-ancestors 'none'{frame}"
+    )
 
 
 class RequestGuardMiddleware:
@@ -70,8 +82,13 @@ class RequestGuardMiddleware:
         max_body_bytes: int,
         hsts: bool,
         extension_ids: list[str] | None = None,
+        recaptcha: bool = False,
     ):
         self.app = app
+        self.security_headers = [
+            *_BASE_HEADERS,
+            (b"content-security-policy", content_security_policy(recaptcha).encode("ascii")),
+        ]
         self.trusted_origins = {o.rstrip("/") for o in trusted_origins}
         self.extension_origins = {f"chrome-extension://{i}" for i in extension_ids or []}
         self.max_body_bytes = max_body_bytes
@@ -92,7 +109,7 @@ class RequestGuardMiddleware:
                 # Swagger UI (development only) relies on inline scripts and a CDN.
                 extra = [
                     header
-                    for header in _SECURITY_HEADERS
+                    for header in self.security_headers
                     if not (is_docs and header[0] == b"content-security-policy")
                 ]
                 if self.hsts:
@@ -225,6 +242,10 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
             close = getattr(services.cognito, "close", None)
             if close is not None:
                 close()
+            if services.signup is not None:
+                close = getattr(services.signup.captcha, "close", None)
+                if close is not None:
+                    close()
             services.engine.dispose()
             if services.guest_import_engine is not None:
                 if imports_quiescent:
@@ -249,12 +270,15 @@ def create_app(settings: Settings | None = None, services: AppServices | None = 
         max_body_bytes=settings.max_request_body_bytes,
         hsts=settings.app_env is AppEnv.PRODUCTION,
         extension_ids=settings.extension_ids,
+        recaptcha=services.signup is not None and services.signup.ready,
     )
     install_error_handlers(app)
     app.include_router(system_router)
     # The two login modes are exclusive: only the active mode's endpoints exist.
     if settings.auth_mode is AuthMode.COGNITO:
         app.include_router(auth_router)
+        # With PUBLIC_SIGNUP_ENABLED=false it answers 404 signup_disabled.
+        app.include_router(signup_router)
         app.include_router(admin_router)
         app.include_router(admin_usage_router)
         app.include_router(account_router)

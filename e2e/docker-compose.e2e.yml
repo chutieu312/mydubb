@@ -111,10 +111,86 @@ services:
     volumes:
       - ./fake-cognito/serve.py:/e2e/serve.py:ro
       - ../backend/tests/fake_cognito.py:/e2e-fake/fake_cognito.py:ro
+      - ../backend/tests/fake_recaptcha.py:/e2e-fake/fake_recaptcha.py:ro
     ports:
       - "127.0.0.1:${E2E_COGNITO_PORT:-8003}:8000"
       # Test control (create users, read codes); the stand-in's "administrator and inbox".
       - "127.0.0.1:${E2E_CONTROL_PORT:-8004}:9000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3); urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=3)"
+      interval: 2s
+      timeout: 4s
+      retries: 45
+      start_period: 5s
+
+  # Third stack: public sign-up ON (Create account), with stand-ins for the user pool and for
+  # Google's reCAPTCHA siteverify. The stack above keeps sign-up OFF, so its specs still prove the
+  # invitation-only site. No AWS or Google call; the browser's Google script is served by the specs.
+  db-signup:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mydubb_e2e
+      POSTGRES_PASSWORD: e2e_only_not_secret
+      POSTGRES_DB: mydubb_e2e_signup
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mydubb_e2e -d mydubb_e2e_signup"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app-signup:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      db-signup:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - alembic upgrade head && exec python /e2e/serve.py
+    environment:
+      PYTHONPATH: /app
+      APP_ENV: development
+      DATABASE_URL: postgresql://mydubb_e2e:e2e_only_not_secret@db-signup:5432/mydubb_e2e_signup
+      AUTH_MODE: cognito
+      COGNITO_REGION: us-west-2
+      COGNITO_USER_POOL_ID: us-west-2_E2EOnlyPool
+      COGNITO_CLIENT_ID: e2eonlyclientid
+      # Required by sign-up (a confidential app client); the stand-in never checks it.
+      COGNITO_CLIENT_SECRET: e2e-only-not-a-secret
+      AUTH_TOKEN_ENCRYPTION_KEY: ${E2E_AUTH_KEY:-}
+      PUBLIC_SIGNUP_ENABLED: "true"
+      E2E_FAKE_CAPTCHA: "1"
+      # Shaped like real keys; nothing reaches Google with them.
+      RECAPTCHA_SITE_KEY: e2e_only_site_key_not_real_0000000000000
+      RECAPTCHA_SECRET_KEY: e2e_only_secret_key_not_real_000000000000
+      RECAPTCHA_ALLOWED_HOSTNAMES: 127.0.0.1
+      CLIENT_IP_HEADER: x-e2e-client-ip
+      PROVIDER_MODE: mock
+      MOCK_STAGE_DELAY_SECONDS: "1.0"
+      COOKIE_SECURE: "false"
+      # Every spec creates accounts from the same address.
+      SIGNUP_MAX_PER_CLIENT: "500"
+      SIGNUP_MAX_GLOBAL: "1000"
+      ACCESS_MAX_FAILURES_PER_CLIENT: "200"
+      ACCESS_MAX_FAILURES_GLOBAL: "1000"
+      AUTH_RECOVERY_MAX_PER_CLIENT: "500"
+      AUTH_RECOVERY_MAX_PER_EMAIL: "500"
+      AUTH_RECOVERY_MAX_GLOBAL: "1000"
+    volumes:
+      - ./fake-cognito/serve.py:/e2e/serve.py:ro
+      - ../backend/tests/fake_cognito.py:/e2e-fake/fake_cognito.py:ro
+      - ../backend/tests/fake_recaptcha.py:/e2e-fake/fake_recaptcha.py:ro
+    ports:
+      - "127.0.0.1:${E2E_SIGNUP_PORT:-8005}:8000"
+      - "127.0.0.1:${E2E_SIGNUP_CONTROL_PORT:-8006}:9000"
     healthcheck:
       test:
         - CMD

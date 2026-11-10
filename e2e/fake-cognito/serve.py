@@ -6,6 +6,9 @@ built from the repository Dockerfile, so everything except the user pool is the 
 routers, sessions, CSRF, challenges, PostgreSQL, jobs and the React build. No AWS call is made
 and no AWS credential exists.
 
+With E2E_FAKE_CAPTCHA=1 (the public sign-up stack) Google's reCAPTCHA siteverify is replaced by
+backend/tests/fake_recaptcha.py as well.
+
 A second, tiny HTTP server (port 9000, published on 127.0.0.1 only) lets the tests do what an
 administrator and an inbox would: create users, read the codes the stand-in "emailed", disable a
 user, make the next call to the pool fail, and grant or revoke MyDubb's admin role.
@@ -23,6 +26,7 @@ from sqlalchemy import text
 sys.path.insert(0, os.environ.get("FAKE_COGNITO_DIR", "/e2e-fake"))
 
 from fake_cognito import FakeCognito  # noqa: E402
+from fake_recaptcha import FakeCaptcha  # noqa: E402
 
 from app.auth.cognito import CognitoError, CognitoErrorKind  # noqa: E402
 from app.config import load_settings  # noqa: E402
@@ -101,7 +105,11 @@ def codes(email: str) -> dict[str, str | None]:
     user = fake.users.get(email.lower())
     if user is None:
         raise HTTPException(404, "no such user")
-    return {"verification_code": user.verification_code, "reset_code": user.reset_code}
+    return {
+        "verification_code": user.verification_code,
+        "reset_code": user.reset_code,
+        "signup_code": user.signup_code,
+    }
 
 
 @control.post("/disable")
@@ -139,7 +147,10 @@ def main() -> None:
     threading.Thread(target=server.run, daemon=True).start()
 
     settings = load_settings()
-    services = build_services(settings, cognito_client=fake)
+    # The sign-up stack: Google's siteverify is replaced too (browser side: the specs serve a
+    # stand-in for Google's script). "ok-*" tokens pass once; anything else is refused.
+    captcha = FakeCaptcha() if os.environ.get("E2E_FAKE_CAPTCHA") == "1" else None
+    services = build_services(settings, cognito_client=fake, captcha_verifier=captcha)
     app = create_app(services=services)
     uvicorn.run(app, host="0.0.0.0", port=8000, workers=1, server_header=False)  # noqa: S104
 

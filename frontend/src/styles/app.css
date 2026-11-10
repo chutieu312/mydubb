@@ -932,6 +932,54 @@ select[aria-invalid="true"] {
   cursor: pointer;
 }
 
+/* ---- Public sign-up ---- */
+
+/* "Create account" below the sign-in form, set apart like "Try as guest". */
+.signup-entry {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.signup-entry p {
+  margin: 0;
+}
+
+.link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+
+/* A label for a control that is not an input (Google's checkbox is an iframe). */
+.field-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Google's widget is 304 x 78 px (compact under 304 px); the box keeps its place while it loads. */
+.recaptcha-box {
+  min-height: 78px;
+  max-width: 100%;
+}
+
+.recaptcha-note a {
+  color: var(--brand);
+}
+
+.recaptcha-box.invalid > div {
+  outline: 2px solid var(--error);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* A button that waits for a request keeps the keyboard focus, so it is aria-disabled instead. */
+.button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+  box-shadow: none;
+}
+
 /* ---- Guest access ---- */
 
 /* "Try as guest" below the sign-in form, set apart from it. */

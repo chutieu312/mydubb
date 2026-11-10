@@ -79,6 +79,38 @@ export const authApi = {
     );
   },
 
+  // Public sign-up (docs/AUTH_API.md, "Sign-up"). None of them signs in: after `verified` the user
+  // signs in with `login`, which opens a session only for a verified email.
+  signUp: async (email: string, password: string, captchaToken: string): Promise<void> => {
+    checked(
+      await request<unknown>("POST", "/api/auth/signup", {
+        body: { email, password, captcha_token: captchaToken },
+        accept: [200],
+      }),
+      hasStatus("verification_required"),
+    );
+  },
+
+  confirmSignUp: async (email: string, code: string): Promise<void> => {
+    checked(
+      await request<unknown>("POST", "/api/auth/signup/confirm", {
+        body: { email, code },
+        accept: [200],
+      }),
+      hasStatus("verified"),
+    );
+  },
+
+  resendSignUpCode: async (email: string): Promise<void> => {
+    checked(
+      await request<unknown>("POST", "/api/auth/signup/resend", {
+        body: { email },
+        accept: [202],
+      }),
+      hasStatus("accepted"),
+    );
+  },
+
   me: async (): Promise<Session> =>
     checked(await request<unknown>("GET", "/api/auth/me", { accept: [200] }), isSession),
 

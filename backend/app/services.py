@@ -1,8 +1,9 @@
 """Composition root: builds the application's long-lived collaborators from settings."""
 
 import logging
+import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from sqlalchemy import Engine
@@ -15,6 +16,7 @@ from app.audio.fitter import FfmpegAudioProcessor
 from app.audio.mock import MockAudioProcessor
 from app.auth.cognito import CognitoClient, HttpCognitoClient
 from app.auth.crypto import TokenCipher
+from app.auth.recaptcha import CaptchaVerifier, RecaptchaVerifier
 from app.config import (
     AudioProcessorChoice,
     AuthMode,
@@ -44,6 +46,27 @@ from app.youtube_import.base import CaptionProvider
 from app.youtube_import.mock import MockCaptionProvider
 from app.youtube_import.service import YouTubeImporter
 from app.youtube_import.supadata import SupadataCaptionProvider
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SignupServices:
+    """Public sign-up (docs/SIGNUP.md). Exists only while PUBLIC_SIGNUP_ENABLED=true; `problems`
+    then lists what is missing, and sign-up only runs when it is empty."""
+
+    problems: list[str]
+    captcha: CaptchaVerifier | None
+    # Create-account requests (every request counts): per client and overall, and per email hash.
+    limiter: FailedAttemptLimiter
+    email_limiter: FailedAttemptLimiter
+    # Held while both limiters are checked and updated (app/auth/signup.py), so the check and the
+    # count are one step; only sign-up uses these two limiters.
+    limits_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    @property
+    def ready(self) -> bool:
+        return not self.problems and self.captcha is not None
 
 
 @dataclass
@@ -77,6 +100,46 @@ class AppServices:
     # bounded engine every import database step uses; disposed at shutdown only when quiescent.
     guest_imports: GuestImportRunner | None = None
     guest_import_engine: Engine | None = None
+    # Public sign-up; None while PUBLIC_SIGNUP_ENABLED=false (the endpoints answer 404).
+    signup: SignupServices | None = None
+
+
+def build_signup(
+    settings: Settings, captcha_verifier: CaptchaVerifier | None = None
+) -> SignupServices | None:
+    if not settings.public_signup_enabled:
+        return None
+    problems = settings.signup_problems()
+    if problems:
+        # Sign-in and everything else keep working; sign-up answers 503 until this is fixed.
+        logger.error(
+            "PUBLIC_SIGNUP_ENABLED=true but sign-up is OFF: missing or invalid %s",
+            ", ".join(problems),
+        )
+    captcha = captcha_verifier
+    if captcha is None and not problems:
+        assert settings.recaptcha_secret_key is not None
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        captcha = RecaptchaVerifier(
+            secret=settings.recaptcha_secret_key,
+            allowed_hostnames=settings.recaptcha_hostnames,
+            timeout_seconds=settings.recaptcha_timeout_seconds,
+        )
+    return SignupServices(
+        problems=problems,
+        captcha=captcha,
+        limiter=FailedAttemptLimiter(
+            max_per_client=settings.signup_max_per_client,
+            max_global=settings.signup_max_global,
+            window_seconds=settings.signup_window_seconds,
+        ),
+        email_limiter=FailedAttemptLimiter(
+            max_per_client=settings.signup_max_per_email,
+            # The overall limit is enforced by `limiter`; this one only counts per address.
+            max_global=2**31,
+            window_seconds=settings.signup_window_seconds,
+        ),
+    )
 
 
 def build_translator(
@@ -230,9 +293,11 @@ def build_services(
     speech_transport: httpx.BaseTransport | None = None,
     youtube_import_transport: httpx.AsyncBaseTransport | None = None,
     cognito_client: CognitoClient | None = None,
+    captcha_verifier: CaptchaVerifier | None = None,
 ) -> AppServices:
-    """The transports replace the network for Azure Translator / Azure Speech / Supadata, and
-    `cognito_client` replaces Amazon Cognito (tests only)."""
+    """The transports replace the network for Azure Translator / Azure Speech / Supadata,
+    `cognito_client` replaces Amazon Cognito and `captcha_verifier` Google reCAPTCHA (tests
+    only)."""
     engine = create_db_engine(settings.sqlalchemy_url, settings.db_connect_timeout_seconds)
     session_factory = create_session_factory(engine)
     result_store = LocalFileResultStore(settings.result_storage_dir)
@@ -288,4 +353,5 @@ def build_services(
         guest=GuestAccess.from_settings(settings),
         guest_imports=GuestImportRunner(create_session_factory(import_engine)),
         guest_import_engine=import_engine,
+        signup=build_signup(settings, captcha_verifier),
     )

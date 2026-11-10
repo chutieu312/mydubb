@@ -28,9 +28,18 @@ catch-all route matches the path for `GET` only. Either way the UI must not call
 endpoints.
 
 The two modes are exclusive. In `cognito` mode an Access Code session cookie is never accepted and is
-never upgraded to a user session. `self_registration` is always `false` (accounts are created by an
-administrator; there is no sign-up endpoint). The UI must take the mode from `/api/meta`, not from
-its own build configuration.
+never upgraded to a user session. `self_registration` is `false` unless public sign-up is on and
+fully configured ([SIGNUP.md](SIGNUP.md)); then it is `true` and `signup` (a separate key, also in
+`/api/meta`) carries what the Create account screen needs:
+
+```json
+"signup": { "enabled": true, "recaptcha_site_key": "6L...",
+            "free_plan": { "generates_per_day": 20, "youtube_imports_per_day": 5,
+                           "max_words": 1000, "max_output_seconds": 600 } }
+```
+
+Off (the default), `signup` is `{"enabled": false}` and `auth` is unchanged. The UI must take the
+mode and the sign-up offer from `/api/meta`, not from its own build configuration.
 
 ## Cookies (set by the server; JavaScript never reads or writes them)
 
@@ -164,6 +173,51 @@ Body `{ "email": "…", "code": "123456", "new_password": "…" }`.
 Requires the session and `X-CSRF-Token`. `204`, revokes the session server-side and clears the
 cookie. `401 not_authenticated` when the session is already invalid (treat as logged out, like the
 Access Code logout). `403 csrf_failed` leaves the session active.
+
+### Public sign-up
+
+Only while public sign-up is on ([SIGNUP.md](SIGNUP.md)). No session, no cookie and no CSRF token
+(like `login`); the Origin check applies. None of these opens a session: after `verified` the user
+signs in with `POST /api/auth/login`, which answers `authenticated` only for a verified email. Every
+endpoint first answers `404 signup_disabled` when sign-up is off and `503 signup_unavailable` when it
+is on but not fully configured (nothing is called, no email is sent).
+
+#### `POST /api/auth/signup`
+Body `{ "email", "password", "captcha_token" }` (the reCAPTCHA v2 Checkbox response token, 1-4096
+characters). Other fields are ignored (a role or plan cannot be chosen). Order: limits, reCAPTCHA,
+Cognito `SignUp`.
+- `200 { "status": "verification_required" }` for a new email **and** for an email that already has
+  an account or an unconfirmed sign-up (nothing is sent to it then; Resend code sends a code to an
+  unconfirmed one). The answer never tells whether an email is registered.
+- `400 captcha_invalid`: token expired, reused, forged or solved on another host. Tick the box again
+  (the widget must be reset: a token is single-use).
+- `503 captcha_unavailable`: Google could not be asked or did not answer usably (also over quota);
+  no account was created; sign-in is unaffected.
+- `422 password_rejected`: Cognito's password policy (not repeated by the API).
+- `422 signup_rejected`: Cognito refused the address (or a pre sign-up rule).
+- `429 too_many_attempts` (+ `Retry-After`, `retry_after_seconds`): MyDubb's limits, counted before
+  Google and Cognito. `429 auth_rate_limited`: Cognito throttling.
+- `503 signup_outcome_unknown`: no answer from Cognito; the account may exist. Never retried; the UI
+  offers the Verify screen ("I received a code"). A new attempt for the same email answers `200`.
+- `503 signup_unavailable`: Cognito refused the call (self-service sign-up off in the pool, wrong
+  client secret); logged as a configuration error.
+- `422 validation_error`: email shape, empty password, missing token.
+
+#### `POST /api/auth/signup/confirm`
+Body `{ "email", "code" }` (1-10 digits). Cognito `ConfirmSignUp`, which also marks the email verified.
+- `200 { "status": "verified" }`.
+- `400 code_invalid`: wrong code, unknown email, already confirmed account (one answer). `400
+  code_expired`: Cognito says the code expired (Resend code). Both count toward the failed sign-in
+  limiter (`429 too_many_attempts`). `429 too_many_attempts` also for Cognito's per-user attempt limit.
+- `503 verification_outcome_unknown`: no answer; the email may be verified, the user signs in.
+
+#### `POST /api/auth/signup/resend`
+Body `{ "email" }`. Cognito `ResendConfirmationCode`. Counts toward the recovery limits
+(`AUTH_RECOVERY_*`, shared with forgot/reset password).
+- `202 { "status": "accepted" }` for every address (unknown, confirmed or waiting), also when Cognito
+  refuses for a per-user limit (logged).
+- `503 auth_unavailable`: no answer (not retried). `429 auth_rate_limited`: Cognito throttling.
+  `429 too_many_attempts`: MyDubb's limits.
 
 ### `GET /api/account/usage`
 The account's usage limits for today (plan, used / limit / remaining jobs and imports, the 00:00

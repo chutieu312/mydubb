@@ -19,7 +19,7 @@ import { GuestBanner } from "./features/guest/GuestBanner";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
 import { replaceUrl, routeOf, USAGE_PATH, usePathname } from "./lib/appRoute";
-import { authModeOf, guestAccessOf, passwordResetOf } from "./lib/authMode";
+import { authModeOf, guestAccessOf, passwordResetOf, signupOf } from "./lib/authMode";
 import { languageChoiceOf, languageNouns } from "./lib/languages";
 import { azureDisclosure, azureDisclosureShort } from "./lib/providers";
 import { createDraftKeeper, type StudioDraft } from "./lib/studioDraft";
@@ -513,6 +513,7 @@ export function App() {
               key={loginKey}
               notice={sessionNotice}
               passwordReset={passwordResetOf(meta)}
+              signup={signupOf(meta)}
               guest={
                 guestEnabled
                   ? {

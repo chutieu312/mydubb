@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.auth.models import AccountPlan
 from app.config import AuthMode
 from app.db import check_database
 from app.dependencies import get_services
 from app.languages import DEFAULT_TARGET_LANGUAGE, TargetLanguage
+from app.quotas.service import plan_limits
 from app.services import AppServices
 from app.speech.voices import Voice
 
@@ -89,10 +91,34 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
         # "Try as guest": whether the sign-in screen offers it, and the limits a guest sees.
         "guest_access": _guest_access(services),
         "result_ttl_seconds": settings.result_ttl_seconds,
-        # Which login UI to show. Accounts are created by an administrator: no sign-up.
+        # Which login UI to show. `self_registration`: whether Create account is offered (public
+        # sign-up on and fully configured); otherwise accounts are created by an administrator.
         "auth": {
             "mode": settings.auth_mode.value,
-            "self_registration": False,
+            "self_registration": _signup_ready(services),
             "password_reset": settings.auth_mode is AuthMode.COGNITO,
+        },
+        "signup": _signup(services),
+    }
+
+
+def _signup_ready(services: AppServices) -> bool:
+    return services.signup is not None and services.signup.ready
+
+
+def _signup(services: AppServices) -> dict:
+    """What the Create account screen needs: the public reCAPTCHA site key, and the Free plan's
+    limits for its description (the plan a new account gets; enforced only by app/quotas)."""
+    if not _signup_ready(services):
+        return {"enabled": False}
+    free = plan_limits(AccountPlan.FREE.value)
+    return {
+        "enabled": True,
+        "recaptcha_site_key": services.settings.recaptcha_site_key,
+        "free_plan": {
+            "generates_per_day": free.generates_per_day,
+            "youtube_imports_per_day": free.youtube_imports_per_day,
+            "max_words": free.max_words,
+            "max_output_seconds": free.max_output_seconds,
         },
     }
