@@ -93,18 +93,24 @@ def _signup(services: AppServices) -> SignupServices:
 
 def _check_signup_limits(signup: SignupServices, request: Request, email: str) -> None:
     """Every Create account request counts, before Google or Cognito is asked, so pressing the
-    button again and again never multiplies CAPTCHA checks or emails."""
+    button again and again never multiplies CAPTCHA checks or emails.
+
+    One lock covers checking all three limits (client, address, overall) and recording the slot in
+    each, so two requests can never both take the last slot. A request refused by any limit is
+    recorded in none. The lock is released before any network call."""
     limits = (
         (signup.limiter, client_key(request)),
         (signup.email_limiter, sha256_hex(normalize_email(email))),
     )
-    waits = [w for limiter, key in limits if (w := limiter.retry_after(key)) is not None]
+    with signup.limits_lock:
+        waits = [w for limiter, key in limits if (w := limiter.retry_after(key)) is not None]
+        if not waits:
+            for limiter, key in limits:
+                limiter.record_failure(key)
     if waits:
         raise _too_many(
             max(waits), "Too many attempts to create an account. Please wait and try again."
         )
-    for limiter, key in limits:
-        limiter.record_failure(key)
 
 
 def _code_invalid() -> ApiError:

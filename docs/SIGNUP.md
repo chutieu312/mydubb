@@ -147,6 +147,15 @@ repeatedly multiplies neither CAPTCHA checks nor emails. In-memory sliding windo
 reset on restart), keyed by `CLIENT_IP_HEADER` (production: `cf-connecting-ip`) and by a SHA-256 of
 the lower-cased email.
 
+How a request is counted: under one lock the backend checks all three limits (this client, this
+address, overall) and, only if all three have room, records the request in all three; the lock is
+released before Google or Cognito is called. So two requests racing for the last slot let exactly
+one through (which one is not defined), and a request refused by one limit (`429`, `Retry-After` =
+the longest wait among the full limits) takes no slot from the other two and reaches neither Google
+nor Cognito. A request that passed this step stays counted even if the robot check then fails or a
+provider is down. The counters live in one process: a restart empties them, and a second instance
+would have its own (the limits would then apply per instance, not overall).
+
 | What | Limit (code default) | Test config (E2E stack) | Proposal for production | Approved by PO |
 |---|---|---|---|---|
 | Create account | 5 / client, 3 / email, 30 overall per hour | 500 / client, 1000 overall | the defaults, with SES; without SES lower `SIGNUP_MAX_GLOBAL` (see email quota) | **not yet** |

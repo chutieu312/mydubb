@@ -1,8 +1,9 @@
 """Composition root: builds the application's long-lived collaborators from settings."""
 
 import logging
+import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from sqlalchemy import Engine
@@ -59,6 +60,9 @@ class SignupServices:
     # Create-account requests (every request counts): per client and overall, and per email hash.
     limiter: FailedAttemptLimiter
     email_limiter: FailedAttemptLimiter
+    # Held while both limiters are checked and updated (app/auth/signup.py), so the check and the
+    # count are one step; only sign-up uses these two limiters.
+    limits_lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
     def ready(self) -> bool:

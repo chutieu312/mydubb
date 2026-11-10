@@ -5,8 +5,10 @@ Fake Cognito (tests/fake_cognito.py), a fake reCAPTCHA verifier, mock pipeline, 
 transport and a disposable PostgreSQL: nothing reaches Google, AWS or a provider.
 """
 
+import contextlib
 import itertools
 import logging
+import threading
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -15,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from app.access.rate_limit import FailedAttemptLimiter
 from app.auth.cognito import CognitoErrorKind
 from app.config import Settings
 from app.main import content_security_policy, create_app
@@ -426,6 +429,114 @@ def test_create_account_is_limited_per_email(make_app, captcha, fake_cognito):
     refused = signup(client, f" {EMAIL} ")
     assert refused.status_code == 429
     assert len(captcha.calls) == 2 and fake_cognito.signup_emails == [EMAIL]
+
+
+IP_HEADER = "X-Test-Client"
+
+
+def signup_from(client: TestClient, ip: str, email: str):
+    body = {"email": email, "password": PASSWORD, "captcha_token": token()}
+    return client.post("/api/auth/signup", json=body, headers={IP_HEADER: ip})
+
+
+class CheckThenWait:
+    """A real sign-up limiter whose check waits, at most a second, for a second check to arrive.
+
+    If checking and recording are separate steps, two requests both read the last slot as free
+    here and both go on. If one lock covers both steps, the second check cannot start while the
+    first request holds the lock: the wait times out, the first request records its slot, and the
+    second then sees the limit as full."""
+
+    def __init__(self, inner: FailedAttemptLimiter) -> None:
+        self._inner = inner
+        self._barrier = threading.Barrier(2)
+
+    def retry_after(self, key: str) -> int | None:
+        wait = self._inner.retry_after(key)
+        with contextlib.suppress(threading.BrokenBarrierError):
+            self._barrier.wait(timeout=1)
+        return wait
+
+    def record_failure(self, key: str) -> None:
+        self._inner.record_failure(key)
+
+
+def race(client: TestClient, limiter: str, requests: list[tuple[str, str]]) -> list[int]:
+    """Sends two Create account requests at once while `limiter` holds them at the check."""
+    services = client.app.state.services.signup
+    setattr(services, limiter, CheckThenWait(getattr(services, limiter)))
+    results = run_concurrently(2, lambda i: signup_from(client, *requests[i]))
+    assert all(isinstance(r, httpx.Response) for r in results), results
+    refused = [r for r in results if r.status_code == 429]  # type: ignore[union-attr]
+    for response in refused:
+        assert error_code(response) == "too_many_attempts"
+        assert int(response.headers["Retry-After"]) > 0
+    return sorted(r.status_code for r in results)  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    ("setting", "limiter", "before", "requests"),
+    [
+        # The client's last slot: one address each, the same client.
+        ("signup_max_per_client", "limiter", ("1.1.1.1", "a@example.com"),
+         [("1.1.1.1", "b@example.com"), ("1.1.1.1", "c@example.com")]),
+        # The address's last slot: the same address from two clients.
+        ("signup_max_per_email", "email_limiter", ("1.1.1.1", EMAIL),
+         [("2.2.2.2", EMAIL), ("3.3.3.3", EMAIL)]),
+        # The last slot overall: different clients and addresses.
+        ("signup_max_global", "limiter", ("1.1.1.1", "a@example.com"),
+         [("2.2.2.2", "b@example.com"), ("3.3.3.3", "c@example.com")]),
+    ],
+    ids=["client", "email", "global"],
+)  # fmt: skip
+def test_two_requests_for_the_last_slot_let_only_one_through(
+    make_app, captcha, fake_cognito, setting, limiter, before, requests
+):
+    client = make_app(client_ip_header=IP_HEADER, **{setting: 2})
+    assert signup_from(client, *before).status_code == 200
+    assert race(client, limiter, requests) == [200, 429]
+    # The refused request reached neither Google nor Cognito.
+    assert len(captcha.calls) == 2 and fake_cognito.calls.count("SignUp") == 2
+
+
+def test_two_requests_with_room_both_go_on(make_app, captcha, fake_cognito):
+    client = make_app(client_ip_header=IP_HEADER, signup_max_per_client=3)
+    assert signup_from(client, "1.1.1.1", "a@example.com").status_code == 200
+    requests = [("1.1.1.1", "b@example.com"), ("1.1.1.1", "c@example.com")]
+    assert race(client, "limiter", requests) == [200, 200]
+    assert len(captcha.calls) == 3 and fake_cognito.calls.count("SignUp") == 3
+
+
+def test_a_full_limit_takes_no_slot_from_the_others_and_windows_reset(
+    make_app, captcha, fake_cognito
+):
+    client = make_app(client_ip_header=IP_HEADER)
+    now = [0.0]
+    services = client.app.state.services.signup
+    services.limiter = FailedAttemptLimiter(
+        max_per_client=2, max_global=3, window_seconds=3600, clock=lambda: now[0]
+    )
+    services.email_limiter = FailedAttemptLimiter(
+        max_per_client=1, max_global=2**31, window_seconds=3600, clock=lambda: now[0]
+    )
+
+    def at(t: float, ip: str, email: str) -> tuple[int, str | None]:
+        now[0] = t
+        response = signup_from(client, ip, email)
+        return response.status_code, response.headers.get("Retry-After")
+
+    assert at(0, "x", "a@example.com") == (200, None)
+    # The address is full: 429 until its slot leaves the window, and the client keeps its slot...
+    assert at(10, "x", "a@example.com") == (429, "3590")
+    assert at(20, "x", "b@example.com") == (200, None)
+    # ...the client is full: the address and the overall count keep theirs...
+    assert at(30, "x", "c@example.com") == (429, "3570")
+    assert at(40, "y", "c@example.com") == (200, None)
+    # ...the overall count is full: neither the client nor the address loses a slot.
+    assert at(50, "z", "d@example.com") == (429, "3550")
+    # The first slot leaves the window after an hour; the refused address was never counted.
+    assert at(3600, "z", "d@example.com") == (200, None)
+    assert len(captcha.calls) == 4 and fake_cognito.calls.count("SignUp") == 4
 
 
 def test_resend_uses_the_recovery_limits(make_app, fake_cognito):
