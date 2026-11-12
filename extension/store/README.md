@@ -1,5 +1,35 @@
 # Chrome Web Store preparation for MyDubb
 
+## 0.5.0 release preparation
+
+PR #59 is merged. Production CI deployment verified the corresponding backend Live.
+Public `/api/meta` reports self-registration enabled and extension guests disabled.
+The existing Dashboard item has **0.4.1 Published - unlisted** and **0.5.0 Draft**.
+These observations supersede the historical preparation table below; they do not mean 0.5.0
+has been reviewed or published.
+
+- Submission Description, manifest summary and reviewer instructions: [LISTING.md](LISTING.md).
+- Four refreshed real-panel fixture screenshots: [screenshots/](screenshots/).
+- Package process and image validation: [RELEASE-PACKAGE.md](RELEASE-PACKAGE.md).
+- PO's updated visibility choice is **Public** for the 0.5.0 draft. Do not enable extension guests until publication and PO acceptance.
+- Credentials belong only in the Dashboard and must be entered by PO.
+
+Draft preparation completed: replacement 0.5.0 ZIP accepted without a version bump;
+Summary from package displays the new 123-character manifest description. Description,
+all four screenshots, single purpose and permission justifications were updated. The
+494-character reviewer instructions were saved without changing the existing credential fields.
+The public privacy HTML matches the repository page. Homepage remains https://mydubb.com/;
+no dedicated Support URL has been verified, so it remains empty. Education and English remain.
+Existing logo retained; promo tiles and video are absent and were not added.
+
+The draft visibility is Public per PO's explicit updated choice; the currently published
+0.4.1 remains Unlisted until a reviewed change takes effect. PO must verify reviewer credentials
+and approve the final draft.
+**Only PO submits for review.** PO should select Publish automatically on submission;
+do not enable extension guests as part of submission.
+
+## Historical preparation record (0.4.1)
+
 **Status: preparation only. Nothing is submitted, reviewed or published; nothing is declared on
 any dashboard.** The Store Item ID and public key are known and verified, and a release ZIP of 0.4.1
 was built and checked locally; it has not been uploaded. This folder is not part of the extension
