@@ -596,6 +596,7 @@ export function App() {
                 <GuestBanner
                   quota={guest.quota}
                   imports={guestImports}
+                  signup={signupOffer !== null}
                   onSignIn={logout}
                   leaving={loggingOut}
                 />

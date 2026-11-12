@@ -216,8 +216,12 @@ A guest uses everything a connected account does (paste or Send to MyDubb, langu
 Generate, translation, listening, Sync where it applies) with the guest's limits: 5 audio jobs per
 guest session (shared with mydubb.com: a job made on either side counts once), 1,000 words and
 10 minutes of audio per job. The numbers come from MyDubb when the panel opens, after a Generate is
-accepted or refused for a limit and when a job ends (no timer; the website shows the same count
-after a refresh). With no job left the panel points to **Create a MyDubb account** and keeps
+accepted or refused for a limit and when a job ends (no timer for a guest; the website shows the
+same count after a refresh). An account's daily counts (Free) also have their reset time from
+MyDubb (`resets_at`, 00:00 UTC): a panel left open hides yesterday's count at that moment and asks
+for the new one (one timer, checked again when the panel comes back to the foreground, since Chrome
+delays timers behind it; if MyDubb does not answer, the count stays hidden and the panel asks at
+most 3 more times, 5 s, 30 s and 2 min apart). With no job left the panel points to **Create a MyDubb account** and keeps
 **Connect to MyDubb**; a connected guest always has both. Connecting an account replaces the guest
 in every panel (its job, result and audio go; late answers are dropped) and ends the guest's token;
 the guest session on mydubb.com goes on until it ends there. The token is kept like an account's
@@ -727,7 +731,12 @@ use the Azure free allowance.
 ## Acceptance of Story 5: onboarding and guests (Product Owner)
 
 On an integrated build (backend with `EXTENSION_GUEST_ENABLED=true`, `GUEST_ACCESS_ENABLED=true`,
-public sign-up on, the build's extension ID in `EXTENSION_IDS`), in one Chrome profile:
+public sign-up on, the build's extension ID in `EXTENSION_IDS`), in one Chrome profile. On
+production the same steps follow the rollout order of
+[docs/EXTENSION_AUTH.md](../docs/EXTENSION_AUTH.md#rollout-backend-website-store): steps 1, 2, 6
+and 7 with the Store build while the flag is still off (step 2 then without Try as guest), steps 3
+to 5 only after the Product Owner has checked the guest network identification there and turned
+the flag on:
 
 1. mydubb.com (signed out): under **Try as guest**, **MyDubb for Chrome** → **Install Chrome
    extension** opens the Store item `nndofiifflpbhefoehcbfpnaoiohicop`.

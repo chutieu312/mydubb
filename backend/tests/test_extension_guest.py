@@ -32,7 +32,14 @@ from tests.test_extension_auth import (
     _exchange,
     _verifier,
 )
-from tests.test_guest_access import GUEST_SETTINGS, IP_A, IP_B, IP_HEADER, start_guest
+from tests.test_guest_access import (
+    GUEST_SETTINGS,
+    IP_A,
+    IP_B,
+    IP_HEADER,
+    SIGNUP_CASES,
+    start_guest,
+)
 
 GUEST_EXT: dict[str, Any] = {
     **GUEST_SETTINGS,
@@ -301,6 +308,33 @@ def test_the_network_quota_and_the_shared_cap_apply(make_app):
     _ext_wait(small, other["access_token"], first.json()["id"], ip=IP_B)
     network = _ext_job(small, other["access_token"], ip=IP_B)
     assert network.json()["error"]["code"] == "guest_ip_quota_exhausted"
+
+
+@SIGNUP_CASES
+def test_the_extension_gets_the_same_ways_in_when_a_guest_is_used_up(make_app, signup, next_step):
+    """The panel shows the server's 429 message as it is: the same words as the website's."""
+    limits = {"guest_jobs_per_session": 2, "guest_jobs_per_ip": 3, **signup}
+    web, ext = make_app(**limits), make_app(**limits)
+    token = _connect_guest(web, ext)["access_token"]
+    for _ in range(2):
+        created = _ext_job(ext, token)
+        _ext_wait(ext, token, created.json()["id"])
+    session = _ext_job(ext, token)
+    assert session.status_code == 429
+    error = session.json()["error"]
+    assert error["code"] == "guest_session_quota_exhausted" and error["limit"] == 2
+    assert error["message"] == f"This guest session has used all 2 of its jobs. {next_step}"
+
+    web.cookies.clear()
+    other = _connect_guest(web, ext)["access_token"]
+    created = _ext_job(ext, other)
+    _ext_wait(ext, other, created.json()["id"])
+    network = _ext_job(ext, other)
+    assert network.status_code == 429 and "retry-after" in network.headers
+    error = network.json()["error"]
+    assert error["code"] == "guest_ip_quota_exhausted" and error["limit"] == 3
+    assert error["message"].endswith(f"Try again later. {next_step}")
+    assert "invitation" not in error["message"]
 
 
 # -- the code exchange ------------------------------------------------------------------------

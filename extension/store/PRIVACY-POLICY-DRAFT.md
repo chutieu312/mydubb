@@ -103,7 +103,8 @@ without a click, and they carry no transcript text:
   no sign-in token. Like any request, it reaches MyDubb with your network address.
 - If the panel holds a sign-in token, it asks MyDubb whether the token is still valid and how many
   audio jobs its account or guest session has left. It asks again after MyDubb accepts or refuses a
-  Generate because of a limit, and when a job ends.
+  Generate because of a limit, when a job ends, and, for an account with a daily limit, when that
+  day's counts start again (00:00 UTC) while the panel is open.
 - If a job was started in that tab and the panel is closed and opened again, or while a job runs,
   the panel asks MyDubb for the job's status, then its translation and its audio file, and keeps
   doing so until the job ends or you leave the lecture. These requests carry your token and the

@@ -111,6 +111,18 @@ const ALLOWANCE_CODES = new Set([
   "guest_session_quota_exhausted",
   "guest_ip_quota_exhausted",
 ]);
+// After an account's daily counts reset (resetsAt): how long to wait before each new ask while
+// the new numbers have not arrived. Then no more until the next ask (panel open, Generate, job end).
+const RESET_RETRY_MS = [5_000, 30_000, 120_000];
+// setTimeout's longest delay; a later reset is armed again when this one fires.
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** When an account's daily counts start again, as the server said; null for none (guest, no limit). */
+function resetTimeOf(allowance: Allowance): number | null {
+  if (allowance.kind !== "account" || allowance.exempt || allowance.limit === null) return null;
+  const at = Date.parse(allowance.resetsAt);
+  return Number.isFinite(at) ? at : null;
+}
 
 /**
  * Today's limits as the server reported them (never computed here). `signup`: Create a MyDubb
@@ -415,6 +427,10 @@ export class Dubbing {
   // an older answer never replaces a newer one, and another connection's never shows.
   private allowance: { connectionId: string; value: Allowance } | null = null;
   private allowanceAsk = 0;
+  // The one timer to the shown counts' reset (or to the next ask after it), with the listeners
+  // that check it when the panel comes back to the foreground (Chrome delays timers behind it).
+  private resetTimer: { handle: number; listeners: AbortController } | null = null;
+  private resetRetries = 0;
   // Bumped whenever the account connection or the lecture changes: older answers are dropped.
   private authGen = 0;
   private lessonGen = 0;
@@ -576,6 +592,7 @@ export class Dubbing {
     if (this.disposed) return;
     this.disposed = true;
     this.cleanup.abort();
+    this.clearReset();
     this.poll?.abort();
     this.poll = null;
     this.audioLoad?.abort();
@@ -701,6 +718,8 @@ export class Dubbing {
     this.authGen += 1;
     this.auth = next;
     this.allowance = null;
+    this.clearReset();
+    this.resetRetries = 0;
     // Another account (or none): nothing of the previous one may stay on screen or keep playing.
     if (this.record) this.dropJob(fromChange && hadAuth ? ACCOUNT_CHANGED : null);
     // Also when no job record is left (a refused Generate): the translation is the old account's.
@@ -719,28 +738,91 @@ export class Dubbing {
    * Asks the server whether the token is still valid (one it no longer accepts is removed, once,
    * for that connection) and for today's limits of its account or
    * guest session: when the panel opens, after a Generate it accepted or refused for a limit, and
-   * when a followed job ends. Never on a timer. The answer is shown only for the connection that
-   * asked and if no newer ask was made; a 401 ends the connection.
+   * when a followed job ends, and for an account's daily counts once more when they reset
+   * (planReset). Guests never on a timer. The answer is shown only for the connection that asked
+   * and if no newer ask was made; a 401 ends the connection.
    */
   private async refreshAllowance(): Promise<void> {
     const auth = this.auth;
     if (!auth) return;
     const ask = (this.allowanceAsk += 1);
     const authGen = this.authGen;
+    const current = () => !this.disposed && authGen === this.authGen && ask === this.allowanceAsk;
     try {
       const session = await this.deps.api.session(auth.token);
-      if (this.disposed || authGen !== this.authGen || ask !== this.allowanceAsk) return;
+      if (!current()) return;
       this.allowance = session.allowance ? { connectionId: auth.connectionId, value: session.allowance } : null;
       this.renderAllowance();
     } catch (error) {
-      if (error instanceof MyDubbError && error.isUnauthenticated) await this.expireAuth(auth);
-      // Otherwise the last numbers stay; the server still decides every Generate.
+      if (error instanceof MyDubbError && error.isUnauthenticated) {
+        await this.expireAuth(auth);
+        return;
+      }
+      if (!current()) return;
+      // Otherwise the last numbers stay until their reset; the server still decides every Generate.
     }
+    this.planReset();
+  }
+
+  /** The shown account's reset time, if its counts have one. */
+  private resetTime(): number | null {
+    const shown = this.auth && this.allowance?.connectionId === this.auth.connectionId ? this.allowance.value : null;
+    return shown ? resetTimeOf(shown) : null;
+  }
+
+  /**
+   * One timer for the shown counts: to their reset while they hold, otherwise (past it, the new
+   * numbers not in yet: the ask failed, or answered with counts already past it by this clock) to
+   * the next of a few asks, then none.
+   */
+  private planReset(): void {
+    this.clearReset();
+    const at = this.resetTime();
+    const now = this.deps.now();
+    if (at === null || now < at) {
+      this.resetRetries = 0;
+      if (at !== null) this.armReset(at);
+      return;
+    }
+    const wait = RESET_RETRY_MS[this.resetRetries];
+    if (wait === undefined) return;
+    this.resetRetries += 1;
+    this.armReset(now + wait);
+  }
+
+  private armReset(due: number): void {
+    const listeners = new AbortController();
+    const handle = window.setTimeout(() => this.resetDue(), Math.min(Math.max(0, due - this.deps.now()), MAX_TIMER_MS));
+    // A timer Chrome held back while the panel was in the background runs as soon as it is back.
+    const check = () => {
+      if (document.visibilityState === "visible" && this.deps.now() >= due) this.resetDue();
+    };
+    document.addEventListener("visibilitychange", check, { signal: listeners.signal });
+    window.addEventListener("focus", check, { signal: listeners.signal });
+    this.resetTimer = { handle, listeners };
+  }
+
+  private clearReset(): void {
+    if (!this.resetTimer) return;
+    window.clearTimeout(this.resetTimer.handle);
+    this.resetTimer.listeners.abort();
+    this.resetTimer = null;
+  }
+
+  private resetDue(): void {
+    this.clearReset();
+    // Past the reset the old counts are no longer true: they go at once, before the new ones come.
+    this.renderAllowance();
+    const at = this.resetTime();
+    if (at !== null && this.deps.now() < at) this.planReset();
+    else void this.refreshAllowance();
   }
 
   private renderAllowance(): void {
     const ui = this.ui;
-    const value = this.auth && this.allowance?.connectionId === this.auth.connectionId ? this.allowance.value : null;
+    const shown = this.auth && this.allowance?.connectionId === this.auth.connectionId ? this.allowance.value : null;
+    const at = shown ? resetTimeOf(shown) : null;
+    const value = at !== null && this.deps.now() >= at ? null : shown;
     ui.allowance.hidden = value === null;
     ui.allowance.textContent = value ? allowanceText(value, signupOf(this.meta) !== null) : "";
   }

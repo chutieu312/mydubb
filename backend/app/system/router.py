@@ -105,7 +105,7 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
 
 
 def _signup_ready(services: AppServices) -> bool:
-    return services.signup is not None and services.signup.ready
+    return services.signup_open
 
 
 def _signup(services: AppServices) -> dict:

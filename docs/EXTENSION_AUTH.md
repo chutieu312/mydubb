@@ -161,16 +161,19 @@ order is fixed. Nothing here is done by the pull request.
 
 | Step | Backend / website | Store | What the website says and the extension shows |
 |---|---|---|---|
-| 1 | Merge and deploy; migration `0022_extension_guest` runs; `EXTENSION_GUEST_ENABLED` unset (off) | 0.4.1 (published, Udemy only, Connect only) | Sign-in page: "MyDubb for Chrome" with the Udemy, Connect-your-account wording and **Install Chrome extension**. 0.4.1 keeps working: the token and session answers only gain fields it ignores (`kind`, `guest`, `usage`, `quota`) and its requests are unchanged |
-| 2 | Same | Upload **0.5.0** (same Item ID `nndofiifflpbhefoehcbfpnaoiohicop`, release build with the Store key), review, publish | 0.5.0 shows Connect to MyDubb, and Create a MyDubb account only while sign-up is on (`/api/meta` `signup`), and no Try as guest while the flag is off |
-| 3 | After the Product Owner accepted 0.5.0 from the Store on Chrome: `EXTENSION_GUEST_ENABLED=true` (needs `GUEST_ACCESS_ENABLED=true` and the Store ID in `EXTENSION_IDS`) | 0.5.0 | The extension offers Try as guest; the website adds "Udemy or another web page" and "or try it as a guest" (both read the same `guest_access.extension`) |
+| 1 | Merge and deploy with `EXTENSION_GUEST_ENABLED=false` (unset is the same); migration `0022_extension_guest` runs | 0.4.1 (published, Udemy only, Connect only) | Sign-in page: "MyDubb for Chrome" with the Udemy, Connect-your-account wording and **Install Chrome extension**. 0.4.1 keeps working: the token and session answers only gain fields it ignores (`kind`, `guest`, `usage`, `quota`) and its requests are unchanged |
+| 2 | Same (flag off) | Upload **0.5.0** (same Item ID `nndofiifflpbhefoehcbfpnaoiohicop`, release build with the Store key), review, publish | 0.5.0 shows Connect to MyDubb, and Create a MyDubb account only while sign-up is on (`/api/meta` `signup`), and no Try as guest while the flag is off |
+| 3 | Same (flag off) | 0.5.0 **installed from the Store** | Product Owner acceptance with an account: **Create a MyDubb account** → verify the email → **Connect to MyDubb** → **Generate** and listen (the panel shows the Free plan's count); an existing account connects and generates as before |
+| 4 | The Product Owner checks on production how guests' networks are identified (the client address behind the proxy, GUEST_ACCESS.md "Spoofing check"), then sets `EXTENSION_GUEST_ENABLED=true` (needs `GUEST_ACCESS_ENABLED=true` and the Store ID in `EXTENSION_IDS`) | 0.5.0 | The extension offers Try as guest; the website adds "Udemy or another web page" and "or try it as a guest" (both read the same `guest_access.extension`) |
+| 5 | Flag on | 0.5.0 installed from the Store | Product Owner acceptance of **Try as guest** in one Chrome profile, both ways: **web first** (guest jobs on mydubb.com, then Try as guest in the panel continues that session) and **extension first** (Try as guest in the panel, then mydubb.com opens that session); the count is the same on both sides after each job |
 | Off | `EXTENSION_GUEST_ENABLED=false` | any | Try as guest disappears at the next panel load; every guest token is refused at its next request (the panel asks to connect again); the website's words go back to step 1 |
 
-Conditions before step 3 on production: guest access itself is on there, and the open guest
+Conditions before step 4 on production: guest access itself is on there, and the open guest
 decisions of `docs/context.md` (the spoofing check of GUEST_ACCESS.md has no evidence yet) apply to
 guests from the extension in the same way, since they share the same quotas and network key. Chrome
-updates installed extensions within hours, not at once: for a short time after step 3 someone may
-still run 0.4.1, which simply has no Try as guest.
+updates installed extensions within hours, not at once: for a short time after step 4 someone may
+still run 0.4.1, which simply has no Try as guest. The detailed steps of 3 and 5 are in
+[extension/README.md](../extension/README.md#acceptance-of-story-5-onboarding-and-guests-product-owner).
 
 ## Extension side
 

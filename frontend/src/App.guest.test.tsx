@@ -274,6 +274,57 @@ describe("quota in the Studio", () => {
     ).toBeTruthy();
   });
 
+  // The server's 429 words (app/jobs/router.py), and the banner's, follow its public sign-up.
+  const SIGNUP_ON_META = {
+    ...GUEST_META,
+    auth: { mode: "cognito", self_registration: true, password_reset: true },
+    signup: {
+      enabled: true,
+      recaptcha_site_key: "site-key-1",
+      free_plan: { generates_per_day: 20, youtube_imports_per_day: 5, max_words: 1000, max_output_seconds: 600 },
+    },
+  };
+  const NEXT = {
+    on: "Create a MyDubb account or sign in to continue.",
+    off: "Sign in with an existing MyDubb account to continue.",
+  };
+  it.each([
+    ["session", "on"],
+    ["session", "off"],
+    ["network", "on"],
+    ["network", "off"],
+  ] as const)("a used-up %s with sign-up %s names the ways in the server offers", async (scope, signup) => {
+    const next = NEXT[signup];
+    const used =
+      scope === "session"
+        ? { session_used: 5, session_remaining: 0 }
+        : { ip_used: 20, ip_remaining: 0, ip_retry_after_seconds: 7200 };
+    const message =
+      scope === "session"
+        ? `This guest session has used all 5 of its jobs. ${next}`
+        : `Guests on your network have used all 20 guest jobs allowed in 24 hours. Everyone on the same network shares this limit. Try again later. ${next}`;
+    const { user } = setup(
+      {
+        "GET /api/auth/me": [notAuthenticated],
+        "GET /api/guest/session": [guestSession(), guestSession(used)],
+        "POST /api/jobs": [
+          () => apiError(429, scope === "session" ? "guest_session_quota_exhausted" : "guest_ip_quota_exhausted", message),
+        ],
+      },
+      signup === "on" ? SIGNUP_ON_META : GUEST_META,
+    );
+    await screen.findByRole("region", { name: "Guest mode" });
+    await fillForm(user);
+    await user.click(button("Generate audio"));
+    // The server's answer, as it is.
+    expect((await screen.findByRole("alert")).textContent).toContain(message);
+    // The banner, from the refreshed quota, in the same words.
+    const banner = screen.getByRole("region", { name: "Guest mode" });
+    const limit = await within(banner).findByText(new RegExp(scope === "session" ? "used all 5 of its jobs" : "used all 20 guest jobs"));
+    expect(limit.textContent!.endsWith(next)).toBe(true);
+    expect(banner.textContent).not.toMatch(/invitation to keep dubbing/);
+  });
+
   it("previews the word count without timestamps and warns over the limit", async () => {
     setup({
       "GET /api/auth/me": [notAuthenticated],

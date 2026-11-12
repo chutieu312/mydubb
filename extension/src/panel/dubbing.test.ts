@@ -153,6 +153,8 @@ let pageShown: { access: PageAccess; page: string | null; video: VideoState | nu
 // Where the panel asked the page to pause the video, and what the page answers.
 let placed: [string, number][];
 let placeAnswer: () => Promise<string | null>;
+// The panel's clock (deps.now); moved only by the tests of the daily reset.
+let clock = Date.parse("2030-01-01T00:00:00Z");
 
 function make(
   storage = fakeStorage({ [AUTH_KEY]: AUTH }),
@@ -170,7 +172,7 @@ function make(
       let n = 0;
       return () => `id-${++n}`;
     })(),
-    now: () => Date.parse("2030-01-01T00:00:00Z"),
+    now: () => clock,
     player,
   };
   const dubbing = new Dubbing(deps, {
@@ -224,6 +226,7 @@ beforeEach(() => {
   pageShown = { access: "unknown", page: null, video: null };
   placed = [];
   placeAnswer = async () => null;
+  clock = Date.parse("2030-01-01T00:00:00Z");
 });
 
 afterEach(() => {
@@ -2586,5 +2589,168 @@ describe("onboarding: Connect, Create a MyDubb account, Try as guest (Story 5)",
     expect($("account-error").textContent).toMatch(/closed before connecting/);
     expect($<HTMLButtonElement>("try-guest").disabled).toBe(false);
     expect(api.exchangeCode).not.toHaveBeenCalled();
+  });
+});
+
+describe("Free plan counts after their daily reset (resetsAt)", () => {
+  const RESET = Date.parse("2030-01-02T00:00:00Z");
+  const free = (remaining: number, resetsAt = "2030-01-02T00:00:00Z", user = AUTH) => ({
+    expires_at: user.expiresAt,
+    allowance: { kind: "account", plan: "free", exempt: false, used: 20 - remaining, limit: 20, remaining, resetsAt },
+  });
+  const text = (remaining: number) => `Free plan: ${remaining} of 20 Generates left today (counts start again at 00:00 UTC).`;
+  const TIMEOUT = new MyDubbError(0, "timeout", "MyDubb did not answer in time.");
+  const shown = () => ($("allowance").hidden ? null : $("allowance").textContent);
+  // The panel's clock and Chrome's timers move together, unless a test holds the timers back.
+  const tick = async (ms: number) => {
+    clock += ms;
+    await vi.advanceTimersByTimeAsync(ms);
+  };
+  const deferred = () => {
+    let resolve: (value: unknown) => void = () => undefined;
+    const promise = new Promise((r) => (resolve = r));
+    return { promise, resolve };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    clock = RESET - 60_000; // 23:59 UTC
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function opened(session: ReturnType<typeof vi.fn>, storage = fakeStorage({ [AUTH_KEY]: AUTH })) {
+    const made = make(storage, fakeApi({ session }));
+    const start = made.dubbing.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+    await vi.advanceTimersByTimeAsync(0);
+    return made;
+  }
+
+  it("an open panel hides the old count at the reset and shows the new one; one timer, no polling", async () => {
+    const next = deferred();
+    const session = vi.fn().mockResolvedValueOnce(free(1)).mockReturnValueOnce(next.promise);
+    const { dubbing } = await opened(session);
+    expect(shown()).toBe(text(1));
+    await tick(59_000);
+    expect(session).toHaveBeenCalledTimes(1);
+    await tick(1_000);
+    // 00:00 UTC: yesterday's count is gone at once, before the new one arrives.
+    expect(session).toHaveBeenCalledTimes(2);
+    expect(shown()).toBeNull();
+    next.resolve(free(20, "2030-01-03T00:00:00Z"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown()).toBe(text(20));
+    // Nothing more until the next reset.
+    await tick(23 * 3600_000);
+    expect(session).toHaveBeenCalledTimes(2);
+    dubbing.dispose();
+  });
+
+  it("a timer Chrome held back in the background runs when the panel comes back to the foreground", async () => {
+    const session = vi.fn().mockResolvedValueOnce(free(1)).mockResolvedValueOnce(free(20, "2030-01-03T00:00:00Z"));
+    const { dubbing } = await opened(session);
+    // Back in the foreground before the reset: nothing to do.
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session).toHaveBeenCalledTimes(1);
+    // Hours pass while the panel is behind; its timer has not run.
+    clock = RESET + 3 * 3600_000;
+    expect(shown()).toBe(text(1));
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(shown()).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session).toHaveBeenCalledTimes(2);
+    expect(shown()).toBe(text(20));
+    // The held-back timer, when it finally runs, finds nothing to do.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(session).toHaveBeenCalledTimes(2);
+    dubbing.dispose();
+  });
+
+  it("when the new count cannot be had, the old one stays hidden and only a few asks follow", async () => {
+    const session = vi.fn().mockResolvedValueOnce(free(1)).mockRejectedValue(TIMEOUT);
+    const { dubbing } = await opened(session);
+    await tick(60_000);
+    expect(session).toHaveBeenCalledTimes(2);
+    expect(shown()).toBeNull();
+    for (const [wait, calls] of [[5_000, 3], [30_000, 4], [120_000, 5]] as const) {
+      await tick(wait - 1);
+      expect(session).toHaveBeenCalledTimes(calls - 1);
+      await tick(1);
+      expect(session).toHaveBeenCalledTimes(calls);
+      expect(shown()).toBeNull();
+    }
+    await tick(24 * 3600_000);
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session).toHaveBeenCalledTimes(5);
+    expect(shown()).toBeNull();
+    // A server whose answer is itself past the reset (a clock ahead of the server's) is no loop either.
+    dubbing.dispose();
+    clock = RESET - 60_000;
+    const skewed =vi.fn().mockResolvedValueOnce(free(1)).mockResolvedValue(free(1));
+    const other = await opened(skewed);
+    await tick(60_000 + 5_000 + 30_000 + 120_000 + 3600_000);
+    expect(skewed).toHaveBeenCalledTimes(5);
+    expect(shown()).toBeNull();
+    other.dubbing.dispose();
+  });
+
+  it("a late answer of the previous connection shows nothing; Disconnect, another identity and closing end the timer", async () => {
+    const late = deferred();
+    const session = vi.fn((token: string) =>
+      token === AUTH.token
+        ? session.mock.calls.length === 1
+          ? Promise.resolve(free(1))
+          : late.promise
+        : Promise.resolve(free(7, "2030-01-03T00:00:00Z", OTHER)),
+    );
+    const { dubbing } = await opened(session);
+    await tick(60_000);
+    expect(session).toHaveBeenLastCalledWith(AUTH.token);
+    // Another account connects (another panel) while the reset's ask is out.
+    dubbing.onStorageChanged({ [AUTH_KEY]: { oldValue: AUTH, newValue: OTHER } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown()).toBe(text(7));
+    late.resolve(free(20, "2030-01-03T00:00:00Z"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown()).toBe(text(7));
+    // Disconnect: the new connection's timer goes with it.
+    $<HTMLButtonElement>("disconnect").click();
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = session.mock.calls.length;
+    await tick(25 * 3600_000);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session).toHaveBeenCalledTimes(calls);
+    dubbing.dispose();
+
+    // Closing the panel (dispose) ends the timer and its foreground listeners.
+    clock = RESET - 60_000;
+    const closed = await opened(vi.fn().mockResolvedValue(free(1)));
+    closed.dubbing.dispose();
+    clock = RESET + 1;
+    document.dispatchEvent(new Event("visibilitychange"));
+    await tick(3600_000);
+    expect(closed.api.session).toHaveBeenCalledTimes(1);
+  });
+
+  it("guests keep their own counts: no reset timer", async () => {
+    const guest: StoredAuth = { ...AUTH, guest: true, user: { id: "guest:g1", email: "", display_name: null }, connectionId: "conn-g" };
+    const session = vi.fn().mockResolvedValue({
+      expires_at: guest.expiresAt,
+      allowance: { kind: "guest", used: 2, inProgress: 0, limit: 5, remaining: 3 },
+    });
+    const { dubbing } = await opened(session, fakeStorage({ [AUTH_KEY]: guest }));
+    expect(shown()).toBe("Guest: 3 of 5 audio jobs left.");
+    await tick(2 * 24 * 3600_000);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session).toHaveBeenCalledTimes(1);
+    dubbing.dispose();
   });
 });
