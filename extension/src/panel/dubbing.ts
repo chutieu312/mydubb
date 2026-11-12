@@ -10,6 +10,7 @@
 
 import type { AppMeta, Job, JobResult, TargetLanguageOption, VoiceOption } from "../../../frontend/src/api/types";
 import { buildJobRequest, captionKey, fieldsFromCaptions, usesTimestamps } from "../../../frontend/src/lib/jobRequest";
+import { extensionGuestOf, signupOf } from "../../../frontend/src/lib/authMode";
 import { VIETNAMESE, jobLanguage, languageChoiceOf } from "../../../frontend/src/lib/languages";
 import { azureDisclosureShort } from "../../../frontend/src/lib/providers";
 import {
@@ -29,7 +30,7 @@ import { pageSyncState, type PageAccess } from "./pageSync";
 import { adoptedKey, formKey, isAdoptedRecord, jobKey, loadedKey } from "../shared/messages";
 import { PLAYER_SEEK_SECONDS, sourceRangeOf, type PanelPlayerView, type PlaybackProblem } from "../shared/playback";
 import { clockLabel, isSyncSource, syncNoticeText, syncPreviewText, syncStatusText, type SyncSource } from "../shared/sync";
-import { MyDubbError, NO_ANSWER, type MyDubbApi } from "./api";
+import { MyDubbError, NO_ANSWER, type Allowance, type MyDubbApi } from "./api";
 import { AUTH_KEY, connect, connectErrorMessage, isLive, isStoredAuth, type StoredAuth } from "./auth";
 import { formatTime, type CurrentLesson } from "./draft";
 import {
@@ -103,6 +104,35 @@ const LESSON_CHANGED =
   "The lecture changed. A job already sent keeps running on MyDubb, but its result is not shown under this lecture.";
 const ACCOUNT_CHANGED = "The MyDubb account changed, so the previous job and result were cleared from this panel.";
 const CONNECTION_ENDED = "Your MyDubb connection ended (expired or disconnected). Connect again to continue.";
+// Refusals after which today's numbers are asked again (the server's count changed, or is spent).
+const ALLOWANCE_CODES = new Set([
+  "daily_generate_quota_exhausted",
+  "generate_daily_cap_reached",
+  "guest_session_quota_exhausted",
+  "guest_ip_quota_exhausted",
+]);
+
+/**
+ * Today's limits as the server reported them (never computed here). `signup`: Create a MyDubb
+ * account is offered, so a guest with nothing left is pointed there.
+ */
+export function allowanceText(allowance: Allowance, signup: boolean): string {
+  if (allowance.kind === "guest") {
+    const running = allowance.inProgress > 0 ? ` (${allowance.inProgress} still processing)` : "";
+    if (allowance.remaining > 0) {
+      return `Guest: ${allowance.remaining} of ${allowance.limit} audio jobs left${running}.`;
+    }
+    const next = signup
+      ? "Create a MyDubb account to keep dubbing, or connect the account you have."
+      : "Connect a MyDubb account to keep dubbing.";
+    return `Guest: no audio jobs left${running}. ${next}`;
+  }
+  if (allowance.exempt || allowance.limit === null || allowance.remaining === null) {
+    return "No daily MyDubb limits for this account.";
+  }
+  const plan = allowance.plan.charAt(0).toUpperCase() + allowance.plan.slice(1);
+  return `${plan} plan: ${allowance.remaining} of ${allowance.limit} Generates left today (counts start again at 00:00 UTC).`;
+}
 const AUDIO_READY = "Ready. Press play when you want to listen.";
 const PLAYER_PROBLEMS: Record<PlaybackProblem, string> = {
   "play-blocked": "Chrome blocked playback. Press Play again.",
@@ -208,6 +238,15 @@ function dubbingUi() {
     accountError: byId("account-error"),
     connect: byId<HTMLButtonElement>("connect"),
     disconnect: byId<HTMLButtonElement>("disconnect"),
+    onboarding: byId("onboarding"),
+    onboardingTitle: byId("onboarding-title"),
+    connectHint: byId("connect-hint"),
+    signupChoice: byId("signup-choice"),
+    signup: byId<HTMLAnchorElement>("signup"),
+    guestChoice: byId("guest-choice"),
+    tryGuest: byId<HTMLButtonElement>("try-guest"),
+    guestHint: byId("guest-hint"),
+    allowance: byId("allowance"),
     metaStatus: byId("meta-status"),
     metaRetry: byId<HTMLButtonElement>("meta-retry"),
     timing: byId("timing"),
@@ -370,7 +409,12 @@ export class Dubbing {
   private defaultLanguage = "";
   private voices: VoiceOption[] = [];
   private auth: StoredAuth | null = null;
-  private connecting = false;
+  // Which way in is being tried ("account": Connect, "guest": Try as guest), one at a time.
+  private connecting: "account" | "guest" | null = null;
+  // Today's limits of one connection, as the server last reported them; each ask is numbered so
+  // an older answer never replaces a newer one, and another connection's never shows.
+  private allowance: { connectionId: string; value: Allowance } | null = null;
+  private allowanceAsk = 0;
   // Bumped whenever the account connection or the lecture changes: older answers are dropped.
   private authGen = 0;
   private lessonGen = 0;
@@ -440,7 +484,9 @@ export class Dubbing {
   async restore(): Promise<void> {
     const signal = this.cleanup.signal;
     const ui = this.ui;
-    ui.connect.addEventListener("click", () => void this.connectAccount(), { signal });
+    ui.connect.addEventListener("click", () => void this.connectAccount(false), { signal });
+    ui.tryGuest.addEventListener("click", () => void this.connectAccount(true), { signal });
+    ui.signup.href = `${this.deps.origin}/signup`;
     ui.disconnect.addEventListener("click", () => void this.disconnectAccount(), { signal });
     ui.metaRetry.addEventListener("click", () => void this.loadMeta(), { signal });
     ui.generate.addEventListener("click", () => void this.generate(), { signal });
@@ -522,7 +568,7 @@ export class Dubbing {
 
   /** Checks the stored token with the server and loads the options (languages, voices). */
   async loadRemote(): Promise<void> {
-    void this.verifyAuth();
+    void this.refreshAllowance();
     await this.loadMeta();
   }
 
@@ -545,7 +591,11 @@ export class Dubbing {
 
   onStorageChanged(changes: Record<string, chrome.storage.StorageChange>): void {
     const change = changes[AUTH_KEY];
-    if (change) this.applyAuth(change.newValue, true);
+    if (!change) return;
+    const before = this.auth?.connectionId;
+    this.applyAuth(change.newValue, true);
+    // Connected in another panel: this one shows that connection's numbers too.
+    if (this.auth && this.auth.connectionId !== before && this.connecting === null) void this.refreshAllowance();
   }
 
   /** Every page state: forget what belongs to another lecture. */
@@ -650,6 +700,7 @@ export class Dubbing {
     const hadAuth = this.auth !== null;
     this.authGen += 1;
     this.auth = next;
+    this.allowance = null;
     // Another account (or none): nothing of the previous one may stay on screen or keep playing.
     if (this.record) this.dropJob(fromChange && hadAuth ? ACCOUNT_CHANGED : null);
     // Also when no job record is left (a refused Generate): the translation is the old account's.
@@ -664,15 +715,34 @@ export class Dubbing {
     this.renderAccount();
   }
 
-  /** A stored token the server no longer accepts is removed (once, for that connection). */
-  private async verifyAuth(): Promise<void> {
+  /**
+   * Asks the server whether the token is still valid (one it no longer accepts is removed, once,
+   * for that connection) and for today's limits of its account or
+   * guest session: when the panel opens, after a Generate it accepted or refused for a limit, and
+   * when a followed job ends. Never on a timer. The answer is shown only for the connection that
+   * asked and if no newer ask was made; a 401 ends the connection.
+   */
+  private async refreshAllowance(): Promise<void> {
     const auth = this.auth;
     if (!auth) return;
+    const ask = (this.allowanceAsk += 1);
+    const authGen = this.authGen;
     try {
-      await this.deps.api.session(auth.token);
+      const session = await this.deps.api.session(auth.token);
+      if (this.disposed || authGen !== this.authGen || ask !== this.allowanceAsk) return;
+      this.allowance = session.allowance ? { connectionId: auth.connectionId, value: session.allowance } : null;
+      this.renderAllowance();
     } catch (error) {
       if (error instanceof MyDubbError && error.isUnauthenticated) await this.expireAuth(auth);
+      // Otherwise the last numbers stay; the server still decides every Generate.
     }
+  }
+
+  private renderAllowance(): void {
+    const ui = this.ui;
+    const value = this.auth && this.allowance?.connectionId === this.auth.connectionId ? this.allowance.value : null;
+    ui.allowance.hidden = value === null;
+    ui.allowance.textContent = value ? allowanceText(value, signupOf(this.meta) !== null) : "";
   }
 
   private async expireAuth(auth: StoredAuth): Promise<void> {
@@ -687,9 +757,15 @@ export class Dubbing {
     }
   }
 
-  private async connectAccount(): Promise<void> {
+  /**
+   * Connect to MyDubb (`guest` false) or Try as guest (`guest` true), started by the user's click.
+   * A guest who connects an account (or starts again) replaces the guest connection: the usual
+   * change of identity, then the replaced token is ended on the server (its guest session on
+   * mydubb.com carries on).
+   */
+  private async connectAccount(guest: boolean): Promise<void> {
     if (this.connecting) return;
-    this.connecting = true;
+    this.connecting = guest ? "guest" : "account";
     this.ui.accountError.textContent = "";
     this.renderAccount();
     try {
@@ -699,14 +775,20 @@ export class Dubbing {
         api: this.deps.api,
         launchWebAuthFlow: (url) => this.deps.launchWebAuthFlow(url),
         newConnectionId: () => this.deps.randomId(),
+        guest,
       });
       if (this.disposed) return;
+      const replaced = this.auth;
       await this.deps.storage.set({ [AUTH_KEY]: auth });
       this.applyAuth(auth, true);
+      void this.refreshAllowance();
+      if (replaced && replaced.connectionId !== auth.connectionId) {
+        void this.deps.api.logout(replaced.token).catch(() => undefined);
+      }
     } catch (error) {
       if (!this.disposed) this.ui.accountError.textContent = connectErrorMessage(error);
     } finally {
-      this.connecting = false;
+      this.connecting = null;
       if (!this.disposed) this.renderAccount();
     }
   }
@@ -729,22 +811,43 @@ export class Dubbing {
   private renderAccount(): void {
     const ui = this.ui;
     const auth = this.auth;
-    ui.connect.hidden = auth !== null;
-    ui.connect.disabled = this.connecting;
-    ui.connect.textContent = this.connecting ? "Connecting…" : "Connect MyDubb";
+    const guest = auth?.guest === true;
+    // The ways in while not connected; for a guest, the ways to an account. Create account and
+    // Try as guest only when MyDubb says they are on (GET /api/meta), so no link leads to a
+    // sign-up that is off.
+    ui.onboarding.hidden = auth !== null && !guest;
+    ui.onboardingTitle.textContent = guest ? "Keep dubbing with a MyDubb account" : "Connect MyDubb to generate audio";
+    ui.connectHint.textContent = guest
+      ? "Connecting an account replaces the guest session in this panel."
+      : "Have a MyDubb account? You sign in on mydubb.com.";
+    ui.signupChoice.hidden = signupOf(this.meta) === null;
+    ui.guestChoice.hidden = auth !== null || !extensionGuestOf(this.meta);
+    const limits = this.meta?.guest_access;
+    ui.guestHint.textContent =
+      limits && limits.jobs_per_session && limits.max_words && limits.max_output_seconds
+        ? `No account needed: up to ${limits.jobs_per_session} audio jobs of up to ${limits.max_words.toLocaleString("en-US")} words and ${Math.round(limits.max_output_seconds / 60)} minutes each. You confirm on mydubb.com, and mydubb.com in this Chrome profile shares the same guest session and limits.`
+        : "";
+    ui.connect.disabled = this.connecting !== null;
+    ui.tryGuest.disabled = this.connecting !== null;
+    ui.connect.textContent = this.connecting === "account" ? "Connecting…" : "Connect to MyDubb";
+    ui.tryGuest.textContent = this.connecting === "guest" ? "Connecting…" : "Try as guest";
     ui.disconnect.hidden = auth === null;
-    if (auth) {
+    if (auth && guest) {
+      ui.accountStatus.textContent = "Guest session";
+      ui.accountStatus.removeAttribute("title");
+      ui.accountDetail.textContent = "Guest: the guest session of mydubb.com in this Chrome profile.";
+    } else if (auth) {
       const name = auth.user.display_name;
       ui.accountStatus.textContent = `Connected as ${name || auth.user.email}`;
       ui.accountStatus.title = auth.user.email;
       ui.accountDetail.textContent = name ? `${name} (${auth.user.email})` : auth.user.email;
     } else {
       ui.accountStatus.removeAttribute("title");
-      ui.accountDetail.textContent =
-        "MyDubb invitation accounts only; sign-in happens on mydubb.com.";
+      ui.accountDetail.textContent = "Sign-in happens on mydubb.com; the extension never sees your password.";
       if (this.connecting) ui.accountStatus.textContent = "Signing in…";
       else if (ui.accountStatus.textContent !== "Disconnected") ui.accountStatus.textContent = "Not connected";
     }
+    this.renderAllowance();
     this.renderGenerate();
   }
 
@@ -777,6 +880,7 @@ export class Dubbing {
         this.selectedVoice(),
       );
       ui.voice.disabled = this.voices.length === 0;
+      this.renderAccount();
     } catch {
       if (this.disposed) return;
       ui.metaStatus.textContent = "Could not load the MyDubb options (languages and voices).";
@@ -919,7 +1023,9 @@ export class Dubbing {
     ui.generate.textContent = this.sendingOp !== null ? "Sending…" : "Generate audio";
     ui.generateHint.textContent = this.auth
       ? "Your text is sent to MyDubb only when you choose Generate audio."
-      : "Connect MyDubb (top of the panel) to generate audio.";
+      : extensionGuestOf(this.meta)
+        ? "Connect to MyDubb or choose Try as guest (top of the panel) to generate audio."
+        : "Connect to MyDubb (top of the panel) to generate audio.";
   }
 
   private scheduleSave(): void {
@@ -1059,6 +1165,7 @@ export class Dubbing {
     this.record = created;
     // The server accepted this click: its progress shows under Your audio (nothing plays by itself).
     this.jobAccepted();
+    void this.refreshAllowance();
     await this.saveRecord(created);
     // Checked again after the write: a newer click or a lecture/account change owns the panel now.
     if (!current()) return;
@@ -1083,6 +1190,7 @@ export class Dubbing {
     const field = error instanceof MyDubbError ? this.setFieldErrors(error.fields) : null;
     this.ui.formError.textContent = jobErrorMessage(error);
     this.focusField(field);
+    if (error instanceof MyDubbError && ALLOWANCE_CODES.has(error.code)) void this.refreshAllowance();
   }
 
   /** The accepted job's status is brought into view; focus stays on the form. */
@@ -1164,6 +1272,8 @@ export class Dubbing {
           this.ui.checkAgain.hidden = false;
           return;
         case "terminal":
+          // A finished job changes the counts (a guest's failed job is given back).
+          void this.refreshAllowance();
           if (outcome.job.status === "failed") {
             this.setJobError(failedJobMessage(outcome.job));
             return;

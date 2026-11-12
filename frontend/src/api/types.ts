@@ -74,6 +74,8 @@ export interface AppMeta {
     // YouTube imports, counted apart from jobs (offered when `youtube_import.enabled`).
     imports_per_session?: number;
     imports_per_ip?: number;
+    // Whether the Chrome extension offers "Try as guest" (this same guest session there).
+    extension?: boolean;
   };
 }
 

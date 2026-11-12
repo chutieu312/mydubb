@@ -14,6 +14,7 @@ from app.auth.principal import Principal, UserProfile
 from app.auth.service import find_active_user_session
 from app.config import AuthMode
 from app.errors import ApiError, not_authenticated
+from app.guest.service import find_active_extension_token
 from app.guest.service import find_active_session as find_active_guest_session
 from app.services import AppServices
 
@@ -105,7 +106,7 @@ def extension_principal(request: Request, db: Session, services: AppServices) ->
         return None
     found = find_active_user_session(db, token, SessionClient.EXTENSION)
     if found is None:
-        return None
+        return _extension_guest_principal(db, token, services)
     session, user = found
     return Principal(
         session_id=session.id,
@@ -117,6 +118,26 @@ def extension_principal(request: Request, db: Session, services: AppServices) ->
         # exempts the account's jobs from the usage limits.
         plan=user.plan,
         quota_exempt=user.role == UserRole.ADMIN.value,
+    )
+
+
+def _extension_guest_principal(db: Session, token: str, services: AppServices) -> Principal | None:
+    """A guest token of the extension: the guest session it was issued for, while the session,
+    the token and the feature (EXTENSION_GUEST_ENABLED with guest access on) are all live."""
+    if services.guest is None or not services.settings.extension_guest_active:
+        return None
+    found = find_active_extension_token(db, token)
+    if found is None:
+        return None
+    token_row, guest_session = found
+    return Principal(
+        session_id=guest_session.id,
+        # A bearer token needs no CSRF token (require_job_access_csrf); never sent anywhere.
+        csrf_token="",
+        expires_at=token_row.expires_at,
+        guest=True,
+        bearer=True,
+        bearer_token_id=token_row.id,
     )
 
 
@@ -190,7 +211,8 @@ def require_job_access(
 ) -> Principal:
     """The job endpoints: with an Authorization header, only the extension's bearer token (the
     cookies are then ignored, so a request never mixes the two); otherwise the cookie sessions of
-    `require_job_session`. A guest never has a bearer token."""
+    `require_job_session`. A guest has a bearer token only in the extension, for its guest session
+    (`extension_principal`)."""
     if "authorization" in request.headers:
         principal = extension_principal(request, db, services)
         if principal is None:

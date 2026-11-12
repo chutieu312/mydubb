@@ -124,6 +124,47 @@ h1 {
   display: none;
 }
 
+/* The ways to connect (not connected, or a guest): one choice per row, each with its hint. */
+.onboarding {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-radius: 11px;
+  min-width: 0;
+}
+
+.onboarding-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.choice {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  min-width: 0;
+}
+
+/* A link that leaves for mydubb.com, drawn like the panel's buttons. */
+.button-link {
+  font-size: 13px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 7px;
+  padding: 6px 10px;
+  text-decoration: none;
+}
+
+.button-link:hover {
+  filter: brightness(0.96);
+}
+
+.allowance {
+  color: var(--text);
+}
+
 .lesson-box {
   background: var(--surface);
   padding: 10px 12px;

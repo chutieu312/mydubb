@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyDubb",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Turn the English transcript you select on a Udemy lecture into audio in your language and play it with the video.",
   "minimum_chrome_version": "116",
   "icons": {

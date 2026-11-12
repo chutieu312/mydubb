@@ -1,21 +1,31 @@
-// Connecting the extension to a MyDubb invitation account: OAuth 2.0 Authorization Code + PKCE
-// (S256) against MyDubb's own /extension/connect page, opened in Chrome's sign-in window
+// Connecting the extension to a MyDubb account: OAuth 2.0 Authorization Code + PKCE (S256)
+// against MyDubb's own /extension/connect page, opened in Chrome's sign-in window
 // (chrome.identity.launchWebAuthFlow). The password is typed on mydubb.com, never here. The
 // resulting bearer token is kept only in chrome.storage.session (memory, trusted contexts: never
 // readable by content scripts or Udemy pages) and is cleared when the browser closes.
 // Contract: docs/EXTENSION_AUTH.md.
+//
+// "Try as guest" is the same flow with `mode=guest`: the website continues (or starts) its guest
+// session and the token is a guest token of that session (docs/EXTENSION_AUTH.md, "Guests").
 
-import { MyDubbError, type ExtensionUser, type MyDubbApi } from "./api";
+import { MyDubbError, type ExtensionUser, type MyDubbApi, type TokenGrant } from "./api";
 
 export const AUTH_KEY = "auth";
 
 export interface StoredAuth {
   token: string;
+  // For a guest, `id` is "guest:<guest session id>" (never an account id), `email` is empty.
+  // Every result, job and loaded audio is kept with this id, so changing between a guest and an
+  // account follows the existing "another account" rules.
   user: ExtensionUser;
   expiresAt: string;
   // A new value at every connection: tells two connections of the same user apart.
   connectionId: string;
+  // Present for a guest connection only.
+  guest?: true;
 }
+
+export const GUEST_PREFIX = "guest:";
 
 export function isStoredAuth(value: unknown): value is StoredAuth {
   const v = value as Partial<StoredAuth> | null;
@@ -29,7 +39,10 @@ export function isStoredAuth(value: unknown): value is StoredAuth {
     typeof v.user === "object" &&
     v.user !== null &&
     typeof v.user.id === "string" &&
-    typeof v.user.email === "string"
+    typeof v.user.email === "string" &&
+    // A guest's id is always the guest form, an account's never.
+    (v.guest === true) === v.user.id.startsWith(GUEST_PREFIX) &&
+    (v.guest === undefined || v.guest === true)
   );
 }
 
@@ -66,7 +79,7 @@ export function redirectUriFor(extensionId: string): string {
   return `https://${extensionId}.chromiumapp.org/`;
 }
 
-export function authorizeUrl(origin: string, extensionId: string, pkce: Pkce): string {
+export function authorizeUrl(origin: string, extensionId: string, pkce: Pkce, guest = false): string {
   const params = new URLSearchParams({
     client_id: extensionId,
     redirect_uri: redirectUriFor(extensionId),
@@ -74,6 +87,7 @@ export function authorizeUrl(origin: string, extensionId: string, pkce: Pkce): s
     code_challenge: pkce.challenge,
     code_challenge_method: "S256",
   });
+  if (guest) params.set("mode", "guest");
   return `${origin}/extension/connect?${params.toString()}`;
 }
 
@@ -115,14 +129,29 @@ export interface ConnectDeps {
   launchWebAuthFlow(url: string): Promise<string | undefined>;
   newConnectionId(): string;
   pkce?: () => Promise<Pkce>;
+  // "Try as guest": the website's guest session instead of an account.
+  guest?: boolean;
+}
+
+/** What is stored for a grant; a guest must have asked for a guest, an account for an account. */
+export function storedAuthOf(grant: TokenGrant, connectionId: string, guest: boolean): StoredAuth {
+  const base = { token: grant.access_token, expiresAt: grant.expires_at, connectionId };
+  if (grant.kind === "guest" && guest && grant.guest) {
+    return { ...base, guest: true, user: { id: `${GUEST_PREFIX}${grant.guest.id}`, email: "", display_name: null } };
+  }
+  // Also for Try as guest: the page offers a signed-in browser its account instead, if chosen.
+  if (grant.kind === "account" && grant.user) return { ...base, user: grant.user };
+  // A guest grant nobody asked for (Connect) is refused.
+  throw new ConnectError("refused", "MyDubb did not connect the extension.");
 }
 
 /** Runs the sign-in window and the code exchange. Resolves to what must be stored. */
 export async function connect(deps: ConnectDeps): Promise<StoredAuth> {
   const pkce = await (deps.pkce ?? createPkce)();
+  const guest = deps.guest === true;
   let redirect: string | undefined;
   try {
-    redirect = await deps.launchWebAuthFlow(authorizeUrl(deps.origin, deps.extensionId, pkce));
+    redirect = await deps.launchWebAuthFlow(authorizeUrl(deps.origin, deps.extensionId, pkce, guest));
   } catch {
     // The user closed the window or cancelled; Chrome gives no further detail.
     throw new ConnectError("cancelled", "The MyDubb sign-in window was closed before connecting.");
@@ -135,18 +164,18 @@ export async function connect(deps: ConnectDeps): Promise<StoredAuth> {
     code,
     code_verifier: pkce.verifier,
   });
-  return {
-    token: grant.access_token,
-    user: grant.user,
-    expiresAt: grant.expires_at,
-    connectionId: deps.newConnectionId(),
-  };
+  return storedAuthOf(grant, deps.newConnectionId(), guest);
 }
 
 export function connectErrorMessage(error: unknown): string {
   if (error instanceof ConnectError) return error.message;
   if (error instanceof MyDubbError) {
-    if (error.code === "invalid_grant" || error.code === "extension_unknown" || error.code === "extension_disabled") {
+    if (
+      error.code === "invalid_grant" ||
+      error.code === "extension_unknown" ||
+      error.code === "extension_disabled" ||
+      error.code === "extension_guest_disabled"
+    ) {
       return error.message;
     }
     if (error.status === 0) return `${error.message} The extension was not connected.`;

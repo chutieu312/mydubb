@@ -37,7 +37,7 @@ async function plainResult(context: BrowserContext, worker: Worker, extensionId:
   const panel = await openPanel(context, extensionId, tabId);
   await sendTranscriptSelection(page, worker, tabId);
   await expect(panel.getByText(/^(Connected as|Not connected)/)).toBeVisible();
-  if (await panel.getByRole("button", { name: "Connect MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
+  if (await panel.getByRole("button", { name: "Connect to MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
   await panel.getByLabel("First sentence starts").fill("000010");
   await panel.getByLabel("Last sentence starts").fill("000056");
   await panel.getByRole("radio", { name: "1.5x", exact: true }).check();

@@ -8,6 +8,22 @@ package (`dist/` is built from `src/`, `static/` and the icon PNGs only).
 Built on the merged one-page panel (PR #45): *English transcript*, *Translate to*, *Your audio*.
 A new result loads by itself; there is no "Use new audio" step and no tabs.
 
+## Story 5 update: 0.5.0 (prepared, not uploaded)
+
+Since this folder was written, **0.4.1 was published Unlisted** on the same item and accepted by
+the Product Owner from the Store (docs/context.md); the rows below describe the 0.4.1 preparation.
+The next upload is **0.5.0** (manifest bumped in the Story 5 pull request), built from `main` with
+`npm run build:release` / `package:release` and the same `release-key.json`, so the item ID stays
+`nndofiifflpbhefoehcbfpnaoiohicop`. It carries #53/#54/#55 (ordinary pages, HTML5 Sync, one-line
+timestamps) and Story 5 (Connect to MyDubb, Create a MyDubb account, Try as guest, today's limits in
+the header). No new permission.
+
+To update on the dashboard with 0.5.0 (all need the Product Owner): the listing lines in
+[LISTING.md, For 0.5.0](LISTING.md#for-050-story-5-product-owner-to-approve); the privacy policy
+page (text changed on 2026-11-11 for guests and today's limits: re-read before deploying it); the
+Privacy practices answers (unchanged in kind, see PRIVACY-AUDIT.md); reviewer notes. Order relative
+to the backend flag: docs/EXTENSION_AUTH.md "Rollout".
+
 ## State of each item (the words are not interchangeable)
 
 | Item | Done | Needs the Product Owner | Needs the dashboard | Submitted for review | Published |

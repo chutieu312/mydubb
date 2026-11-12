@@ -10,6 +10,12 @@ page's own HTML5 video (no site named, so "Video" never reads as any website). T
 description (= manifest `description`) still says "Udemy lecture": widening it is the Product
 Owner's decision, as noted for #53.
 
+**Story 5 (0.5.0, this pull request):** the panel's button is now **Connect to MyDubb**, and the
+panel may offer **Create a MyDubb account** and **Try as guest** when the server does. The text
+below is still the 0.4.1 listing; the replacements for 0.5.0 are in
+[For 0.5.0](#for-050-story-5-product-owner-to-approve) and need the Product Owner's approval before
+they are entered.
+
 Rules kept: no "every word in sync", no "unlimited", no price or subscription, no guest, YouTube
 or automatic transcript in the extension, no claim that "Video" means any website, no
 suggestion that MyDubb is made or endorsed by Udemy, Microsoft or Google. "Udemy" appears
@@ -138,3 +144,23 @@ dashboard field). `[PO: decision]`
   "two voices" stand. Re-check on the day the listing is entered.
 - The sample screenshots show the same voice label as production ("Andrew Multilingual"); the
   test server lists two languages, production eight.
+
+## For 0.5.0 (Story 5, Product Owner to approve)
+
+0.5.0 is uploaded while `EXTENSION_GUEST_ENABLED` is still off (EXTENSION_AUTH.md "Rollout"), so the
+listing entered with it must not promise a guest mode. Replace these lines:
+
+| Where | 0.4.1 text | 0.5.0 text (guests off) | Once guests are on in the extension (a listing edit) |
+|---|---|---|---|
+| How it works, 1 | Connect your MyDubb account once, with the Connect MyDubb button at the top of the panel. | Connect your MyDubb account once, with **Connect to MyDubb** at the top of the panel. | Connect your MyDubb account once with **Connect to MyDubb** at the top of the panel, or choose **Try as guest** to try it without an account. |
+| Good to know, 1 | Needs a MyDubb account. Access is by invitation for now; there is no sign-up in the extension and no guest mode. | Needs a MyDubb account. When sign-up is open, **Create a MyDubb account** in the panel opens the sign-up page on mydubb.com; there is no sign-up inside the extension. | Needs a MyDubb account, or try it as a guest: up to 5 audio jobs, shared with mydubb.com in the same Chrome profile. When sign-up is open, **Create a MyDubb account** opens the sign-up page on mydubb.com. |
+| Getting started, 1 and 3 | Ask the operator for an invitation …; **Connect MyDubb** | Create an account on mydubb.com (when sign-up is open) or ask for an invitation; **Connect to MyDubb** | As before, plus: or choose **Try as guest** and confirm on mydubb.com |
+| Limits, 1 | Invitation accounts only; guests cannot use the extension. | MyDubb accounts only (invited or created on mydubb.com, Free plan limits). No payment in the extension. | MyDubb accounts (Free plan limits) or a guest session with the guest limits. No payment in the extension. |
+| Visibility | Unlisted or Private | Unchanged by Story 5 (Public is a separate roadmap decision) | Same |
+| Reviewer notes | Needs an invitation account | Same, or a disposable account created through sign-up | With guests on, a reviewer can use **Try as guest** without credentials |
+
+Unchanged by Story 5: the permissions (no new one), the short description (still "Udemy lecture";
+widening it is the Product Owner's earlier open decision), the screenshots (the not-connected
+header differs a little; new screenshots are optional), the Privacy practices answers (a guest
+token is the same kind of authentication information as an account token; see
+[PRIVACY-AUDIT.md](PRIVACY-AUDIT.md)).

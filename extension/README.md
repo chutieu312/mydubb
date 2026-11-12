@@ -4,7 +4,7 @@ On any web page (Loom, a Udemy lecture, …): paste an English transcript into t
 select text → right-click → **Send to MyDubb** → the text appears in the panel. There you can edit
 it, **Generate audio** and listen, with or without a video on the page. On a Udemy lecture the panel
 also controls the lecture video (Play/Pause, −5 s/+5 s, time),
-connect your **MyDubb invitation account**, choose the output language, voice and speed, **Generate
+connect your **MyDubb account** (or **Try as guest**, when MyDubb offers it), choose the output language, voice and speed, **Generate
 audio**, follow the job, read the translation and listen to the MP3, in the panel or in a small
 **floating player** on the lecture page that keeps playing when the panel is closed. With **Sync
 with video** on, the MyDubb audio and the Udemy video play, pause and seek together. On other pages
@@ -12,14 +12,17 @@ with one main HTML5 video (a Loom share page, a YouTube watch page, …) Sync wi
 a result generated while that page showed its video, once you have clicked the MyDubb button (or
 used **Send to MyDubb**) on that page; everywhere else the audio plays on its own.
 
-The extension is **prepared for the Chrome Web Store but not published**: today it is installed
-only with Developer mode → Load unpacked ([store/](store/README.md) holds the release preparation).
+MyDubb **0.4.1** is published (Unlisted) on the Chrome Web Store, item
+`nndofiifflpbhefoehcbfpnaoiohicop`; this source is **0.5.0**, the next update, not uploaded yet
+([store/](store/README.md) holds the release preparation). For development it is installed with
+Developer mode → Load unpacked.
 Your transcript text and choices are sent to MyDubb only when you choose **Generate audio**. Some
 other requests happen without a click and carry no text: loading the public list of languages and
 voices when the panel opens, checking a stored sign-in, and, for a job started earlier in the tab,
 asking for its status, its translation and its audio file (see
-[store/PRIVACY-AUDIT.md](store/PRIVACY-AUDIT.md)); **Connect MyDubb** opens the sign-in. Guests
-("Try as guest") cannot use the extension.
+[store/PRIVACY-AUDIT.md](store/PRIVACY-AUDIT.md)); **Connect to MyDubb** and **Try as guest** open
+the MyDubb sign-in window. A guest in the extension is the guest session of mydubb.com in the same
+Chrome profile, with the same limits ([Onboarding](#onboarding-connect-create-account-try-as-guest)).
 
 The development-only **Sync prototype** that tried this on other sites first (a separate unpacked
 extension, never in `dist/` or the Store package; its results and the decisions taken from them) is
@@ -58,7 +61,10 @@ folder's path, so it differs per computer/folder, and a Web Store build would ge
 
 The panel is one page: a short header, the current lesson, then three blocks one under the other,
 **English transcript**, **Translate to** and **Your audio** (also when the panel is dragged wide).
-The **header** shows MyDubb and the account state (**Connect MyDubb** when not connected); the lesson
+The **header** shows MyDubb and the account state (the ways in when not connected, see
+[Onboarding](#onboarding-connect-create-account-try-as-guest)), and once connected today's limits
+as MyDubb reports them ("Guest: 3 of 5 audio jobs left." / "Free plan: 18 of 20 Generates left
+today …"); the lesson
 box shows the lecture's short title (the full title on hover). Its **Details** holds the full title
 and id, the tab id, the page-link state, the account email and **Disconnect**. A problem with the
 link to the tab (not a lecture, reloading, tab closed) is shown there without opening Details.
@@ -79,9 +85,10 @@ player on the lecture page alike.
    Nothing is sent to MyDubb until **Generate audio**.
 2. Edit the text if you like. Sending a new selection over an edited draft asks first
    (**Replace draft** / **Keep my draft**). **Clear** empties the draft.
-3. **Connect MyDubb** (header): Chrome opens a MyDubb window; sign in there with your invitation
-   (email and password are typed on mydubb.com, never in the extension) and choose **Connect
-   extension**. **Details → Disconnect** ends it.
+3. **Connect to MyDubb** (header): Chrome opens a MyDubb window; sign in there with your MyDubb
+   account (email and password are typed on mydubb.com, never in the extension) and choose **Connect
+   extension**. Or **Try as guest** / **Create a MyDubb account** (see
+   [Onboarding](#onboarding-connect-create-account-try-as-guest)). **Details → Disconnect** ends it.
 4. **English transcript**, under the text: the **Video** row with the lecture video's state and
    time and **−5s / Play / +5s**, right above **First sentence starts** and **Last sentence
    starts**, so the time you read is next to the fields it helps to fill. Type digits, the colons
@@ -194,6 +201,28 @@ Note: Play/Seek act on the real Udemy video and may update your watch progress. 
 video also runs faster or slower than 1x and is moved by MyDubb's seeks, which Udemy may count as
 watching (or skipping) that part of the lecture.
 
+### Onboarding: Connect, Create account, Try as guest
+
+Before connecting, the header shows up to three choices; each one only when MyDubb says it is on
+(`GET /api/meta`), so nothing leads to a page that is off:
+
+| Choice | When | What it does |
+|---|---|---|
+| **Connect to MyDubb** | always | Chrome's sign-in window on mydubb.com (`/extension/connect`), sign in, **Connect extension** |
+| **Create a MyDubb account** | public sign-up on (`signup`) | Opens `https://mydubb.com/signup` (the website's existing Create account) in a new tab. The hint: create it there, verify your email, come back and choose **Connect to MyDubb**. Nothing is created in the extension |
+| **Try as guest** | `guest_access.extension` | The sign-in window with `mode=guest`: mydubb.com continues the guest session this Chrome profile already has there, or, after **Start guest session**, starts one under the website's guest rules. The panel then says "Guest session" and shows the jobs left |
+
+A guest uses everything a connected account does (paste or Send to MyDubb, language/voice/speed,
+Generate, translation, listening, Sync where it applies) with the guest's limits: 5 audio jobs per
+guest session (shared with mydubb.com: a job made on either side counts once), 1,000 words and
+10 minutes of audio per job. The numbers come from MyDubb when the panel opens, after a Generate is
+accepted or refused for a limit and when a job ends (no timer; the website shows the same count
+after a refresh). With no job left the panel points to **Create a MyDubb account** and keeps
+**Connect to MyDubb**; a connected guest always has both. Connecting an account replaces the guest
+in every panel (its job, result and audio go; late answers are dropped) and ends the guest's token;
+the guest session on mydubb.com goes on until it ends there. The token is kept like an account's
+(trusted `chrome.storage.session` only); the guest cookie never reaches the extension.
+
 ## Permissions and why
 
 | Permission | Why |
@@ -201,7 +230,7 @@ watching (or skipping) that part of the lecture.
 | `contextMenus` | The **Send to MyDubb** item, shown only for a text selection on `http(s)` pages (`documentUrlPatterns` `https://*/*` and `http://*/*`). It reads nothing by itself: Chrome hands the selected text to the extension when you click the item, and that needs no site permission. Not shown on `chrome://`, `file://` or extension pages; the click handler checks the address again. |
 | `sidePanel` | The tab-specific side panel. |
 | `storage` | `chrome.storage.session` only (memory, cleared when the browser quits, readable by the extension's own pages, not by content scripts): the draft, the selection hand-over, the form settings, the job a tab follows and the translation of the audio loaded in its player, and the MyDubb token. |
-| `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect MyDubb**. |
+| `identity` | `chrome.identity.launchWebAuthFlow`: the MyDubb sign-in window for **Connect to MyDubb** and **Try as guest**. |
 | `offscreen` | One hidden extension page (`offscreen.html`) that plays the MyDubb audio, so it keeps playing when the side panel closes. Created when a result's audio is loaded; it closes itself when no tab has audio left. Reasons `AUDIO_PLAYBACK` and `BLOBS` (it holds the MP3 Blob and its object URL while paused; with `AUDIO_PLAYBACK` alone Chrome would close it after 30 s of silence). |
 | Host `https://mydubb.com/*` (the build's `MYDUBB_ORIGIN`) | Calls to the MyDubb API from the side panel. No other host. |
 | Content script on `https://www.udemy.com/*` (the only site with a declared content script) | Reads the exact selection (with its line breaks) when you choose the menu item, finds/controls the lecture `<video>` while a panel is connected (including pausing it where a newly loaded MyDubb audio starts), draws the floating player (display and playback commands only), and while **Sync with video** is on mutes the video and sets its speed. Top frame only. |
@@ -610,7 +639,7 @@ use the Azure free allowance.
    new permission prompt for `offscreen`), then reload every open Udemy tab. The extension ID does
    not change as long as the folder stays the same.
 2. Send a transcript selection; Story 1 controls still work.
-3. **Connect MyDubb** → sign in with an invitation account in the MyDubb window → **Connect
+3. **Connect to MyDubb** → sign in with your MyDubb account in the MyDubb window → **Connect
    extension** → the panel says "Connected as …". (If the window already knows your website
    session, it goes straight to Connect.)
 4. Use the **Video** row to read the times, fill both start times, choose language, voice and
@@ -673,7 +702,7 @@ use the Azure free allowance.
    (`npm run build` in this worktree: `extension/dist`), **Load unpacked** it in a profile that does
    not have your current MyDubb folder loaded (or turn that one off); `activeTab` and `scripting`
    carry no install warning. Its ID is path-derived: add it to `EXTENSION_IDS` on Render before
-   **Connect MyDubb** (step 1). For each of a Loom share page and a YouTube watch page:
+   **Connect to MyDubb** (step 1). For each of a Loom share page and a YouTube watch page:
    (a) open the page, let its video show, click the **MyDubb** toolbar button; (b) on the page copy the
    transcript with its timestamps on their own lines, **Paste** it in the panel (Send to MyDubb may
    flatten timestamps: a separate story), choose a speed, **Generate audio**; (c) when it loads, check
@@ -694,6 +723,32 @@ use the Azure free allowance.
    videos where you started none): Generate and listen on its own; Sync is absent or one line says
    why. Note anything the real players do that the fixtures do not (ads, their own speed resets,
    the mute state YouTube shows after a video switch).
+
+## Acceptance of Story 5: onboarding and guests (Product Owner)
+
+On an integrated build (backend with `EXTENSION_GUEST_ENABLED=true`, `GUEST_ACCESS_ENABLED=true`,
+public sign-up on, the build's extension ID in `EXTENSION_IDS`), in one Chrome profile:
+
+1. mydubb.com (signed out): under **Try as guest**, **MyDubb for Chrome** → **Install Chrome
+   extension** opens the Store item `nndofiifflpbhefoehcbfpnaoiohicop`.
+2. The panel, not connected, shows **Connect to MyDubb**, **Create a MyDubb account** and **Try as
+   guest** (light and dark, narrow panel).
+3. **Web first.** On mydubb.com: Try as guest, finish 2 jobs. Close the site. In the panel: **Try
+   as guest** → the window says 3 of 5 left → **Continue in the extension** → "Guest: 3 of 5".
+   Generate once (paste on any page) and listen → "Guest: 2 of 5". Open mydubb.com: the guest banner
+   says 2 left.
+4. **Extension first.** In a new Chrome profile (or after leaving guest mode on the site and
+   Disconnect): panel **Try as guest** → **Start guest session** → Generate, listen. Then open
+   mydubb.com for the first time: guest mode with 4 left.
+5. Close the sign-in window instead of choosing: nothing connects. Disconnect, Try as guest again:
+   the same count (no new jobs).
+6. **Create a MyDubb account** → create, verify the email on the site → back in the panel **Connect
+   to MyDubb** → sign in in the window → the panel shows the Free plan (20 Generates a day) and
+   Generate works; the guest's result is gone from the panel.
+7. An existing account still connects and generates as before; Sync and timestamps are unchanged.
+
+`extension/integration/` runs steps 3, 4, 5 and 6 automatically against a local stack with
+Chrome's real sign-in window (Playwright's Chromium); see its README.
 
 ## Limits
 
@@ -735,7 +790,7 @@ use the Azure free allowance.
   running job, the translation and the loaded audio (listening only, nothing resent); another lecture or
   account while it was closed restores nothing. Sync is for results generated while the lecture and its video are
   known. A navigation still in flight (the old page on screen) is not seen by the panel.
-- Invitation accounts only (no guest), no YouTube import, no automatic transcript extraction, no
+- No YouTube import (also not for guests), no automatic transcript extraction, no
   playback speed control (the speed is chosen at Generate), no MP3 download button.
 - Sync with video follows the job's span as a whole: plain mode maps the whole MP3 linearly onto
   V0..V1, timed mode has the known grouping and alignment limits of timed dubbing; neither is word

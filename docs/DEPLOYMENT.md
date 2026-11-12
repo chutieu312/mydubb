@@ -707,6 +707,18 @@ exemption are on as soon as the code runs (no setting); the shared cap stays off
 does not start). Turning the cap off again is `USAGE_CAPS_ENABLED=false`, no code rollback.
 See [API.md, Usage limits](API.md#usage-limits).
 
+Story 5 (guest sessions in the Chrome extension) adds migration `0022_extension_guest` after
+`0021_free_quotas`: `extension_auth_codes.user_id` becomes nullable, `guest_session_id` is added
+with a CHECK that exactly one of the two is set, and the table `guest_extension_tokens` is created.
+Expand-only: the previous version never reads the table and never writes a guest code (if it were
+given one to exchange, it finds no user and answers `invalid_grant`). Its downgrade deletes the
+guest codes and tokens (guest extension connections end), then the table, the column and the CHECK.
+Once it is deployed, every deploy built before it is no longer a supported Render rollback target;
+check with `docker/rollback-target-check.sh <commit> 0022_extension_guest`. The feature is **off**
+until `EXTENSION_GUEST_ENABLED=true` (it also needs `GUEST_ACCESS_ENABLED=true` and
+`EXTENSION_IDS`); turning it off again is that variable, no code rollback, and every guest token is
+refused from the next request. Rollout order: [EXTENSION_AUTH.md, Rollout](EXTENSION_AUTH.md#rollout-backend-website-store).
+
 Public sign-up (Create account with Google reCAPTCHA) adds no migration and is **off** until
 `PUBLIC_SIGNUP_ENABLED=true` with its settings; the order of the Cognito, Google, SES and Render
 steps is the checklist in [SIGNUP.md](SIGNUP.md#before-turning-it-on-in-production-product-owner-checklist).

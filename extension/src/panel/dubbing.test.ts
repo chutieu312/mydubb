@@ -154,14 +154,18 @@ let pageShown: { access: PageAccess; page: string | null; video: VideoState | nu
 let placed: [string, number][];
 let placeAnswer: () => Promise<string | null>;
 
-function make(storage = fakeStorage({ [AUTH_KEY]: AUTH }), api = fakeApi()) {
+function make(
+  storage = fakeStorage({ [AUTH_KEY]: AUTH }),
+  api = fakeApi(),
+  launchWebAuthFlow: DubbingDeps["launchWebAuthFlow"] = vi.fn(),
+) {
   const deps: DubbingDeps = {
     tabId: TAB,
     origin: "https://mydubb.test",
     extensionId: "abcdefghijklmnopabcdefghijklmnop",
     api: api as unknown as MyDubbApi,
     storage: storage as unknown as DubbingDeps["storage"],
-    launchWebAuthFlow: vi.fn(),
+    launchWebAuthFlow,
     randomId: (() => {
       let n = 0;
       return () => `id-${++n}`;
@@ -226,8 +230,12 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function started(storage?: ReturnType<typeof fakeStorage>, api?: ReturnType<typeof fakeApi>) {
-  const made = make(storage, api);
+async function started(
+  storage?: ReturnType<typeof fakeStorage>,
+  api?: ReturnType<typeof fakeApi>,
+  launchWebAuthFlow?: DubbingDeps["launchWebAuthFlow"],
+) {
+  const made = make(storage, api, launchWebAuthFlow);
   await made.dubbing.start();
   made.dubbing.lessonState(lesson ?? null);
   return made;
@@ -2411,5 +2419,172 @@ describe("an ordinary page with its one HTML5 video (Sync with the page's video)
     pageShown = { access: "granted", page: PAGE, video: READY };
     dubbing.pageChanged();
     expect(links).toEqual([LINK_A, LINK_A]);
+  });
+});
+
+describe("onboarding: Connect, Create a MyDubb account, Try as guest (Story 5)", () => {
+  const GUEST_ID = "6f1c1d6e-5a8b-4b8e-9d3a-2a1c3e4f5a6b";
+  const GUEST_AUTH: StoredAuth = {
+    token: "guest-token".padEnd(43, "g"),
+    guest: true,
+    user: { id: `guest:${GUEST_ID}`, email: "", display_name: null },
+    expiresAt: "2099-01-01T00:00:00Z",
+    connectionId: "conn-g",
+  };
+  const FULL_META = {
+    ...META,
+    auth: { mode: "cognito", self_registration: true, password_reset: true },
+    signup: {
+      enabled: true,
+      recaptcha_site_key: "site-key",
+      free_plan: { generates_per_day: 20, youtube_imports_per_day: 5, max_words: 1000, max_output_seconds: 600 },
+    },
+    guest_access: { enabled: true, jobs_per_session: 5, max_words: 1000, max_output_seconds: 600, extension: true },
+  };
+  const guestAllowance = (remaining: number, inProgress = 0) => ({
+    expires_at: GUEST_AUTH.expiresAt,
+    allowance: { kind: "guest", used: 5 - remaining - inProgress, inProgress, limit: 5, remaining },
+  });
+  const freeAllowance = (used: number) => ({
+    expires_at: AUTH.expiresAt,
+    allowance: { kind: "account", plan: "free", exempt: false, used, limit: 20, remaining: 20 - used, resetsAt: "2030-01-02T00:00:00Z" },
+  });
+  // Chrome's sign-in window, answering with a code for the request it was opened with.
+  const opened: string[] = [];
+  const authWindow = vi.fn(async (url: string) => {
+    opened.push(url);
+    return `https://abcdefghijklmnopabcdefghijklmnop.chromiumapp.org/?code=c&state=${new URL(url).searchParams.get("state")}`;
+  });
+  const grant = (kind: "guest" | "account") =>
+    kind === "guest"
+      ? { access_token: GUEST_AUTH.token, token_type: "Bearer", expires_at: GUEST_AUTH.expiresAt, kind, user: null, guest: { id: GUEST_ID } }
+      : { access_token: AUTH.token, token_type: "Bearer", expires_at: AUTH.expiresAt, kind, user: AUTH.user, guest: null };
+  const visible = (id: string) => !$(id).hidden && !$(id).closest("[hidden]");
+
+  beforeEach(() => {
+    opened.length = 0;
+    authWindow.mockClear();
+  });
+
+  it("offers only Connect while sign-up and guests are off", async () => {
+    await started(fakeStorage());
+    expect(visible("onboarding")).toBe(true);
+    expect(visible("connect")).toBe(true);
+    expect($("connect").textContent).toBe("Connect to MyDubb");
+    expect(visible("signup-choice")).toBe(false);
+    expect(visible("guest-choice")).toBe(false);
+    expect($("generate-hint").textContent).toBe("Connect to MyDubb (top of the panel) to generate audio.");
+  });
+
+  it("offers all three when MyDubb offers them; Create account goes to the existing sign-up page", async () => {
+    await started(fakeStorage(), fakeApi({ meta: vi.fn(async () => FULL_META) }));
+    expect(visible("connect") && visible("signup-choice") && visible("guest-choice")).toBe(true);
+    const link = $<HTMLAnchorElement>("signup");
+    expect(link.getAttribute("href")).toBe("https://mydubb.test/signup");
+    expect(link.target).toBe("_blank");
+    expect($("signup-choice").textContent).toMatch(/verify your email, then come back here and choose Connect to MyDubb/);
+    expect($("guest-hint").textContent).toMatch(/up to 5 audio jobs of up to 1,000 words and 10 minutes/);
+  });
+
+  it("Try as guest opens mydubb.com with mode=guest and connects the guest session", async () => {
+    const api = fakeApi({
+      meta: vi.fn(async () => FULL_META),
+      exchangeCode: vi.fn(async () => grant("guest")),
+      session: vi.fn(async () => guestAllowance(3)),
+    });
+    const { storage } = await started(fakeStorage(), api, authWindow);
+    $<HTMLButtonElement>("try-guest").click();
+    await settle();
+    expect(new URL(opened[0]!).searchParams.get("mode")).toBe("guest");
+    expect(storage.data[AUTH_KEY]).toMatchObject({ guest: true, user: { id: `guest:${GUEST_ID}` } });
+    expect($("account-status").textContent).toBe("Guest session");
+    expect($("allowance").textContent).toBe("Guest: 3 of 5 audio jobs left.");
+    // A guest is offered the ways to an account, not Try as guest again.
+    expect($("onboarding-title").textContent).toBe("Keep dubbing with a MyDubb account");
+    expect(visible("connect") && visible("signup-choice")).toBe(true);
+    expect(visible("guest-choice")).toBe(false);
+    expect($<HTMLButtonElement>("generate").disabled).toBe(false);
+  });
+
+  it("asks for the counts again after an accepted Generate and when the job ends, never on a timer", async () => {
+    const session = vi
+      .fn()
+      .mockResolvedValueOnce(guestAllowance(3))
+      .mockResolvedValueOnce(guestAllowance(2, 1))
+      .mockResolvedValue(guestAllowance(2));
+    const api = fakeApi({ meta: vi.fn(async () => FULL_META), session });
+    await started(fakeStorage({ [AUTH_KEY]: GUEST_AUTH }), api);
+    expect($("allowance").textContent).toBe("Guest: 3 of 5 audio jobs left.");
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    $<HTMLButtonElement>("generate").click();
+    await settle(20);
+    expect(api.createJob).toHaveBeenCalledTimes(1);
+    expect(session).toHaveBeenCalledTimes(3);
+    expect($("allowance").textContent).toBe("Guest: 2 of 5 audio jobs left.");
+  });
+
+  it("a guest with nothing left is pointed to Create a MyDubb account, and Connect stays", async () => {
+    const api = fakeApi({
+      meta: vi.fn(async () => FULL_META),
+      session: vi.fn(async () => guestAllowance(0)),
+      createJob: vi.fn(async () => {
+        throw new MyDubbError(429, "guest_session_quota_exhausted", "This guest session has used all 5 of its jobs.");
+      }),
+    });
+    await started(fakeStorage({ [AUTH_KEY]: GUEST_AUTH }), api);
+    expect($("allowance").textContent).toBe(
+      "Guest: no audio jobs left. Create a MyDubb account to keep dubbing, or connect the account you have.",
+    );
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    expect($("form-error").textContent).toBe("This guest session has used all 5 of its jobs.");
+    expect(api.session).toHaveBeenCalledTimes(2); // asked again after the refusal
+    expect(visible("connect") && visible("signup-choice")).toBe(true);
+  });
+
+  it("guest to Free: the account's identity and plan replace the guest's, and a late guest answer shows nothing", async () => {
+    let answerGuest: (value: unknown) => void = () => undefined;
+    const session = vi.fn((token: string) =>
+      token === GUEST_AUTH.token ? new Promise((resolve) => (answerGuest = resolve)) : Promise.resolve(freeAllowance(1)),
+    );
+    const api = fakeApi({ meta: vi.fn(async () => FULL_META), session, exchangeCode: vi.fn(async () => grant("account")) });
+    // The guest's own job is still running when the account connects.
+    api.getJob.mockImplementation(() => new Promise(() => undefined));
+    const { storage } = await started(fakeStorage({ [AUTH_KEY]: GUEST_AUTH }), api, authWindow);
+    typeTime("first-start", "000010");
+    typeTime("last-start", "000610");
+    $<HTMLButtonElement>("generate").click();
+    await settle();
+    expect(api.createJob).toHaveBeenCalledWith(GUEST_AUTH.token, expect.anything(), expect.anything());
+
+    $<HTMLButtonElement>("connect").click();
+    await settle();
+    expect(new URL(opened[0]!).searchParams.has("mode")).toBe(false);
+    expect(storage.data[AUTH_KEY]).toMatchObject({ user: AUTH.user });
+    expect((storage.data[AUTH_KEY] as StoredAuth).guest).toBeUndefined();
+    expect($("account-status").textContent).toBe("Connected as Lan");
+    expect(visible("onboarding")).toBe(false);
+    expect($("allowance").textContent).toBe("Free plan: 19 of 20 Generates left today (counts start again at 00:00 UTC).");
+    // The guest's job is gone from the panel; its token is ended on the server.
+    expect($("listen-notice").textContent).toMatch(/account changed/);
+    expect(api.logout).toHaveBeenCalledWith(GUEST_AUTH.token);
+    // The guest's session answers arrive late: nothing of them shows under the account.
+    answerGuest(guestAllowance(4));
+    await settle();
+    expect($("allowance").textContent).toMatch(/^Free plan/);
+  });
+
+  it("a cancelled sign-in window changes nothing", async () => {
+    const api = fakeApi({ meta: vi.fn(async () => FULL_META) });
+    const { storage } = await started(fakeStorage(), api, vi.fn(async () => Promise.reject(new Error("closed"))));
+    $<HTMLButtonElement>("try-guest").click();
+    await settle();
+    expect(storage.data[AUTH_KEY]).toBeUndefined();
+    expect($("account-error").textContent).toMatch(/closed before connecting/);
+    expect($<HTMLButtonElement>("try-guest").disabled).toBe(false);
+    expect(api.exchangeCode).not.toHaveBeenCalled();
   });
 });

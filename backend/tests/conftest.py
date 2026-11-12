@@ -85,7 +85,7 @@ def db_engine(engine: Engine) -> Engine:
             text(
                 "TRUNCATE jobs, job_usage, job_usage_attempts, access_sessions, "
                 "glossary_candidates, users, user_sessions, "
-                "guest_sessions, guest_job_quota, guest_import_quota, "
+                "guest_sessions, guest_job_quota, guest_import_quota, guest_extension_tokens, "
                 "password_reset_attempts, "
                 "auth_challenges, password_reset_events, extension_auth_codes, user_role_events, "
                 "usage_counters"

@@ -43,7 +43,7 @@ async function readyResult(
   const panel = await openPanel(context, extensionId, tabId);
   await sendTranscriptSelection(page, worker, tabId);
   await expect(panel.getByText(/^(Connected as|Not connected)/)).toBeVisible();
-  if (await panel.getByRole("button", { name: "Connect MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
+  if (await panel.getByRole("button", { name: "Connect to MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
   await fillTimes(panel);
   await panel.getByRole("radio", { name: `${speed}x`, exact: true }).check();
   await panel.getByRole("button", { name: "Generate audio" }).click();
@@ -293,7 +293,7 @@ test("disconnecting ends every tab's playback, also where the panel is closed", 
 
   // Reopened, A's panel neither shows nor restores the old account's player.
   const panelA = await openPanel(context, extensionId, a.tabId);
-  await expect(panelA.getByRole("button", { name: "Connect MyDubb" })).toBeVisible();
+  await expect(panelA.getByRole("button", { name: "Connect to MyDubb" })).toBeVisible();
   await expect(panelA.locator("#player-section")).toBeHidden();
   await panelA.waitForTimeout(500);
   expect(await playerSessions(worker)).toEqual([]);

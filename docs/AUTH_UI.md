@@ -42,6 +42,27 @@ All screens reuse the Studio card, tokens and Light/Dark theme. English only.
 Each step moves focus to the screen title, errors are `role="alert"`, fields have labels and
 `aria-invalid`/`aria-describedby`, and every action runs one request at a time.
 
+**Story 5 additions.**
+
+- **MyDubb for Chrome** under Try as guest on the Sign in screen of the website (not on the
+  extension's own `/extension/connect`): a short description and **Install Chrome extension**, a
+  link to the Store item `https://chromewebstore.google.com/detail/nndofiifflpbhefoehcbfpnaoiohicop`
+  (new tab, `noopener noreferrer`). The words follow the published version: Udemy lecture and
+  "Connect your MyDubb account" while `/api/meta` `guest_access.extension` is false; "Udemy lecture
+  or another web page" and "or try it as a guest" once it is true (the Product Owner turns it on only
+  after a Store version with Try as guest is published, EXTENSION_AUTH.md "Rollout").
+- **`/signup`** starts at Create your account when sign-up is on (also for a guest), see
+  [SIGNUP.md](SIGNUP.md#flow); any change of identity leaves it and the address goes back to `/`.
+- **`/extension/connect?mode=guest`** (the panel's Try as guest, only while
+  `guest_access.extension`): a browser with a guest session sees "Continue as a guest in the
+  extension" with its jobs left (`GET /api/guest/session`) and **Continue in the extension**; a
+  browser with none sees "Try MyDubb as a guest" with the limits and **Start guest session** (which
+  is `POST /api/guest/session`, then the approval); a signed-in browser is told it is an account and
+  may connect it or **Sign out and continue as a guest**; "Have an account? Sign in instead" leads
+  to the normal sign-in and Connect. Server refusals (`guest_sessions_exhausted`,
+  `guest_network_unknown`, `extension_guest_disabled`, ...) are shown as written; a guest session
+  that ended meanwhile offers to start a new one. Without `mode` the page is unchanged.
+
 ### Session
 
 - **Reload**: `/api/auth/me` restores the session. `401` shows the sign-in screen. Any other

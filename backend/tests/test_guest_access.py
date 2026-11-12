@@ -126,6 +126,8 @@ def test_meta_reports_the_limits(guest_client):
         "session_ttl_seconds": 86400,
         "imports_per_session": 5,
         "imports_per_ip": 20,
+        # "Try as guest" in the Chrome extension: off unless EXTENSION_GUEST_ENABLED.
+        "extension": False,
     }
 
 

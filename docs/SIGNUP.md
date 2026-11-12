@@ -27,6 +27,13 @@ Sign in screen ── Create account ──► Create account screen (email, pas
                                      Studio, "Your plan": 20 Generates, 5 imports, reset 00:00 UTC
 ```
 
+- **`/signup` opens Create account directly** (Story 5): the Chrome extension's "Create a MyDubb
+  account" links there. With sign-up on, a visitor (and a guest, whose guest session stays until
+  they sign in) starts at the Create account screen; a signed-in account gets the Studio and the
+  address goes back to `/`; with sign-up off it is the ordinary Sign in screen ("Access is
+  currently by invitation only."), and the extension shows no link to it. After verifying, the
+  user signs in, or, from the extension, chooses Connect to MyDubb and signs in in Chrome's sign-in
+  window: the extension then shows the account's Free plan numbers.
 - **No session is created by sign-up.** The existing sign-in creates it, and only for a verified
   email (`_finish_sign_in` checks `email_verified` from Cognito `GetUser` on every sign-in). An
   account that has not confirmed its code cannot sign in at all (Cognito refuses it), and an

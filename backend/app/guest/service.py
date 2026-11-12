@@ -32,7 +32,13 @@ from sqlalchemy.orm import Session
 
 from app.auth.service import database_now
 from app.config import Settings
-from app.guest.models import GuestImportQuota, GuestJobQuota, GuestSession, QuotaState
+from app.guest.models import (
+    GuestExtensionToken,
+    GuestImportQuota,
+    GuestJobQuota,
+    GuestSession,
+    QuotaState,
+)
 from app.jobs.models import Job, JobStatus
 
 # Namespace of this module's advisory locks (two-key form), apart from the auth locks.
@@ -212,6 +218,81 @@ def revoke_session_by_token(db: Session, token: str) -> None:
     )
 
 
+# -- the Chrome extension's tokens of a guest session -------------------------------------------
+
+
+@dataclass(frozen=True)
+class IssuedGuestToken:
+    id: uuid.UUID
+    guest_session_id: uuid.UUID
+    token: str  # raw bearer token; only its hash is stored
+    expires_at: datetime
+
+
+def issue_extension_token(
+    db: Session, *, guest_session_id: uuid.UUID, client_id: str, ttl_seconds: int
+) -> IssuedGuestToken | None:
+    """A bearer token of the extension for this guest session, if the session is still active
+    (None otherwise: expired, ended, or removed since the code was approved). It never outlives the
+    session and is never extended; it gives the session no new quota."""
+    _limit_lock_waits(db)
+    # The session row is locked so that ending it cannot cross this issue unseen.
+    record = db.scalar(
+        select(GuestSession)
+        .where(
+            GuestSession.id == guest_session_id,
+            GuestSession.revoked_at.is_(None),
+            GuestSession.expires_at > func.now(),
+        )
+        .with_for_update()
+    )
+    if record is None:
+        return None
+    now = database_now(db)
+    expires_at = min(record.expires_at, now + timedelta(seconds=ttl_seconds))
+    token = secrets.token_urlsafe(32)
+    row = GuestExtensionToken(
+        id=uuid.uuid4(),
+        guest_session_id=record.id,
+        token_hash=_sha256(token),
+        client_id=client_id,
+        created_at=now,
+        expires_at=expires_at,
+    )
+    db.add(row)
+    db.flush()
+    return IssuedGuestToken(
+        id=row.id, guest_session_id=record.id, token=token, expires_at=expires_at
+    )
+
+
+def find_active_extension_token(
+    db: Session, token: str
+) -> tuple[GuestExtensionToken, GuestSession] | None:
+    """The token and its guest session, while both are live."""
+    row = db.execute(
+        select(GuestExtensionToken, GuestSession)
+        .join(GuestSession, GuestSession.id == GuestExtensionToken.guest_session_id)
+        .where(
+            GuestExtensionToken.token_hash == _sha256(token),
+            GuestExtensionToken.revoked_at.is_(None),
+            GuestExtensionToken.expires_at > func.now(),
+            GuestSession.revoked_at.is_(None),
+            GuestSession.expires_at > func.now(),
+        )
+    ).one_or_none()
+    return (row[0], row[1]) if row is not None else None
+
+
+def revoke_extension_token(db: Session, token_id: uuid.UUID) -> None:
+    """Ends one extension token; its guest session (on the website too) carries on."""
+    db.execute(
+        update(GuestExtensionToken)
+        .where(GuestExtensionToken.id == token_id, GuestExtensionToken.revoked_at.is_(None))
+        .values(revoked_at=func.now())
+    )
+
+
 # -- quotas -----------------------------------------------------------------------------------
 
 _COUNTED = (QuotaState.RESERVED.value, QuotaState.USED.value)
@@ -349,8 +430,9 @@ def settle_jobs(db: Session, job_ids: Collection[uuid.UUID] | None = None) -> in
 
 
 def delete_stale_rows(db: Session, policy: GuestPolicy) -> int:
-    """Retention: settled job and import quota rows once they left the network window; guest
-    sessions once they are expired or ended and no longer count towards the session-start limit.
+    """Retention: settled job and import quota rows once they left the network window; the
+    extension's guest tokens once expired or ended; guest sessions once they are expired or ended
+    and no longer count towards the session-start limit (their tokens go with them).
     A reserved place is never deleted (its job, or its import or recovery, settles it)."""
     now = func.now()
     window = timedelta(seconds=policy.ip_window_seconds)
@@ -366,6 +448,9 @@ def delete_stale_rows(db: Session, policy: GuestPolicy) -> int:
             GuestImportQuota.state != QuotaState.RESERVED.value,
             GuestImportQuota.charged_at < now - window,
             GuestImportQuota.settled_at < now - window,
+        ),
+        delete(GuestExtensionToken).where(
+            or_(GuestExtensionToken.expires_at <= now, GuestExtensionToken.revoked_at.is_not(None))
         ),
         delete(GuestSession).where(
             or_(GuestSession.expires_at <= now, GuestSession.revoked_at.is_not(None)),

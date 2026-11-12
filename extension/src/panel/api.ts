@@ -15,7 +15,23 @@ export interface TokenGrant {
   access_token: string;
   token_type: "Bearer";
   expires_at: string;
-  user: ExtensionUser;
+  // Older servers send no `kind`: an account.
+  kind: "account" | "guest";
+  user: ExtensionUser | null;
+  guest: { id: string } | null;
+}
+
+/**
+ * What GET /api/extension/session reports about today's limits, read only (the server decides
+ * every Generate): an account's daily Generates, or the guest session's jobs.
+ */
+export type Allowance =
+  | { kind: "account"; plan: string; exempt: boolean; used: number; limit: number | null; remaining: number | null; resetsAt: string }
+  | { kind: "guest"; used: number; inProgress: number; limit: number; remaining: number };
+
+export interface ExtensionSession {
+  expires_at: string;
+  allowance: Allowance | null;
 }
 
 export class MyDubbError extends Error {
@@ -66,17 +82,81 @@ function isUser(value: unknown): value is ExtensionUser {
   );
 }
 
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+function isGuestRef(value: unknown): value is { id: string } {
+  return isRecord(value) && typeof value.id === "string" && /^[0-9a-f-]{36}$/i.test(value.id);
+}
+
+/** The token answer, normalized (`kind` defaults to account); null when it is not one. */
+export function tokenGrantOf(value: unknown): TokenGrant | null {
+  if (
+    !isRecord(value) ||
+    typeof value.access_token !== "string" ||
+    value.access_token.length < 20 ||
+    value.access_token.length > 100 ||
+    value.token_type !== "Bearer" ||
+    typeof value.expires_at !== "string" ||
+    Number.isNaN(Date.parse(value.expires_at))
+  ) {
+    return null;
+  }
+  const base = { access_token: value.access_token, token_type: "Bearer" as const, expires_at: value.expires_at };
+  if (value.kind === "guest") {
+    return isGuestRef(value.guest) && value.user === null ? { ...base, kind: "guest", user: null, guest: { id: value.guest.id } } : null;
+  }
+  if (value.kind !== undefined && value.kind !== "account") return null;
+  return isUser(value.user) ? { ...base, kind: "account", user: value.user, guest: null } : null;
+}
+
 export function isTokenGrant(value: unknown): value is TokenGrant {
-  return (
-    isRecord(value) &&
-    typeof value.access_token === "string" &&
-    value.access_token.length >= 20 &&
-    value.access_token.length <= 100 &&
-    value.token_type === "Bearer" &&
-    typeof value.expires_at === "string" &&
-    !Number.isNaN(Date.parse(value.expires_at)) &&
-    isUser(value.user)
-  );
+  return tokenGrantOf(value) !== null;
+}
+
+/** Today's limits from a session answer; null when absent or not understood (then none is shown). */
+export function allowanceOf(value: unknown): Allowance | null {
+  if (!isRecord(value)) return null;
+  const quota = value.quota;
+  if (value.kind === "guest" && isRecord(quota)) {
+    if (![quota.session_limit, quota.session_used, quota.session_in_progress, quota.session_remaining].every(isCount)) {
+      return null;
+    }
+    // The network's count can be lower than the session's: the smaller one is what is left.
+    const network = isCount(quota.ip_remaining) ? quota.ip_remaining : null;
+    const session = quota.session_remaining as number;
+    return {
+      kind: "guest",
+      used: quota.session_used as number,
+      inProgress: quota.session_in_progress as number,
+      limit: quota.session_limit as number,
+      remaining: network === null ? session : Math.min(session, network),
+    };
+  }
+  const usage = value.usage;
+  if (value.kind !== "guest" && isRecord(usage) && isRecord(usage.generate)) {
+    const generate = usage.generate;
+    const nullableCount = (v: unknown) => v === null || isCount(v);
+    if (
+      typeof usage.plan !== "string" ||
+      typeof usage.exempt !== "boolean" ||
+      typeof usage.resets_at !== "string" ||
+      !isCount(generate.used) ||
+      !nullableCount(generate.limit) ||
+      !nullableCount(generate.remaining)
+    ) {
+      return null;
+    }
+    return {
+      kind: "account",
+      plan: usage.plan,
+      exempt: usage.exempt,
+      used: generate.used,
+      limit: generate.limit as number | null,
+      remaining: generate.remaining as number | null,
+      resetsAt: usage.resets_at,
+    };
+  }
+  return null;
 }
 
 export function isJob(value: unknown): value is Job {
@@ -184,18 +264,24 @@ export function createApi({ origin, fetch }: ApiOptions) {
 
   return {
     meta: () => call("/api/meta", (v): v is AppMeta => isRecord(v), { timeoutMs: 30_000 }),
-    exchangeCode: (body: { client_id: string; redirect_uri: string; code: string; code_verifier: string }) =>
-      call("/api/extension/token", isTokenGrant, {
+    exchangeCode: async (body: { client_id: string; redirect_uri: string; code: string; code_verifier: string }): Promise<TokenGrant> => {
+      const payload = await call("/api/extension/token", isTokenGrant, {
         method: "POST",
         body: { grant_type: "authorization_code", ...body },
         timeoutMs: 30_000,
-      }),
-    session: (token: string, signal?: AbortSignal) =>
-      call("/api/extension/session", (v): v is { user: ExtensionUser; expires_at: string } => isRecord(v) && isUser(v.user), {
-        token,
-        signal,
-        timeoutMs: 30_000,
-      }),
+      });
+      return tokenGrantOf(payload) as TokenGrant;
+    },
+    /** Whether the token is still valid, and today's limits of its account or guest session. */
+    session: async (token: string, signal?: AbortSignal): Promise<ExtensionSession> => {
+      const payload = await call(
+        "/api/extension/session",
+        (v): v is Record<string, unknown> =>
+          isRecord(v) && typeof v.expires_at === "string" && (v.kind === "guest" ? isGuestRef(v.guest) : isUser(v.user)),
+        { token, signal, timeoutMs: 30_000 },
+      );
+      return { expires_at: payload.expires_at as string, allowance: allowanceOf(payload) };
+    },
     logout: (token: string) =>
       exchange("/api/extension/logout", { method: "POST", token, timeoutMs: 10_000 }, async (response) => {
         if (!response.ok && response.status !== 401) throw errorOf(response, null);

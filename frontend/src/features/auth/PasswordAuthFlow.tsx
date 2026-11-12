@@ -41,6 +41,11 @@ interface Props {
   guest?: GuestOffer;
   // From GET /api/meta (signup): "Create account" next to Sign in. Absent: invitation only.
   signup?: SignupOffer | null;
+  // "create-account": the page was opened at /signup (the extension's Create a MyDubb account).
+  // Only when sign-up is offered; otherwise the flow starts at Sign in as always.
+  initialScreen?: "sign-in" | "create-account";
+  // "MyDubb for Chrome" under the sign-in form (the website's own sign-in page only).
+  chromeExtension?: { guest: boolean };
   onAuthenticated: (user: AuthUser) => void;
 }
 
@@ -52,9 +57,13 @@ export function PasswordAuthFlow({
   passwordReset = true,
   guest,
   signup,
+  initialScreen = "sign-in",
+  chromeExtension,
   onAuthenticated,
 }: Props) {
-  const [screen, setScreen] = useState<Screen>({ name: "sign-in" });
+  const [screen, setScreen] = useState<Screen>(() =>
+    initialScreen === "create-account" && signup ? { name: "create-account" } : { name: "sign-in" },
+  );
   const [screenNotice, setScreenNotice] = useState<AuthNotice | null>(
     notice ? warning(notice) : null,
   );
@@ -216,6 +225,7 @@ export function PasswordAuthFlow({
             initialEmail={email}
             onSubmit={signIn}
             guest={guest}
+            chromeExtension={chromeExtension}
             signup={
               signup
                 ? {
@@ -294,7 +304,7 @@ export function PasswordAuthFlow({
         </AuthCard>
       );
     case "create-account":
-      // Only reachable from the Sign in screen, which offers it only when sign-up is on.
+      // Reachable from the Sign in screen, or first at /signup; both only when sign-up is on.
       if (!signup) return null;
       return (
         <AuthCard key={screen.name} title="Create your account" {...common}>

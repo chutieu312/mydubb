@@ -30,6 +30,29 @@ class GuestSession(Base):
     __table_args__ = (Index("ix_guest_sessions_ip_key_created_at", "ip_key", "created_at"),)
 
 
+class GuestExtensionToken(Base):
+    """A bearer token of the Chrome extension for one guest session ("Try as guest" in the
+    extension, docs/EXTENSION_AUTH.md). It is not a session of its own: the guest session owns the
+    jobs and the quotas, so the website and the extension share them. Only the SHA-256 of the token
+    is stored; it never outlives its guest session, and ending the guest session (leaving guest
+    mode, an account sign-in in that browser, expiry) ends it too. Ending the token (Disconnect in
+    the extension) leaves the guest session as it is.
+    """
+
+    __tablename__ = "guest_extension_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    guest_session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("guest_sessions.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # The extension ID it was issued to (an entry of EXTENSION_IDS).
+    client_id: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class QuotaState(StrEnum):
     # Held from acceptance until the job ends; counts against both quotas.
     RESERVED = "reserved"

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { allowanceOf, tokenGrantOf } from "./api";
 import { ConnectError, authorizeUrl, codeFromRedirect, connect, createPkce, isLive, isStoredAuth } from "./auth";
 
 const ID = "abcdefghijklmnopabcdefghijklmnop";
@@ -8,8 +9,12 @@ const GRANT = {
   access_token: "t".repeat(43),
   token_type: "Bearer" as const,
   expires_at: "2030-01-01T00:00:00Z",
+  kind: "account" as const,
   user: { id: "u1", email: "lan@example.com", display_name: null },
+  guest: null,
 };
+const GUEST_ID = "6f1c1d6e-5a8b-4b8e-9d3a-2a1c3e4f5a6b";
+const GUEST_GRANT = { ...GRANT, kind: "guest" as const, user: null, guest: { id: GUEST_ID } };
 
 describe("PKCE", () => {
   it("derives the S256 challenge of RFC 7636 appendix B", async () => {
@@ -44,6 +49,13 @@ describe("authorization request and answer", () => {
       code_challenge_method: "S256",
     });
     expect(url.searchParams.has("code_verifier")).toBe(false);
+  });
+
+  it("asks for the browser's guest session with mode=guest (Try as guest)", () => {
+    const url = new URL(authorizeUrl("https://mydubb.test", ID, pkce, true));
+    expect(url.searchParams.get("mode")).toBe("guest");
+    expect(url.searchParams.get("code_challenge")).toBe(pkce.challenge);
+    expect(new URL(authorizeUrl("https://mydubb.test", ID, pkce)).searchParams.has("mode")).toBe(false);
   });
 
   it.each([
@@ -106,6 +118,59 @@ describe("connect", () => {
       }),
     ).rejects.toMatchObject({ reason: "cancelled" });
     expect(exchangeCode).not.toHaveBeenCalled();
+  });
+
+  const run = (grant: unknown, guest: boolean) =>
+    connect({
+      origin: "https://mydubb.test",
+      extensionId: ID,
+      api: { exchangeCode: vi.fn(async () => tokenGrantOf(grant)!) },
+      launchWebAuthFlow: async (url) => `${REDIRECT}?code=c&state=${new URL(url).searchParams.get("state")}`,
+      newConnectionId: () => "conn-g",
+      guest,
+    });
+
+  it("stores a guest connection under the guest session's own id, never an account id", async () => {
+    const stored = await run(GUEST_GRANT, true);
+    expect(stored).toEqual({
+      token: GRANT.access_token,
+      guest: true,
+      user: { id: `guest:${GUEST_ID}`, email: "", display_name: null },
+      expiresAt: GRANT.expires_at,
+      connectionId: "conn-g",
+    });
+    expect(isStoredAuth(stored)).toBe(true);
+    // A stored value that mixes the two is not a connection.
+    expect(isStoredAuth({ ...stored, guest: undefined })).toBe(false);
+    expect(isStoredAuth({ ...stored, user: GRANT.user })).toBe(false);
+  });
+
+  it("keeps an account chosen on the page for Try as guest, and refuses a guest nobody asked for", async () => {
+    expect((await run(GRANT, true)).user).toEqual(GRANT.user);
+    await expect(run(GUEST_GRANT, false)).rejects.toMatchObject({ reason: "refused" });
+  });
+
+  it("reads token answers of older servers (no kind) and refuses malformed ones", () => {
+    const older = { access_token: GRANT.access_token, token_type: "Bearer", expires_at: GRANT.expires_at, user: GRANT.user };
+    expect(tokenGrantOf(older)).toEqual(GRANT);
+    expect(tokenGrantOf({ ...GUEST_GRANT, user: GRANT.user })).toBeNull();
+    expect(tokenGrantOf({ ...GUEST_GRANT, guest: { id: "x" } })).toBeNull();
+    expect(tokenGrantOf({ ...GRANT, kind: "admin" })).toBeNull();
+  });
+
+  it("reads today's limits from the session answer", () => {
+    const guestQuota = { session_limit: 5, session_used: 2, session_in_progress: 1, session_remaining: 2, ip_remaining: 1 };
+    expect(allowanceOf({ kind: "guest", guest: { id: GUEST_ID }, quota: guestQuota })).toEqual({
+      kind: "guest",
+      used: 2,
+      inProgress: 1,
+      limit: 5,
+      remaining: 1,
+    });
+    const usage = { plan: "free", exempt: false, resets_at: "2030-01-02T00:00:00Z", generate: { used: 3, limit: 20, remaining: 17 } };
+    expect(allowanceOf({ kind: "account", user: GRANT.user, usage })).toMatchObject({ kind: "account", remaining: 17, limit: 20 });
+    // An older server sends neither: nothing is shown.
+    expect(allowanceOf({ user: GRANT.user, expires_at: "2030-01-01T00:00:00Z" })).toBeNull();
   });
 
   it("knows when a stored token has expired", () => {
