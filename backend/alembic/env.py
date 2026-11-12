@@ -17,7 +17,12 @@ from app.auth.models import (  # noqa: F401
 from app.config import to_sqlalchemy_url
 from app.db import Base
 from app.glossary_candidates.models import GlossaryCandidate  # noqa: F401
-from app.guest.models import GuestImportQuota, GuestJobQuota, GuestSession  # noqa: F401
+from app.guest.models import (  # noqa: F401
+    GuestExtensionToken,
+    GuestImportQuota,
+    GuestJobQuota,
+    GuestSession,
+)
 from app.jobs.models import Job  # noqa: F401
 from app.quotas.models import UsageCounter  # noqa: F401
 from app.usage.models import JobUsage, UsageAttempt  # noqa: F401

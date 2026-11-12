@@ -14,10 +14,27 @@
           <p id="account-status" class="account" role="status" aria-live="polite"></p>
         </div>
         <p id="account-error" class="error" role="alert"></p>
+        <!-- Today's limits of the connected account or guest session, as MyDubb reports them. -->
+        <p id="allowance" class="small allowance" role="status" aria-live="polite" hidden></p>
         <div class="row" id="header-actions">
           <button id="reconnect" type="button" hidden>Reconnect</button>
-          <button id="connect" type="button" class="primary" hidden>Connect MyDubb</button>
         </div>
+        <!-- Not connected: the ways in. A guest: the ways to an account. Each only when MyDubb offers it. -->
+        <section id="onboarding" class="onboarding" aria-labelledby="onboarding-title" hidden>
+          <p id="onboarding-title" class="onboarding-title">Connect MyDubb to generate audio</p>
+          <div class="choice">
+            <button id="connect" type="button" class="primary">Connect to MyDubb</button>
+            <p id="connect-hint" class="small">Have a MyDubb account? You sign in on mydubb.com.</p>
+          </div>
+          <div class="choice" id="signup-choice" hidden>
+            <a id="signup" class="button-link" target="_blank" rel="noopener noreferrer">Create a MyDubb account</a>
+            <p class="small">Create it on mydubb.com and verify your email, then come back here and choose Connect to MyDubb.</p>
+          </div>
+          <div class="choice" id="guest-choice" hidden>
+            <button id="try-guest" type="button">Try as guest</button>
+            <p id="guest-hint" class="small"></p>
+          </div>
+        </section>
         <details id="header-details" class="more">
           <summary>Details</summary>
           <dl class="link">

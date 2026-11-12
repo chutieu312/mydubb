@@ -19,7 +19,13 @@ import { GuestBanner } from "./features/guest/GuestBanner";
 import { JobPanel } from "./features/jobs/JobPanel";
 import { ProviderBanner } from "./features/providers/ProviderBanner";
 import { replaceUrl, routeOf, USAGE_PATH, usePathname } from "./lib/appRoute";
-import { authModeOf, guestAccessOf, passwordResetOf, signupOf } from "./lib/authMode";
+import {
+  authModeOf,
+  extensionGuestOf,
+  guestAccessOf,
+  passwordResetOf,
+  signupOf,
+} from "./lib/authMode";
 import { languageChoiceOf, languageNouns } from "./lib/languages";
 import { azureDisclosure, azureDisclosureShort } from "./lib/providers";
 import { createDraftKeeper, type StudioDraft } from "./lib/studioDraft";
@@ -51,6 +57,11 @@ const MAX_RESET_ASKS = 2;
 
 // Drafts are kept per identity: a guest's draft never appears for an account, nor the reverse.
 const guestOwner = (guest: GuestSession) => `guest:${guest.guest.id}`;
+
+// /signup (the extension's "Create a MyDubb account") is left once it has done its job.
+const dropSignupPath = () => {
+  if (routeOf(window.location.pathname) === "signup") replaceUrl("/");
+};
 
 // The filters in the address belong to the administrator who set them.
 const dropUsageFilters = () => {
@@ -89,6 +100,15 @@ export function App() {
     null,
   );
   const usageRequest = useRef(0);
+  // Opened at /signup: Create account first, for a visitor and for a guest (who keeps the guest
+  // session until signing in). Any change of identity ends it.
+  const [signupWanted, setSignupWanted] = useState(
+    () => routeOf(window.location.pathname) === "signup",
+  );
+  const leaveSignup = useCallback(() => {
+    setSignupWanted(false);
+    dropSignupPath();
+  }, []);
 
   // Identity generation. Every change of who is using the page (session restored, sign in, sign
   // out, session ended, guest session started) starts a new one. The answer to a request sent
@@ -159,6 +179,8 @@ export function App() {
           return;
         }
         if (restored.user) drafts.reconcile(restored.user.id);
+        // Already signed in: nothing to create.
+        leaveSignup();
         setUser(restored.user);
         setAuth("authenticated");
       })
@@ -175,7 +197,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [mode, guestEnabled, drafts, attempt, isCurrent, nextIdentity]);
+  }, [mode, guestEnabled, drafts, attempt, isCurrent, nextIdentity, leaveSignup]);
 
   const retry = () => {
     setLoadError(null);
@@ -191,6 +213,7 @@ export function App() {
     const wasGuest = auth === "guest";
     nextIdentity();
     dropUsageFilters();
+    leaveSignup();
     setCsrfToken(null);
     setJobId(null);
     setUser(null);
@@ -205,7 +228,7 @@ export function App() {
           ? "Your session has expired or ended. Please sign in again."
           : "Your session has expired or ended. Please enter the Access Code again.",
     );
-  }, [mode, auth, nextIdentity]);
+  }, [mode, auth, nextIdentity, leaveSignup]);
 
   const adminKey = `${identity}#${adminAttempt}`;
   const canBeAdmin = auth === "authenticated" && mode === "cognito";
@@ -235,13 +258,14 @@ export function App() {
   const handleAuthenticated = useCallback(
     (signedIn: AuthUser | null) => {
       nextIdentity();
+      leaveSignup();
       if (signedIn) drafts.reconcile(signedIn.id);
       setSessionNotice(null);
       setGuest(null);
       setUser(signedIn);
       setAuth("authenticated");
     },
-    [drafts, nextIdentity],
+    [drafts, nextIdentity, leaveSignup],
   );
 
   const startGuest = useCallback(async (): Promise<string | null> => {
@@ -252,6 +276,7 @@ export function App() {
       // safety net): the answer belongs to nobody on screen.
       if (!isCurrent(gen)) return null;
       nextIdentity();
+      leaveSignup();
       setCsrfToken(started.csrf_token);
       drafts.reconcile(guestOwner(started));
       setSessionNotice(null);
@@ -267,7 +292,7 @@ export function App() {
       if (err.status === 0 || GUEST_START_REFUSALS.has(err.code)) return err.message;
       return GUEST_START_FAILED;
     }
-  }, [drafts, isCurrent, nextIdentity]);
+  }, [drafts, isCurrent, nextIdentity, leaveSignup]);
 
   // Remaining guest jobs and imports come from the server only; refreshed after each submission,
   // job end and import, and applied only within the generation (and to the guest session) that
@@ -413,6 +438,7 @@ export function App() {
     // An explicit sign out (or a session the server confirms is gone) discards the draft.
     nextIdentity();
     dropUsageFilters();
+    leaveSignup();
     drafts.clear();
     setCsrfToken(null);
     setJobId(null);
@@ -460,7 +486,11 @@ export function App() {
     }
   };
 
-  const inStudio = auth === "authenticated" || auth === "guest";
+  const signupOffer = signupOf(meta);
+  // Create account at /signup: also for a guest, whose Studio waits behind it.
+  const signingUp =
+    signupWanted && signupOffer !== null && (auth === "anonymous" || auth === "guest");
+  const inStudio = (auth === "authenticated" || auth === "guest") && !signingUp;
   const guestLimits = meta?.guest_access;
   // "Translate to": the output languages the server offers (none listed: Vietnamese only).
   const languages = useMemo(
@@ -508,12 +538,14 @@ export function App() {
           {!blockingError && meta && auth === "anonymous" && mode === "access_code" && (
             <AccessGate notice={sessionNotice} onAuthenticated={() => handleAuthenticated(null)} />
           )}
-          {!blockingError && meta && auth === "anonymous" && mode === "cognito" && (
+          {!blockingError && meta && (auth === "anonymous" || signingUp) && mode === "cognito" && (
             <PasswordAuthFlow
               key={loginKey}
               notice={sessionNotice}
               passwordReset={passwordResetOf(meta)}
-              signup={signupOf(meta)}
+              signup={signupOffer}
+              initialScreen={signingUp ? "create-account" : "sign-in"}
+              chromeExtension={{ guest: extensionGuestOf(meta) }}
               guest={
                 guestEnabled
                   ? {
@@ -564,6 +596,7 @@ export function App() {
                 <GuestBanner
                   quota={guest.quota}
                   imports={guestImports}
+                  signup={signupOffer !== null}
                   onSignIn={logout}
                   leaving={loggingOut}
                 />

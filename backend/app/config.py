@@ -238,6 +238,11 @@ class Settings(BaseSettings):
     extension_ids: list[str] = Field(default_factory=list)
     # Lifetime of an extension token (never extended); capped by SESSION_TTL_SECONDS.
     extension_session_ttl_seconds: int = Field(default=12 * 3600, ge=60, le=12 * 3600)
+    # "Try as guest" in the extension (docs/EXTENSION_AUTH.md, "Guests"): the extension continues
+    # or starts the guest session of mydubb.com in the same Chrome profile. Off by default; it only
+    # takes effect while guest access is on and EXTENSION_IDS is set (`extension_guest_active`),
+    # so turning guest access off also turns this off, with no other change and no startup error.
+    extension_guest_enabled: bool = False
 
     # "Try as guest" (needs AUTH_MODE=cognito): people without an invitation use the Studio with
     # a guest session and quotas (docs/GUEST_ACCESS.md). Off by default.
@@ -565,6 +570,13 @@ class Settings(BaseSettings):
                 "AZURE_SPEECH_REGION is required when SPEECH_PROVIDER=azure and must be a "
                 "region name such as westus2"
             )
+
+    @property
+    def extension_guest_active(self) -> bool:
+        """Whether guests may connect the extension: the flag, guest access and an extension ID."""
+        return (
+            self.extension_guest_enabled and self.guest_access_enabled and bool(self.extension_ids)
+        )
 
     @property
     def sqlalchemy_url(self) -> str:

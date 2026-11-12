@@ -124,6 +124,27 @@ export const META = {
   auth: { mode: "cognito", self_registration: false, password_reset: true },
 };
 
+/** GET /api/meta with public sign-up on and "Try as guest" offered in the extension (Story 5). */
+export const META_ONBOARDING = {
+  ...META,
+  auth: { mode: "cognito", self_registration: true, password_reset: true },
+  signup: {
+    enabled: true,
+    recaptcha_site_key: "site-key-not-real",
+    free_plan: { generates_per_day: 20, youtube_imports_per_day: 5, max_words: 1000, max_output_seconds: 600 },
+  },
+  guest_access: {
+    enabled: true,
+    jobs_per_session: 5,
+    jobs_per_ip: 20,
+    ip_window_seconds: 86400,
+    max_words: 1000,
+    max_output_seconds: 600,
+    session_ttl_seconds: 86400,
+    extension: true,
+  },
+};
+
 export interface RecordedRequest {
   method: string;
   path: string;
@@ -167,6 +188,15 @@ export class FakeMyDubb {
   readonly tokens = new Map<string, string>(); // token -> user id
   private readonly codes = new Map<string, { challenge: string; clientId: string; redirect: string; user: string }>();
   user = { id: "u1", email: "lan@example.com", display_name: "Lan" };
+  /** What GET /api/meta answers. */
+  meta: Record<string, unknown> = META;
+  /**
+   * The browser's guest session on the website (null: none yet). "Try as guest" continues it, or
+   * starts one when there is none, like the real website; its jobs count against `limit`.
+   */
+  guestSession: { id: string; used: number; limit: number } | null = null;
+  /** Generates the account made today (GET /api/extension/session `usage`). */
+  accountUsed = 0;
   /** Answers for POST /api/jobs, consumed in order: "ok" (default), "drop" (no answer) or a status. */
   createAnswers: ("ok" | "drop" | number)[] = [];
   /** Statuses a job goes through, one per GET, before staying at the last one. */
@@ -188,7 +218,12 @@ export class FakeMyDubb {
     }
     if (params.get("code_challenge_method") !== "S256") throw new Error("PKCE S256 required");
     const code = randomBytes(16).toString("hex");
-    this.codes.set(code, { challenge: params.get("code_challenge") ?? "", clientId: extensionId, redirect, user: this.user.id });
+    let owner = this.user.id;
+    if (params.get("mode") === "guest") {
+      this.guestSession ??= { id: "6f1c1d6e-5a8b-4b8e-9d3a-2a1c3e4f5a6b", used: 0, limit: 5 };
+      owner = `guest:${this.guestSession.id}`;
+    }
+    this.codes.set(code, { challenge: params.get("code_challenge") ?? "", clientId: extensionId, redirect, user: owner });
     return `${redirect}?code=${code}&state=${params.get("state")}`;
   }
 
@@ -218,7 +253,7 @@ export class FakeMyDubb {
     this.requests.push({ method: request.method(), path: url.pathname, headers, body });
     const path = url.pathname;
 
-    if (path === "/api/meta") return json(route, 200, META);
+    if (path === "/api/meta") return json(route, 200, this.meta);
     if (path === "/api/extension/token" && request.method() === "POST") {
       const code = this.codes.get(String(body?.code));
       this.codes.delete(String(body?.code));
@@ -228,14 +263,41 @@ export class FakeMyDubb {
       }
       const token = randomBytes(32).toString("base64url");
       this.tokens.set(token, code.user);
-      return json(route, 200, { access_token: token, token_type: "Bearer", expires_at: "2099-01-01T00:00:00Z", user: this.user });
+      const grant = { access_token: token, token_type: "Bearer", expires_at: "2099-01-01T00:00:00Z" };
+      if (code.user.startsWith("guest:")) {
+        return json(route, 200, { ...grant, kind: "guest", user: null, guest: { id: code.user.slice(6) } });
+      }
+      return json(route, 200, { ...grant, kind: "account", user: this.user, guest: null });
     }
 
     const auth = headers.authorization ?? "";
     const owner = auth.startsWith("Bearer ") ? this.tokens.get(auth.slice(7)) : undefined;
     if (!owner) return apiError(route, 401, "not_authenticated", "A valid session is required.");
 
-    if (path === "/api/extension/session") return json(route, 200, { user: this.user, expires_at: "2099-01-01T00:00:00Z" });
+    const guest = owner.startsWith("guest:") ? this.guestSession : null;
+    if (path === "/api/extension/session") {
+      if (guest) {
+        const left = guest.limit - guest.used;
+        return json(route, 200, {
+          kind: "guest",
+          user: null,
+          guest: { id: guest.id },
+          expires_at: "2099-01-01T00:00:00Z",
+          quota: { session_limit: guest.limit, session_used: guest.used, session_in_progress: 0, session_remaining: left, ip_remaining: 20 },
+        });
+      }
+      return json(route, 200, {
+        kind: "account",
+        user: this.user,
+        expires_at: "2099-01-01T00:00:00Z",
+        usage: {
+          plan: "free",
+          exempt: false,
+          resets_at: "2099-01-02T00:00:00Z",
+          generate: { used: this.accountUsed, limit: 20, remaining: 20 - this.accountUsed },
+        },
+      });
+    }
     if (path === "/api/extension/logout") {
       this.tokens.delete(auth.slice(7));
       return route.fulfill({ status: 204 });
@@ -253,6 +315,12 @@ export class FakeMyDubb {
         });
       }
       if (typeof answer === "number") return apiError(route, answer, "server_at_capacity", "Busy.");
+      if (guest && guest.used >= guest.limit) {
+        return apiError(route, 429, "guest_session_quota_exhausted", `This guest session has used all ${guest.limit} of its jobs.`);
+      }
+      // Counted at acceptance (the fake never fails a job).
+      if (guest) guest.used += 1;
+      else this.accountUsed += 1;
       const id = `job-${this.nextJob++}`;
       this.jobs.set(id, { id, body: body ?? {}, status: "queued", owner });
       return json(route, 202, this.jobJson(id));
@@ -564,7 +632,7 @@ export async function allowConnect(panel: Page, mydubb: FakeMyDubb, extensionId:
 
 export async function connectAccount(panel: Page, mydubb: FakeMyDubb, extensionId: string) {
   await allowConnect(panel, mydubb, extensionId);
-  await panel.getByRole("button", { name: "Connect MyDubb" }).click();
+  await panel.getByRole("button", { name: "Connect to MyDubb" }).click();
   await expect(panel.locator("#account-status")).toHaveText("Connected as Lan");
 }
 

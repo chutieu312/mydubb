@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 
+import { ChromeExtensionEntry } from "../extension/ChromeExtensionEntry";
 import { GuestEntry } from "../guest/GuestEntry";
 import { FormError, PasswordField, TextField } from "./fields";
 import type { Outcome } from "./errors";
@@ -14,6 +15,8 @@ interface Props {
   guest?: GuestOffer;
   // Absent when the backend does not offer public sign-up (invitation only).
   signup?: SignupEntry;
+  // "MyDubb for Chrome" under the guest entry; absent where the page is the extension's own.
+  chromeExtension?: { guest: boolean };
 }
 
 export interface SignupEntry {
@@ -30,7 +33,14 @@ export interface GuestOffer {
   maxOutputSeconds: number;
 }
 
-export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest, signup }: Props) {
+export function SignInForm({
+  initialEmail,
+  onSubmit,
+  onForgotPassword,
+  guest,
+  signup,
+  chromeExtension,
+}: Props) {
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const { pending: signingIn, failure, run } = useSubmit();
@@ -110,6 +120,7 @@ export function SignInForm({ initialEmail, onSubmit, onForgotPassword, guest, si
       {guest && (
         <GuestEntry {...guest} disabled={signingIn} onPendingChange={setGuestPending} />
       )}
+      {chromeExtension && <ChromeExtensionEntry guest={chromeExtension.guest} />}
     </form>
   );
 }

@@ -60,3 +60,8 @@ export function signupOf(meta: AppMeta | null): SignupOffer | null {
 export function guestAccessOf(meta: AppMeta | null): boolean {
   return authModeOf(meta) === "cognito" && meta?.guest_access?.enabled === true;
 }
+
+/** "Try as guest" in the Chrome extension: guest access on and the backend offering it there. */
+export function extensionGuestOf(meta: AppMeta | null): boolean {
+  return guestAccessOf(meta) && meta?.guest_access?.extension === true;
+}

@@ -313,13 +313,13 @@ test("two tabs, an account change and a late answer never put a result under the
   await panelA.getByRole("button", { name: GENERATE }).click();
   await expect(panelA.getByText("Queued…")).toBeVisible();
   await disconnect(panelB);
-  await expect(panelA.getByRole("button", { name: "Connect MyDubb" })).toBeVisible();
+  await expect(panelA.getByRole("button", { name: "Connect to MyDubb" })).toBeVisible();
   await expect(panelA.locator("#result-section")).toBeHidden();
   await expect.poll(() => playerSessions(worker)).toEqual([]);
   // Another account connects; the first account's job finishing now belongs to nobody here.
   mydubb.user = { id: "u2", email: "minh@example.com", display_name: "Minh" };
   await allowConnect(panelA, mydubb, extensionId);
-  await panelA.getByRole("button", { name: "Connect MyDubb" }).click();
+  await panelA.getByRole("button", { name: "Connect to MyDubb" }).click();
   await expect(panelA.locator("#account-status")).toHaveText("Connected as Minh");
   mydubb.complete("job-3");
   mydubb.advance = true;

@@ -47,8 +47,13 @@ def get_account_usage(
     db: Session = Depends(get_db),
 ) -> AccountUsageResponse:
     # Mounted with AUTH_MODE=cognito only, where every session belongs to an account.
-    usage = account_usage(db, principal)
     response.headers["Cache-Control"] = "no-store"
+    return usage_response(db, principal)
+
+
+def usage_response(db: Session, principal: Principal) -> AccountUsageResponse:
+    """Today's limits of the principal's account (also for the extension's GET session)."""
+    usage = account_usage(db, principal)
     return AccountUsageResponse(
         plan=usage.plan,
         exempt=usage.exempt,

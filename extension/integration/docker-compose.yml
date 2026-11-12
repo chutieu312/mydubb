@@ -1,0 +1,57 @@
+# Story 5 integration check: the real backend + React build from the worktree, fake user pool and
+# fake siteverify (the e2e stand-ins), mock providers, a throwaway database. Local only.
+name: mydubb-s5-uat
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: uat
+      POSTGRES_PASSWORD: uat_only_not_secret
+      POSTGRES_DB: mydubb_uat
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U uat -d mydubb_uat"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: mydubb-s5-uat:local
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - alembic upgrade head && exec python /e2e/serve.py
+    environment:
+      PYTHONPATH: /app
+      APP_ENV: development
+      DATABASE_URL: postgresql://uat:uat_only_not_secret@db:5432/mydubb_uat
+      AUTH_MODE: cognito
+      COGNITO_REGION: us-west-2
+      COGNITO_USER_POOL_ID: us-west-2_E2EOnlyPool
+      COGNITO_CLIENT_ID: e2eonlyclientid
+      COGNITO_CLIENT_SECRET: e2e-only-not-a-secret
+      AUTH_TOKEN_ENCRYPTION_KEY: ${UAT_AUTH_KEY}
+      GUEST_ACCESS_ENABLED: "true"
+      GUEST_IP_HASH_KEY: ${UAT_GUEST_KEY}
+      PUBLIC_SIGNUP_ENABLED: "true"
+      E2E_FAKE_CAPTCHA: "1"
+      RECAPTCHA_SITE_KEY: e2e_only_site_key_not_real_0000000000000
+      RECAPTCHA_SECRET_KEY: e2e_only_secret_key_not_real_000000000000
+      RECAPTCHA_ALLOWED_HOSTNAMES: 127.0.0.1
+      EXTENSION_IDS: ${UAT_EXTENSION_IDS}
+      EXTENSION_GUEST_ENABLED: "true"
+      PROVIDER_MODE: mock
+      MOCK_STAGE_DELAY_SECONDS: "0.3"
+      COOKIE_SECURE: "false"
+    volumes:
+      - ${UAT_REPO}/e2e/fake-cognito/serve.py:/e2e/serve.py:ro
+      - ${UAT_REPO}/backend/tests/fake_cognito.py:/e2e-fake/fake_cognito.py:ro
+      - ${UAT_REPO}/backend/tests/fake_recaptcha.py:/e2e-fake/fake_recaptcha.py:ro
+    ports:
+      - "127.0.0.1:8105:8000"
+      - "127.0.0.1:8106:9000"

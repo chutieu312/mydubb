@@ -5,15 +5,17 @@ interface Props {
   quota: GuestQuota;
   // YouTube imports, counted apart from the audio jobs; null when this server has no import.
   imports: GuestImportQuota | null;
+  // The server offers Create account (public sign-up on).
+  signup: boolean;
   onSignIn: () => void;
   leaving: boolean;
 }
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
-export function GuestBanner({ quota, imports, onSignIn, leaving }: Props) {
+export function GuestBanner({ quota, imports, signup, onSignIn, leaving }: Props) {
   const left = guestJobsLeft(quota);
-  const limit = guestLimitText(quota);
+  const limit = guestLimitText(quota, signup);
   const importLimit = imports ? guestImportLimitText(imports, quota.ip_window_seconds) : null;
   const hours = quota.ip_window_seconds / 3600;
   return (

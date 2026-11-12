@@ -989,6 +989,22 @@ select[aria-invalid="true"] {
   border-top: 1px solid var(--line);
 }
 
+/* "MyDubb for Chrome" under the sign-in form. */
+.extension-entry {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.extension-entry p {
+  margin: 0;
+}
+
+.extension-entry-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .guest-banner,
 .plan-banner {
   display: grid;

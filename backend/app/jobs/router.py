@@ -188,7 +188,7 @@ def create_job(
     except GuestQuotaExceeded as exc:
         slot.cancel()
         assert guest is not None
-        raise _quota_error(exc, guest) from None
+        raise _quota_error(exc, guest, signup_open=services.signup_open) from None
     except GuestSessionGone:
         slot.cancel()
         raise not_authenticated() from None
@@ -329,19 +329,25 @@ def _clock(seconds: int | Fraction) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
-def _quota_error(exc: GuestQuotaExceeded, guest: GuestAccess) -> ApiError:
+def _quota_error(exc: GuestQuotaExceeded, guest: GuestAccess, *, signup_open: bool) -> ApiError:
     policy = guest.policy
     running = (
         f" ({exc.in_flight} still processing; a job that fails gives its place back)"
         if exc.in_flight
         else ""
     )
+    # The way on from here, as this server offers it (public sign-up as GET /api/meta reports it).
+    next_step = (
+        "Create a MyDubb account or sign in to continue."
+        if signup_open
+        else "Sign in with an existing MyDubb account to continue."
+    )
     if exc.scope == "session":
         return ApiError(
             status.HTTP_429_TOO_MANY_REQUESTS,
             "guest_session_quota_exhausted",
             f"This guest session has used all {policy.jobs_per_session} of its jobs{running}. "
-            "Sign in with your invitation to keep dubbing.",
+            f"{next_step}",
             extra={"limit": policy.jobs_per_session},
         )
     hours = policy.ip_window_seconds / 3600
@@ -354,7 +360,7 @@ def _quota_error(exc: GuestQuotaExceeded, guest: GuestAccess) -> ApiError:
         "guest_ip_quota_exhausted",
         f"Guests on your network have used all {policy.jobs_per_ip} guest jobs allowed in "
         f"{hours:g} hours{running}. Everyone on the same network shares this limit. Try again "
-        "later, or sign in with your invitation.",
+        f"later. {next_step}",
         headers=headers,
         extra=extra,
     )

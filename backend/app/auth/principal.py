@@ -22,6 +22,9 @@ class Principal:
     Chrome extension: `bearer` is True, `session_id` is a `user_sessions` row issued to the
     extension and the `user` owns jobs. Resolved only by the job endpoints and the extension's own
     endpoints, from the Authorization header (never from a cookie).
+    A guest in the extension: `guest` and `bearer` are both True, `session_id` is the
+    `guest_sessions` row (the same guest session as on the website, so the jobs and quotas are
+    shared) and `bearer_token_id` is the `guest_extension_tokens` row of this token.
 
     `is_admin` is read from the user row by each request, and only for a website session: a guest,
     an extension token or an Access Code session is never an administrator.
@@ -41,6 +44,8 @@ class Principal:
     is_admin: bool = False
     plan: str = "free"
     quota_exempt: bool = False
+    # The extension's guest token (`guest_extension_tokens`), for ending only that token.
+    bearer_token_id: uuid.UUID | None = None
 
     @property
     def user_id(self) -> uuid.UUID | None:

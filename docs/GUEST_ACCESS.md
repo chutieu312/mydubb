@@ -8,11 +8,18 @@ quotas. HTTP contract: [API.md](API.md#guest-access).
 Off by default (`GUEST_ACCESS_ENABLED=false`); it needs `AUTH_MODE=cognito`. Nothing in production
 was changed by the pull request that added it (see "Enabling" below).
 
+**In the Chrome extension** (`EXTENSION_GUEST_ENABLED=true`, off by default): the panel's **Try as
+guest** continues the guest session of mydubb.com in the same Chrome profile, or starts one there
+under the rules below, so the website and the extension share one guest session, its jobs and every
+quota on this page; the extension holds a bearer token of that session, never its cookie
+([EXTENSION_AUTH.md, Guests](EXTENSION_AUTH.md#guests-try-as-guest-in-the-extension)).
+
 ## What a guest can and cannot do
 
 | Allowed | Not allowed |
 |---|---|
 | Start, read and end its own guest session (`/api/guest/session`) | Reading any job that is not its own guest session's (`404 job_not_found`, like any foreign job) |
+| Let the Chrome extension continue it (`POST /api/extension/guest/authorize`, with `EXTENSION_GUEST_ENABLED`) | YouTube import from the extension (the import accepts the guest cookie only) |
 | Create jobs (`POST /api/jobs`): plain and timed mode, glossary, both voices, every speed, FFmpeg, the same pipeline as accounts | Account endpoints (`/api/auth/me`, `/api/auth/logout`: `401`) and any administration |
 | Poll, read the result of and download its own jobs | |
 | Import a YouTube video's English captions into the form (`POST /api/transcripts/youtube`), with an [import quota](#youtube-import-quota) of its own, when the server has an import provider | |
@@ -267,6 +274,7 @@ Because session starts are limited per network and overall, the tables stay boun
 | `GUEST_MAX_OUTPUT_SECONDS` | `600` | Longest guest audio (baseline / speed) |
 | `GUEST_SESSIONS_PER_IP` / `GUEST_SESSIONS_GLOBAL` / `GUEST_SESSION_RATE_WINDOW_SECONDS` | `10` / `300` / `3600` | Session starts |
 | `GUEST_IMPORTS_PER_SESSION` / `GUEST_IMPORTS_PER_IP` | `5` / `20` | Successful YouTube imports (window: `GUEST_IP_WINDOW_SECONDS`); only used when `YOUTUBE_IMPORT_PROVIDER` is not `off` |
+| `EXTENSION_GUEST_ENABLED` | `false` | "Try as guest" in the Chrome extension for this same guest session; effective only with guest access on and `EXTENSION_IDS` set ([EXTENSION_AUTH.md](EXTENSION_AUTH.md#guests-try-as-guest-in-the-extension)) |
 
 `/api/meta` reports `guest_access` (`enabled` and, when on, the limits, import limits included).
 

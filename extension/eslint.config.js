@@ -26,7 +26,7 @@ export default tseslint.config(
   },
   {
     // Tests and fixture pages build their own static markup.
-    files: ["**/*.test.ts", "e2e/**", "prototype/e2e/**"],
+    files: ["**/*.test.ts", "e2e/**", "integration/**", "prototype/e2e/**"],
     rules: { "no-restricted-properties": "off" },
   },
 );

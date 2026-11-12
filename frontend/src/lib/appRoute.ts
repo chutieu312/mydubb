@@ -4,11 +4,16 @@ import { useSyncExternalStore } from "react";
 // `window.location`, changed with the History API, and Back/Forward arrive as `popstate`.
 
 export const USAGE_PATH = "/admin/usage";
+// Opens Create account directly (the Chrome extension links here), when sign-up is on.
+export const SIGNUP_PATH = "/signup";
 
-export type AppRoute = "studio" | "usage";
+export type AppRoute = "studio" | "usage" | "signup";
 
-export const routeOf = (pathname: string): AppRoute =>
-  pathname.replace(/\/+$/, "") === USAGE_PATH ? "usage" : "studio";
+export function routeOf(pathname: string): AppRoute {
+  const path = pathname.replace(/\/+$/, "");
+  if (path === USAGE_PATH) return "usage";
+  return path === SIGNUP_PATH ? "signup" : "studio";
+}
 
 const listeners = new Set<() => void>();
 

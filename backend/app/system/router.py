@@ -44,6 +44,8 @@ def _guest_access(services: AppServices) -> dict:
         # YouTube imports (offered to guests when `youtube_import.enabled`); not jobs.
         "imports_per_session": policy.imports_per_session,
         "imports_per_ip": policy.imports_per_ip,
+        # Whether the Chrome extension offers "Try as guest" (this same guest session there).
+        "extension": services.settings.extension_guest_active,
     }
 
 
@@ -103,7 +105,7 @@ def meta(services: AppServices = Depends(get_services)) -> dict:
 
 
 def _signup_ready(services: AppServices) -> bool:
-    return services.signup is not None and services.signup.ready
+    return services.signup_open
 
 
 def _signup(services: AppServices) -> dict:

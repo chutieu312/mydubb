@@ -215,14 +215,25 @@ class ExtensionAuthCode(Base):
     whether that attempt succeeds or not. `auth_started_at` is copied from the website session
     that approved it, so the revocations that end that session also refuse the code and the
     extension session made from it.
+
+    A code belongs to exactly one of an account (`user_id`) or a guest session
+    (`guest_session_id`, "Try as guest" in the extension): a guest code is approved by the guest
+    session of the website and gives a guest token of that same session. `auth_started_at` of a
+    guest code is the guest session's start.
     """
 
     __tablename__ = "extension_auth_codes"
+    __table_args__ = (
+        CheckConstraint("(user_id IS NULL) <> (guest_session_id IS NULL)", name="one_owner"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     code_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    guest_session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("guest_sessions.id", ondelete="CASCADE"), index=True
     )
     client_id: Mapped[str] = mapped_column(String(32))
     redirect_uri: Mapped[str] = mapped_column(String(100))

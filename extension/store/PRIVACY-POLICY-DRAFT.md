@@ -15,7 +15,7 @@
 
 # MyDubb Chrome extension privacy policy
 
-Last updated: November 8, 2026
+Last updated: November 11, 2026
 
 Operator: Can Nguyen
 
@@ -81,9 +81,15 @@ browser quits, and web pages cannot read it.
   translation is kept in session storage together with the account, connection and lecture it
   belongs to, so the panel can show it again. The audio is held in memory by the extension's player
   and is not saved by the extension.
-- **Your MyDubb sign-in.** When you choose Connect MyDubb, you type your password on mydubb.com,
+- **Your MyDubb sign-in.** When you choose Connect to MyDubb, you type your password on mydubb.com,
   not in the extension. The extension receives a sign-in token and your account's e-mail and name,
   keeps them in session storage, and sends the token to MyDubb with its requests.
+- **Trying MyDubb as a guest.** When you choose Try as guest (offered only when MyDubb offers it),
+  mydubb.com continues the guest session this browser already has there, or starts one after you
+  confirm. There is no account and no password. The extension receives a sign-in token for that
+  guest session and the session's identifier, keeps them in session storage, and sends the token to
+  MyDubb with its requests. The jobs you make as a guest count towards the same guest limits on
+  mydubb.com and in the extension.
 
 The extension has no analytics or advertising code. It does not read your Udemy account details or
 your cookies.
@@ -95,13 +101,18 @@ without a click, and they carry no transcript text:
 
 - Every time the side panel opens, it asks MyDubb for the public list of languages and voices, with
   no sign-in token. Like any request, it reaches MyDubb with your network address.
-- If the panel holds a sign-in token, it asks MyDubb whether the token is still valid.
+- If the panel holds a sign-in token, it asks MyDubb whether the token is still valid and how many
+  audio jobs its account or guest session has left. It asks again after MyDubb accepts or refuses a
+  Generate because of a limit, when a job ends, and, for an account with a daily limit, when that
+  day's counts start again (00:00 UTC) while the panel is open.
 - If a job was started in that tab and the panel is closed and opened again, or while a job runs,
   the panel asks MyDubb for the job's status, then its translation and its audio file, and keeps
   doing so until the job ends or you leave the lecture. These requests carry your token and the
   job's id, not your text.
-- Connect MyDubb and Disconnect contact MyDubb when you press them. The sign-in window is the MyDubb
-  website, which sets the cookies it needs for signing in.
+- Connect to MyDubb, Try as guest and Disconnect contact MyDubb when you press them. The sign-in
+  window is the MyDubb website, which sets the cookies it needs for signing in or for a guest
+  session. Create a MyDubb account opens the website's sign-up page in a new tab; the extension sends
+  nothing for it.
 
 ## What MyDubb does with a request
 

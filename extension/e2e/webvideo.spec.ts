@@ -66,7 +66,7 @@ async function openVideoPage(context: BrowserContext, worker: Worker, extensionI
 /** The account connection is shared by the extension's panels: Connect only the first time. */
 async function connectOnce(panel: Page, mydubb: FakeMyDubb, extensionId: string) {
   await expect(panel.getByText(/^(Connected as|Not connected)/)).toBeVisible();
-  if (await panel.getByRole("button", { name: "Connect MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
+  if (await panel.getByRole("button", { name: "Connect to MyDubb" }).isVisible()) await connectAccount(panel, mydubb, extensionId);
 }
 
 /** Copy -> Paste of the timed transcript, 2x, Generate; the audio loads paused at its start. */

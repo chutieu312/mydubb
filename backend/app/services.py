@@ -103,6 +103,11 @@ class AppServices:
     # Public sign-up; None while PUBLIC_SIGNUP_ENABLED=false (the endpoints answer 404).
     signup: SignupServices | None = None
 
+    @property
+    def signup_open(self) -> bool:
+        """Create account is offered: public sign-up on and fully configured (GET /api/meta)."""
+        return self.signup is not None and self.signup.ready
+
 
 def build_signup(
     settings: Settings, captcha_verifier: CaptchaVerifier | None = None

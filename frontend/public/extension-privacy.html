@@ -18,7 +18,7 @@
       </header>
       <main>
         <h1>MyDubb Chrome extension privacy policy</h1>
-        <p class="updated">Last updated: November 8, 2026</p>
+        <p class="updated">Last updated: November 11, 2026</p>
         <div class="facts">
           <p>Operator: Can Nguyen</p>
           <p>
@@ -114,10 +114,19 @@
               in memory by the extension's player and is not saved by the extension.
             </li>
             <li>
-              <strong>Your MyDubb sign-in.</strong> When you choose Connect MyDubb, you type your
+              <strong>Your MyDubb sign-in.</strong> When you choose Connect to MyDubb, you type your
               password on mydubb.com, not in the extension. The extension receives a sign-in token and
               your account's e-mail and name, keeps them in session storage, and sends the token to
               MyDubb with its requests.
+            </li>
+            <li>
+              <strong>Trying MyDubb as a guest.</strong> When you choose Try as guest (offered only
+              when MyDubb offers it), mydubb.com continues the guest session this browser already has
+              there, or starts one after you confirm. There is no account and no password. The
+              extension receives a sign-in token for that guest session and the session's identifier,
+              keeps them in session storage, and sends the token to MyDubb with its requests. The jobs
+              you make as a guest count towards the same guest limits on mydubb.com and in the
+              extension.
             </li>
           </ul>
           <p>
@@ -138,7 +147,13 @@
               voices, with no sign-in token. Like any request, it reaches MyDubb with your network
               address.
             </li>
-            <li>If the panel holds a sign-in token, it asks MyDubb whether the token is still valid.</li>
+            <li>
+              If the panel holds a sign-in token, it asks MyDubb whether the token is still valid and
+              how many audio jobs its account or guest session has left. It asks again after MyDubb
+              accepts or refuses a Generate because of a limit, when a job ends, and, for an account
+              with a daily limit, when that day's counts start again (00:00 UTC) while the panel is
+              open.
+            </li>
             <li>
               If a job was started in that tab and the panel is closed and opened again, or while a
               job runs, the panel asks MyDubb for the job's status, then its translation and its audio
@@ -146,8 +161,10 @@
               carry your token and the job's id, not your text.
             </li>
             <li>
-              Connect MyDubb and Disconnect contact MyDubb when you press them. The sign-in window is
-              the MyDubb website, which sets the cookies it needs for signing in.
+              Connect to MyDubb, Try as guest and Disconnect contact MyDubb when you press them. The
+              sign-in window is the MyDubb website, which sets the cookies it needs for signing in or
+              for a guest session. Create a MyDubb account opens the website's sign-up page in a new
+              tab; the extension sends nothing for it.
             </li>
           </ul>
         </section>

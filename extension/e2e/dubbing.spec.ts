@@ -189,7 +189,7 @@ test("disconnecting or an ended session clears every panel and its result", asyn
   await expect(panelA.getByText("Ready. Press play when you want to listen.")).toBeVisible();
 
   await disconnect(panelB);
-  await expect(panelA.getByRole("button", { name: "Connect MyDubb" })).toBeVisible();
+  await expect(panelA.getByRole("button", { name: "Connect to MyDubb" })).toBeVisible();
   await expect(panelA.locator("#result-section")).toBeHidden();
   await expect.poll(() => playerSessions(worker)).toEqual([]);
   await expect(panelA.getByRole("button", { name: "Generate audio" })).toBeDisabled();

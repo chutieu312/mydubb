@@ -42,18 +42,25 @@ export function parseAuthorization(search: string): ExtensionAuthorization | nul
   };
 }
 
+/** Whether the extension asked to continue (or start) a guest session rather than an account. */
+export const guestRequested = (search: string): boolean =>
+  new URLSearchParams(search).get("mode") === "guest";
+
+async function approve(path: string, authorization: ExtensionAuthorization): Promise<string> {
+  const payload = await request<unknown>("POST", path, { body: authorization, accept: [200] });
+  const url = (payload as { redirect_url?: unknown } | null)?.redirect_url;
+  // Never navigate anywhere but the redirect URI the request named.
+  if (typeof url !== "string" || !url.startsWith(`${authorization.redirect_uri}?`)) {
+    throw new ApiError(502, "unexpected_response", "The server sent an unexpected response.");
+  }
+  return url;
+}
+
 export const extensionApi = {
   /** Approve the extension; resolves to where the page must go next (the extension's URI). */
-  authorize: async (authorization: ExtensionAuthorization): Promise<string> => {
-    const payload = await request<unknown>("POST", "/api/extension/authorize", {
-      body: authorization,
-      accept: [200],
-    });
-    const url = (payload as { redirect_url?: unknown } | null)?.redirect_url;
-    // Never navigate anywhere but the redirect URI the request named.
-    if (typeof url !== "string" || !url.startsWith(`${authorization.redirect_uri}?`)) {
-      throw new ApiError(502, "unexpected_response", "The server sent an unexpected response.");
-    }
-    return url;
-  },
+  authorize: (authorization: ExtensionAuthorization) =>
+    approve("/api/extension/authorize", authorization),
+  /** The browser's guest session lets the extension continue it (same guest session, same quota). */
+  authorizeGuest: (authorization: ExtensionAuthorization) =>
+    approve("/api/extension/guest/authorize", authorization),
 };

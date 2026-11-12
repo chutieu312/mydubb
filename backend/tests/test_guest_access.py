@@ -126,6 +126,8 @@ def test_meta_reports_the_limits(guest_client):
         "session_ttl_seconds": 86400,
         "imports_per_session": 5,
         "imports_per_ip": 20,
+        # "Try as guest" in the Chrome extension: off unless EXTENSION_GUEST_ENABLED.
+        "extension": False,
     }
 
 
@@ -500,8 +502,63 @@ def test_five_completed_jobs_per_session(guest_client):
     assert refused.status_code == 429
     error = refused.json()["error"]
     assert error["code"] == "guest_session_quota_exhausted"
-    assert "invitation" in error["message"]
+    assert error["message"].endswith(SIGNUP_OFF_NEXT)
     assert quota(guest_client)["session_remaining"] == 0
+
+
+# Public sign-up fully configured (tests/test_signup.py has the flow; nothing here calls Google).
+SIGNUP_ON: dict[str, Any] = {
+    "public_signup_enabled": True,
+    "cognito_client_secret": "test-client-secret",
+    "recaptcha_site_key": "6Lc_test_site_key_000000000000000000000",
+    "recaptcha_secret_key": "6Lc_test_secret_key_00000000000000000000",
+    "recaptcha_allowed_hostnames": "mydubb.test",
+}
+SIGNUP_ON_NEXT = "Create a MyDubb account or sign in to continue."
+SIGNUP_OFF_NEXT = "Sign in with an existing MyDubb account to continue."
+SIGNUP_CASES = pytest.mark.parametrize(
+    ("signup", "next_step"),
+    [({}, SIGNUP_OFF_NEXT), (SIGNUP_ON, SIGNUP_ON_NEXT)],
+    ids=["signup-off", "signup-on"],
+)
+
+
+@SIGNUP_CASES
+def test_a_used_up_guest_is_pointed_to_the_ways_in_this_server_offers(
+    make_guest_client, signup, next_step
+):
+    """The 429 of a used-up session or network names Create account only while the server
+    offers it (as GET /api/meta reports); status, code, limits and Retry-After are unchanged."""
+    client = make_guest_client(guest_jobs_per_session=2, guest_jobs_per_ip=3, **signup)
+    assert client.get("/api/meta").json()["auth"]["self_registration"] is bool(signup)
+    csrf = start_guest(client)["csrf_token"]
+    for _ in range(2):
+        run_guest_job(client, csrf)
+    session = guest_job(client, csrf)
+    assert session.status_code == 429
+    assert session.json()["error"] == {
+        "code": "guest_session_quota_exhausted",
+        "message": f"This guest session has used all 2 of its jobs. {next_step}",
+        "limit": 2,
+    }
+    # A second session of the same network takes the network's last place.
+    client.cookies.clear()
+    csrf = start_guest(client)["csrf_token"]
+    run_guest_job(client, csrf)
+    network = guest_job(client, csrf)
+    assert network.status_code == 429
+    retry = int(network.headers["retry-after"])
+    assert 86000 < retry <= 86400
+    assert network.json()["error"] == {
+        "code": "guest_ip_quota_exhausted",
+        "message": (
+            "Guests on your network have used all 3 guest jobs allowed in 24 hours. Everyone on "
+            f"the same network shares this limit. Try again later. {next_step}"
+        ),
+        "limit": 3,
+        "window_seconds": 86400,
+        "retry_after_seconds": retry,
+    }
 
 
 def test_twenty_completed_jobs_per_network_shared_by_sessions(guest_client, db_engine):
