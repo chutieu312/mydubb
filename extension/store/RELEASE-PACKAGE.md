@@ -1,8 +1,9 @@
 # Images, screenshots and the release ZIP
 
-Status (2026-11-03): **icons integrated, four screenshots made from the real one-page panel, release
-ZIP of 0.4.1 built and checked locally with the verified key** ([STABLE-ID.md](STABLE-ID.md)). It has
-not been uploaded, and the conditions at the end of this page are still open.
+Current release candidate: **0.5.0**, built in the separate `dist-release/` directory, with
+the verified existing Store ID ([STABLE-ID.md](STABLE-ID.md)). The 0.4.1 package remains
+Published - unlisted; 0.5.0 is a draft. See [LISTING.md](LISTING.md) for submission copy
+with extension guests disabled. Historical checks below do not establish current Store status.
 
 ## Sizes (Chrome documentation, read 2026-10-31)
 
@@ -48,9 +49,9 @@ only the floating player cut out of it.
 
 | File | Shows |
 |---|---|
-| `01-send-the-transcript.png` | **English transcript** with the sent text, the Video row and First/Last sentence starts; connected |
-| `02-choose-language-voice-speed.png` | **Translate to**: language, voice, speed, expected length, **Generate audio** |
-| `03-read-and-listen.png` | **Your audio**: the loaded audio's facts, the translation before Play, the player, Sync OFF |
+| `01-send-the-transcript.png` | Not connected: **Connect to MyDubb**, **Create a MyDubb account**, email verification guidance; no guest option |
+| `02-choose-language-voice-speed.png` | Pasted **English transcript**, start times, language, voice, speed, **Generate audio**, on an ordinary page |
+| `03-read-and-listen.png` | **Your audio** on an ordinary page without a video: translation and independent player |
 | `04-sync-with-video.png` | Sync ON (paused) and the floating player |
 
 Checked by looking at every image (2026-11-01): text readable, nothing clipped, expected states,
@@ -60,8 +61,12 @@ lists two languages (production eight; the voice label "Andrew Multilingual" is 
 there is no Azure notice (the test server runs mock providers); the captions say the Azure part
 in words.
 
-Before upload: re-run after any panel change, look at the images again, at most five files,
-PNG, 1280×800.
+For 0.5.0 the fixture enables sign-up but disables extension guest access, matching submission
+production capabilities. The first three images use an ordinary page; the fourth uses a
+synthetic compatible lecture video. Account and content are invented. The test also exercises
+Play/Pause and Sync before capturing. PNG output is RGB, 8 bits per channel, no alpha,
+1280x800. A four-image 640x400 thumbnail contact sheet is saved in Playwright's test output.
+Before upload, re-run after panel changes and inspect full images and thumbnails.
 
 ## Release ZIP
 
@@ -81,7 +86,7 @@ npm run build:release && npm run check:dist:release && npm run package:release
   `check:dist` refuses any other file, test hook, fixture or test host; `make-zip.mjs` also refuses
   `.map`, tests, `dist-test`, `.env`, key files and documents, then reads the ZIP back and compares
   every entry with the build. `release/` is git-ignored.
-- Version: `static/manifest.json`, **0.4.1 today** (the first draft upload was 0.4.0). Every later
+- Version: `static/manifest.json`, **0.5.0** (the first draft upload was 0.4.0). Every later
   upload to the same Store item needs a higher one: raise `"version"` there **before** building the
   next package (STABLE-ID.md step 7). Node ≥ 22, `npm ci`
   from the lockfile, esbuild 0.28.2; everything is bundled, so the ZIP has no runtime dependency

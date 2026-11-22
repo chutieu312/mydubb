@@ -1,5 +1,25 @@
 # Data audit, permission justifications and dashboard answers (DRAFT)
 
+## 0.5.0 submission check
+
+The manifest retains `contextMenus`, `sidePanel`, `storage`, `identity`, `offscreen`,
+`activeTab`, `scripting`, the single MyDubb API host and the Udemy top-frame content script.
+The production extension guest capability is disabled for this submission.
+The public policy at https://mydubb.com/extension-privacy.html is accessible without sign-in
+and includes the November 11, 2026 connection, quota and conditional guest disclosures.
+
+The live Dashboard labels were inspected: Personally identifiable information, Authentication
+information, Location (explicitly includes IP address), Web history, User activity and Website
+content are checked. Health, Financial/payment and Personal communications are not checked.
+This agrees with the local page/video handling and server network handling documented below.
+The existing three Limited Use certifications are retained, not newly asserted.
+Single purpose and context menu wording now cover ordinary pages; `activeTab` and `scripting`
+justifications explain temporary user-initiated video access. The policy URL is unchanged.
+No new permissions, data destinations, remote code or retention promises are introduced.
+
+The remaining sections are the detailed audit and historical preparation record; their old
+"not deployed"/"pending dashboard" status statements are superseded by this check.
+
 Status: **draft; the Product Owner confirmed the statements listed in §7 and nothing is declared on
 the dashboard.** Prepared 2026-10-31, re-checked on 2026-11-01 and again on 2026-11-03: code at
 `origin/main` `02360a1` (PR #45 panel; PR #47 admin role; PR #48 usage and reference-cost records;

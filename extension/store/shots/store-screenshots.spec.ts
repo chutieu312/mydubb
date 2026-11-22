@@ -6,11 +6,11 @@
 // Playwright cannot capture browser UI. See store/RELEASE-PACKAGE.md.
 import { chromium } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { connectAccount, expect, openLecture, openPanel, sendTranscriptSelection, test } from "../../e2e/harness";
+import { connectAccount, expect, META_ONBOARDING, openLecture, openPanel, openWebPage, sendTranscriptSelection, test, webUrl } from "../../e2e/harness";
 
 const out = join(dirname(fileURLToPath(import.meta.url)), "../screenshots");
 const READY = "Ready. Press play when you want to listen.";
@@ -46,6 +46,7 @@ async function snapshot(panel: Page) {
   };
   const image = await panel.screenshot({ type: "png", fullPage: true });
   const places = {
+    transcript: await top("section[aria-labelledby=draft-heading]"),
     translate: await top("section[aria-labelledby=dub-heading]"),
     audio: await top("section.audio-card"),
     floatingEnd: await bottom("#player-floating"),
@@ -64,7 +65,7 @@ async function compose(shots: { shot: Shot; uri: string; lectureUri?: string }[]
         *{box-sizing:border-box}
         body{margin:0;width:1280px;height:800px;overflow:hidden;font:16px/1.5 system-ui,"Segoe UI",sans-serif;color:#edf9f5;
           background:linear-gradient(135deg,#101e27 0%,#1a2e38 100%);position:relative}
-        .copy{position:absolute;left:72px;top:96px;width:640px}
+        .copy{position:absolute;left:64px;top:96px;width:600px}
         .chip{display:inline-block;font:600 14px system-ui;letter-spacing:.04em;color:#102d28;background:#7be0c5;border-radius:999px;padding:4px 14px}
         h1{font:700 44px/1.15 system-ui,"Segoe UI",sans-serif;margin:20px 0 14px;text-wrap:balance}
         p{font-size:21px;line-height:1.5;color:#b0c8c8;margin:0;text-wrap:pretty}
@@ -76,13 +77,19 @@ async function compose(shots: { shot: Shot; uri: string; lectureUri?: string }[]
         .panel img{width:${PANEL_WIDTH}px;display:block;margin-top:-${shot.from}px}
         .note{position:absolute;left:72px;bottom:30px;font-size:14px;color:#7f9ea3}
       </style>
-      <div class="copy"><span class="chip">${shot.file.slice(0, 2)}</span><h1>${shot.title}</h1><p>${shot.text}</p></div>
+      <div class="copy"><span class="chip">MyDubb 0.5.0 · ${shot.file.slice(0, 2)}</span><h1>${shot.title}</h1><p>${shot.text}</p></div>
       ${lectureUri ? `<div class="floating"><img src="${lectureUri}"><span>The floating player on the lecture page</span></div>` : ""}
       <div class="panel"><img src="${uri}"></div>
       <div class="note">Sample text. MyDubb is an independent service, not affiliated with Udemy, Microsoft or Google.</div>`);
       await page.screenshot({ path: join(out, shot.file), type: "png", clip: { x: 0, y: 0, width: 1280, height: 800 } });
       await page.close();
     }
+    const thumbnails = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await thumbnails.setContent(`<style>body{margin:0;display:grid;grid-template-columns:640px 640px}img{width:640px;height:400px}</style>${
+      shots.map(({ shot }) => `<img src="data:image/png;base64,${readFileSync(join(out, shot.file)).toString("base64")}">`).join("")
+    }`);
+    await thumbnails.screenshot({ path: test.info().outputPath("store-thumbnails.png") });
+    await thumbnails.close();
   } finally {
     await browser.close();
   }
@@ -90,20 +97,15 @@ async function compose(shots: { shot: Shot; uri: string; lectureUri?: string }[]
 
 test("Store screenshots from the real one-page panel", async ({ context, worker, extensionId, mydubb }) => {
   mkdirSync(out, { recursive: true });
-  const { page, tabId } = await openLecture(context, worker, 901, "?seconds=120");
-  // Invented sample passage in the fixture's transcript element (no real course content).
-  await page.evaluate((lines) => {
-    const box = document.getElementById("transcript")!;
-    const paragraph = document.createElement("p");
-    lines.forEach((line, i) => {
-      if (i > 0) paragraph.append(document.createElement("br"));
-      paragraph.append(line);
-    });
-    box.replaceChildren(paragraph);
-  }, EN);
-  const panel = await openPanel(context, extensionId, tabId);
+  mydubb.meta = { ...META_ONBOARDING, guest_access: { ...META_ONBOARDING.guest_access, extension: false } };
+  const { tabId } = await openWebPage(context, worker, webUrl("store-sample"));
+  let panel = await openPanel(context, extensionId, tabId);
   await panel.setViewportSize({ width: PANEL_WIDTH, height: 900 });
-  await sendTranscriptSelection(page, worker, tabId);
+  await expect(panel.getByRole("button", { name: "Connect to MyDubb" })).toBeVisible();
+  await expect(panel.getByRole("link", { name: "Create a MyDubb account" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Try as guest" })).toBeHidden();
+  const onboarding = await snapshot(panel);
+  await panel.getByRole("textbox", { name: "English transcript" }).fill(EN.join("\n"));
   await connectAccount(panel, mydubb, extensionId);
   await panel.getByLabel("First sentence starts").fill("000010");
   await panel.getByLabel("Last sentence starts").fill("000056");
@@ -117,7 +119,30 @@ test("Store screenshots from the real one-page panel", async ({ context, worker,
   await expect(panel.getByText(READY)).toBeVisible({ timeout: 30_000 });
   await expect(panel.locator("#translation")).toHaveText(VI);
   const loaded = await snapshot(panel);
+  await panel.getByRole("button", { name: "Play MyDubb audio" }).click();
+  await expect(panel.getByRole("button", { name: "Pause MyDubb audio" })).toBeVisible();
+  await panel.getByRole("button", { name: "Pause MyDubb audio" }).click();
 
+  await panel.close();
+  const { page, tabId: videoTabId } = await openLecture(context, worker, 901, "?seconds=120");
+  await page.evaluate((lines) => {
+    const box = document.getElementById("transcript")!;
+    const paragraph = document.createElement("p");
+    lines.forEach((line, i) => {
+      if (i > 0) paragraph.append(document.createElement("br"));
+      paragraph.append(line);
+    });
+    box.replaceChildren(paragraph);
+  }, EN);
+  panel = await openPanel(context, extensionId, videoTabId);
+  await panel.setViewportSize({ width: PANEL_WIDTH, height: 900 });
+  await sendTranscriptSelection(page, worker, videoTabId);
+  await panel.getByLabel("First sentence starts").fill("000010");
+  await panel.getByLabel("Last sentence starts").fill("000056");
+  await panel.getByRole("radio", { name: "1.5x", exact: true }).check();
+  mydubb.translations["job-2"] = VI;
+  await panel.getByRole("button", { name: "Generate audio" }).click();
+  await expect(panel.getByText(READY)).toBeVisible({ timeout: 30_000 });
   await panel.getByRole("button", { name: "Sync with video" }).click();
   await panel.getByRole("button", { name: "Turn on sync" }).click();
   await expect(panel.locator("#sync-status")).toHaveText("ON · Paused");
@@ -138,18 +163,18 @@ test("Store screenshots from the real one-page panel", async ({ context, worker,
     {
       shot: {
         file: "01-send-the-transcript.png",
-        title: "Send the transcript to MyDubb",
-        text: "Right-click a passage on the lecture page. Check the text and the start times in the panel.",
+        title: "Connect your MyDubb account",
+        text: "Create an account on MyDubb.com, verify your email, then return to the panel and connect.",
         from: 0,
       },
-      uri: before.uri,
+      uri: onboarding.uri,
     },
     {
       shot: {
         file: "02-choose-language-voice-speed.png",
-        title: "Choose language, voice and speed",
-        text: "Then press Generate audio. Your text is processed by Microsoft Azure.",
-        from: keep(before.places.translate),
+        title: "Your transcript. Your listening choices.",
+        text: "Select text and choose Send to MyDubb, or paste it into the panel. Choose language, voice and speed, then Generate audio.",
+        from: keep(before.places.transcript),
       },
       uri: before.uri,
     },
@@ -157,7 +182,7 @@ test("Store screenshots from the real one-page panel", async ({ context, worker,
       shot: {
         file: "03-read-and-listen.png",
         title: "Read the translation, then listen",
-        text: "The translation is shown with the audio, before you press Play. Nothing plays by itself.",
+        text: "Generate and listen on ordinary web pages. Read the translation and press Play; a compatible video is optional.",
         from: keep(loaded.places.audio),
       },
       uri: loaded.uri,
@@ -166,7 +191,7 @@ test("Store screenshots from the real one-page panel", async ({ context, worker,
       shot: {
         file: "04-sync-with-video.png",
         title: "Optional: sync with the video",
-        text: "Sync lines the audio up with the lecture video over the passage you sent: an estimate, not word by word. The floating player stays on the lecture page.",
+        text: "For identified, compatible players on Udemy, YouTube watch or Loom share pages. Estimated timeline alignment, not word by word. Audio also works independently.",
         from: Math.max(keep(synced.places.audio), Math.min(synced.places.floatingEnd + 24 - PANEL_HEIGHT, synced.places.height - PANEL_HEIGHT)),
       },
       uri: synced.uri,
